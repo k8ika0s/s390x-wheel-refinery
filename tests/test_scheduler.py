@@ -34,3 +34,32 @@ def test_schedule_shortest_first(tmp_path: Path):
     ordered = schedule_jobs(jobs, history, strategy="shortest-first")
     # Depth is primary, then avg duration
     assert ordered[0].name == "fastpkg"
+
+
+def test_schedule_respects_resource_hints(tmp_path: Path):
+    history = BuildHistory(tmp_path / "history.db")
+    history.record_event(
+        run_id="run",
+        name="pkgA",
+        version="1.0",
+        python_tag="cp311",
+        platform_tag="x",
+        status="built",
+        metadata={"duration_seconds": 5},
+    )
+    history.record_event(
+        run_id="run",
+        name="pkgB",
+        version="1.0",
+        python_tag="cp311",
+        platform_tag="x",
+        status="built",
+        metadata={"duration_seconds": 5},
+    )
+    jobs = [
+        BuildJob(name="pkgA", version="1.0", python_tag="cp311", platform_tag="x", source_spec="", reason="", depth=0, resource_cpu=1),
+        BuildJob(name="pkgB", version="1.0", python_tag="cp311", platform_tag="x", source_spec="", reason="", depth=0, resource_cpu=0.5),
+    ]
+    ordered = schedule_jobs(jobs, history, strategy="shortest-first")
+    # pkgB has lower cpu hint, same depth/duration priority
+    assert ordered[0].name == "pkgB"
