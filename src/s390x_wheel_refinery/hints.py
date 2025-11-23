@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 class Hint:
     pattern: str
     packages: Dict[str, List[str]]  # keyed by distro (dnf/apt)
+    recipes: Dict[str, List[str]] = None
 
 
 class HintCatalog:
@@ -19,7 +20,13 @@ class HintCatalog:
         if path.exists():
             data = yaml.safe_load(path.read_text())
             for entry in data.get("errors", []):
-                self.hints.append(Hint(pattern=entry["pattern"], packages=entry.get("packages", {})))
+                self.hints.append(
+                    Hint(
+                        pattern=entry["pattern"],
+                        packages=entry.get("packages", {}),
+                        recipes=entry.get("recipes", {}),
+                    )
+                )
 
     def match(self, output: str) -> Optional[Hint]:
         for hint in self.hints:

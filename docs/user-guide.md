@@ -66,5 +66,6 @@ refinery \
 - Limit container resources: `--container-cpu 2 --container-memory 4g`
 - Run tests (for maintainers): `pip install -e .[dev] && pytest -q`
 - CI (for maintainers): GitHub Actions runs lint, pytest, container/web smokes, and a dummy-wheel orchestration smoke on PRs.
+- Dashboard shows recent failures, hints, and recipes (when available) for troubleshooting.
 
 Run the command, watch the dashboard, and collect your s390x wheels. The tool learns from each run to make the next one smoother.***

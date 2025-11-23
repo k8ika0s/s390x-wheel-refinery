@@ -615,7 +615,14 @@ def _extract_sdist(source: Path, destination: Path) -> None:
             if catalog_match.packages.get("apt"):
                 parts.append("apt: " + " ".join(catalog_match.packages["apt"]))
             suggestion = " | ".join(parts)
-            return f"Suggested packages: {suggestion}"
+            recipes = catalog_match.recipes or {}
+            recipe_steps = []
+            if recipes.get("dnf"):
+                recipe_steps.extend(recipes["dnf"])
+            if recipes.get("apt"):
+                recipe_steps.extend(recipes["apt"])
+            recipe_text = "; ".join(recipe_steps)
+            return f"Suggested packages: {suggestion}" + (f" | Recipes: {recipe_text}" if recipe_text else "")
 
         # Fallback heuristic patterns
         missing_lib = re.search(r"cannot find -l([A-Za-z0-9_\-]+)", output)

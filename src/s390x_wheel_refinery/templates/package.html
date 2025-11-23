@@ -47,6 +47,7 @@
       <div class="meta">{{ event.python_tag }}/{{ event.platform_tag }} | {{ event.timestamp }}</div>
       {% if event.detail %}<div class="meta">detail: {{ event.detail }}</div>{% endif %}
       {% if event.metadata.hint %}<div class="meta">hint: {{ event.metadata.hint }}</div>{% endif %}
+      {% if event.metadata.system_recipe %}<div class="meta">recipes: {{ event.metadata.system_recipe }}</div>{% endif %}
     </div>
     {% endfor %}
 
