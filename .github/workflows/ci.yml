@@ -109,5 +109,6 @@ jobs:
           write_whl("purepkg", "1.0.0", "py3", "none", "any")
           write_whl("nativepkg", "1.0.0", "cp311", "cp311", "manylinux2014_x86_64", requires=["dep==1.0.0"])
           PY
-          refinery --input /tmp/input --output /tmp/output --cache /tmp/cache --python 3.11 --platform-tag manylinux2014_s390x --jobs 1 --skip-known-failures
+          # Run refinery in a container to avoid missing host python build deps; disable recipes
+          refinery --input /tmp/input --output /tmp/output --cache /tmp/cache --python 3.11 --platform-tag manylinux2014_s390x --jobs 1 --skip-known-failures --no-system-recipes --container-preset rocky
           test -f /tmp/output/manifest.json
