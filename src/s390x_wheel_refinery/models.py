@@ -17,6 +17,7 @@ class BuildJob:
     children: list[str] = field(default_factory=list)
     resource_cpu: float | None = None
     resource_mem: float | None = None
+    attempts: int = 0
 
 
 @dataclass

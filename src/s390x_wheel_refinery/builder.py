@@ -84,6 +84,7 @@ class WheelBuilder:
         self.index_client = index_client
         self.hint_catalog = HintCatalog(Path(__file__).parent.parent / "data" / "hints.yaml")
         self._completed: set[tuple[str, str]] = set()
+        self._attempt_counts: dict[tuple[str, str], int] = {}
 
     def ensure_ready(self) -> None:
         if self._ensure_ready_once:
@@ -112,6 +113,10 @@ class WheelBuilder:
 
     def build_job(self, job: BuildJob) -> BuildResult:
         self.ensure_ready()
+        key = (job.name.lower(), job.version)
+        attempts = self._attempt_counts.get(key, 0)
+        if attempts >= self.config.max_attempts:
+            raise RuntimeError(f"Exceeded max attempts for {job.name}=={job.version}")
         override = self._override_for(job)
         recipe_ran = False
         if override and override.system_recipe:
@@ -311,6 +316,7 @@ class WheelBuilder:
         if not built:
             raise RuntimeError(f"Build finished but wheel not found for {job.name}=={job.version}")
         target = self._copy_to_output(built)
+        self._attempt_counts[key] = attempts + 1
         duration = time.time() - start_time
         detail = self._detail_with_overrides(
             f"{job.reason}; variant={variant.name}; attempt={attempt}; recipe_ran={recipe_ran}; log={log_path}",

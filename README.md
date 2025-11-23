@@ -63,6 +63,7 @@ refinery \
 - Auto-apply suggestions adds system_packages + recipe steps; one extra hint-based retry runs when hints exist.
 - Bounded dependency expansion auto-plans missing Python deps (depth-limited).
 - Adaptive variant ordering uses past success rates per package; exponential backoff between attempts; timeouts per attempt.
+- Parents are requeued after dependency builds (bounded by depth/attempt budgets).
 
 ## Scheduling & resources
 - Shortest-first uses recorded avg durations; FIFO available.
