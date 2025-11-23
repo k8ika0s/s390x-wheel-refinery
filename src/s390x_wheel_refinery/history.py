@@ -171,6 +171,21 @@ class BuildHistory:
             rates[variant] = success / total
         return rates
 
+    def failures_over_time(self, *, name: Optional[str] = None, limit: int = 50) -> List[BuildEvent]:
+        query = """
+            SELECT * FROM build_events
+            WHERE status IN ('failed', 'failed_attempt', 'missing', 'system_recipe_failed')
+        """
+        params: list = []
+        if name:
+            query += " AND name = ?"
+            params.append(name)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        with sqlite3.connect(self.path) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [_row_to_event(row) for row in rows]
+
     def package_summary(self, name: str) -> "PackageSummary":
         query = """
             SELECT status, COUNT(*) FROM build_events

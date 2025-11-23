@@ -50,12 +50,14 @@ def create_app(history: BuildHistory) -> FastAPI:
         summary = history.package_summary(name)
         events = history.recent(limit=200, status=None)
         package_events = [event for event in events if event.name.lower() == name.lower()]
+        failures = history.failures_over_time(name=name, limit=50)
         return TEMPLATES.TemplateResponse(
             "package.html",
             {
                 "request": request,
                 "summary": summary,
                 "events": package_events,
+                "failures": failures,
             },
         )
 
@@ -94,6 +96,10 @@ def create_app(history: BuildHistory) -> FastAPI:
     @app.get("/api/hints")
     def api_hints() -> List[Hint]:
         return hint_catalog.hints
+
+    @app.get("/api/failures")
+    def api_failures(limit: int = Query(50, le=500), name: Optional[str] = None):
+        return history.failures_over_time(name=name, limit=limit)
 
     @app.get("/api/package/{name}")
     def api_package(name: str) -> PackageSummary:

@@ -16,9 +16,13 @@
       .status.reused, .status.cached { color: #a3e635; }
       .status.system_recipe_failed { color: #fb7185; }
       .meta { font-size: 12px; color: #cbd5e1; }
+      .chart { background: #1e293b; padding: 12px; border-radius: 8px; }
+      .bar { height: 12px; background: linear-gradient(90deg, #22c55e, #38bdf8); border-radius: 6px; }
+      .bar-container { background: #0b1220; border-radius: 6px; padding: 4px; }
     </style>
   </head>
   <body>
+    <a href="/">← Back</a>
     <h1>{{ summary.name }} history</h1>
     <div class="card">
       <h2>Status counts</h2>
@@ -32,6 +36,19 @@
       <div class="meta">Avg attempt duration: {{ summary.avg_duration }}s</div>
       {% endif %}
     </div>
+
+    <h2>Recent failures</h2>
+    {% for event in failures %}
+    <div class="card">
+      <div>
+        <span class="status {{ event.status }}">{{ event.status }}</span>
+        {{ event.name }} {{ event.version }}
+      </div>
+      <div class="meta">{{ event.python_tag }}/{{ event.platform_tag }} | {{ event.timestamp }}</div>
+      {% if event.detail %}<div class="meta">detail: {{ event.detail }}</div>{% endif %}
+      {% if event.metadata.hint %}<div class="meta">hint: {{ event.metadata.hint }}</div>{% endif %}
+    </div>
+    {% endfor %}
 
     <h2>Recent events</h2>
     {% for event in events %}
