@@ -75,3 +75,8 @@ refinery \
 - Logs: `/cache/logs/<pkg>-<ver>-attemptN-<variant>.log`
 - Manifest: `/output/manifest.json`
 - History DB: `/cache/history.db`
+
+## Testing
+- Install dev deps: `pip install -e .[dev]`
+- Run tests: `pytest -q`
+- CI: GitHub Actions runs ruff lint, pytest, a web image build smoke, and a dummy-wheel orchestration smoke run on pushes/PRs, with pip caching for speed. Optional manual s390x emulated build is available via workflow dispatch.

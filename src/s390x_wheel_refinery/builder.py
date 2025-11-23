@@ -219,9 +219,11 @@ class WheelBuilder:
             if name.lower() != job.name.lower() or str(version) != job.version:
                 continue
             for tag in tags:
-                python_ok = tag.python in {job.python_tag, "py3"} or tag.python.startswith("py3")
-                platform_ok = tag.platform == "any" or tag.platform == job.platform_tag or (
-                    tag.platform.endswith("_s390x") and job.platform_tag.endswith("_s390x")
+                interpreter = getattr(tag, "interpreter", "")
+                platform = getattr(tag, "platform", "")
+                python_ok = interpreter in {job.python_tag, "py3"} or interpreter.startswith("py3")
+                platform_ok = platform == "any" or platform == job.platform_tag or (
+                    platform.endswith("_s390x") and job.platform_tag.endswith("_s390x")
                 )
                 if python_ok and platform_ok:
                     return wheel_path
