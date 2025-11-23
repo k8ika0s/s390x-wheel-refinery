@@ -14,6 +14,7 @@ class BuildJob:
     reason: str
     depth: int = 0
     parents: list[str] = field(default_factory=list)
+    children: list[str] = field(default_factory=list)
 
 
 @dataclass

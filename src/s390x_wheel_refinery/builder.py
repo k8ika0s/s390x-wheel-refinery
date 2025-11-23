@@ -83,6 +83,7 @@ class WheelBuilder:
         self._ensure_ready_once = False
         self.index_client = index_client
         self.hint_catalog = HintCatalog(Path(__file__).parent.parent / "data" / "hints.yaml")
+        self._completed: set[tuple[str, str]] = set()
 
     def ensure_ready(self) -> None:
         if self._ensure_ready_once:
@@ -334,8 +335,11 @@ class WheelBuilder:
                 "attempt": attempt,
                 "log_path": str(log_path),
                 "duration_seconds": duration,
+                "parents": job.parents,
+                "children": job.children,
             },
         )
+        self._completed.add((job.name.lower(), job.version))
         return entry
 
     def _env_for(self, job: BuildJob, *, override: Optional[PackageOverride] = None, variant: Optional[BuildVariant] = None) -> dict:
