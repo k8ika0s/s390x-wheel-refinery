@@ -280,6 +280,7 @@ class WheelBuilder:
                 step="download",
                 variant_name=variant.name,
                 attempt=attempt,
+                job=job,
             )
 
             sdist = _first_sdist(download_dir.iterdir())
@@ -310,6 +311,7 @@ class WheelBuilder:
                 step="build",
                 variant_name=variant.name,
                 attempt=attempt,
+                job=job,
             )
 
         built = self._find_cached(job)
@@ -369,13 +371,16 @@ class WheelBuilder:
         step: str,
         variant_name: str,
         attempt: int,
+        job: Optional[BuildJob] = None,
     ) -> None:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         LOG.debug("Running (%s): %s", step, " ".join(cmd))
         full_cmd = list(cmd)
         use_container = bool(self._container_image)
         if use_container:
-            full_cmd = self._containerized_command(full_cmd, env, workdir=None)
+            cpu = job.resource_cpu if job and job.resource_cpu else None
+            mem = job.resource_mem if job and job.resource_mem else None
+            full_cmd = self._containerized_command(full_cmd, env, workdir=None, cpu=cpu, mem=mem)
 
         try:
             proc = subprocess.run(
@@ -541,7 +546,7 @@ class WheelBuilder:
                 base.sort(key=lambda v: -(rates.get(v.name, 0)))
         return base
 
-    def _containerized_command(self, cmd: list[str], env: dict, workdir: Optional[Path]) -> list[str]:
+    def _containerized_command(self, cmd: list[str], env: dict, workdir: Optional[Path], *, cpu: Optional[float] = None, mem: Optional[float] = None) -> list[str]:
         engine = self._container_engine or "docker"
         image = self._container_image
         if not image:
@@ -557,10 +562,12 @@ class WheelBuilder:
         ]
         workdir_arg = ["-w", str(workdir)] if workdir else []
         limits: list[str] = []
-        if self.config.container_cpu:
-            limits += ["--cpus", str(self.config.container_cpu)]
-        if self.config.container_memory:
-            limits += ["--memory", str(self.config.container_memory)]
+        cpu_limit = cpu or self.config.container_cpu
+        mem_limit = mem or self.config.container_memory
+        if cpu_limit:
+            limits += ["--cpus", str(cpu_limit)]
+        if mem_limit:
+            limits += ["--memory", str(mem_limit)]
         shell_cmd = " ".join(shlex.quote(c) for c in cmd)
         return [engine, "run", "--rm", *limits, *mounts, *wrapped_env, *workdir_arg, image, "sh", "-c", shell_cmd]
 

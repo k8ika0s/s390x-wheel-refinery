@@ -108,7 +108,7 @@ def create_app(history: BuildHistory) -> FastAPI:
 
     @app.get("/api/summary")
     def api_summary():
-        return {"status_counts": history.status_counts_recent(limit=50)}
+        return {"status_counts": history.status_counts_recent(limit=50), "failures": history.recent_failures(limit=20)}
 
     @app.get("/logs/{name}/{version}")
     def view_log(name: str, version: str):

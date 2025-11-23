@@ -141,6 +141,17 @@ class BuildHistory:
             rows = conn.execute(query, (limit,)).fetchall()
         return {row[0]: row[1] for row in rows}
 
+    def recent_failures(self, *, limit: int = 20) -> List["BuildEvent"]:
+        query = """
+            SELECT * FROM build_events
+            WHERE status IN ('failed', 'failed_attempt', 'missing', 'system_recipe_failed')
+            ORDER BY id DESC
+            LIMIT ?
+        """
+        with sqlite3.connect(self.path) as conn:
+            rows = conn.execute(query, (limit,)).fetchall()
+        return [_row_to_event(row) for row in rows]
+
     def variant_success_rate(self, name: str) -> dict:
         query = """
             SELECT json_extract(metadata_json, '$.variant') as variant,
