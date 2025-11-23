@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Iterable, List, Set
 
-from packaging.requirements import Requirement
-
 from .models import BuildJob
 from .scanner import WheelInfo
 

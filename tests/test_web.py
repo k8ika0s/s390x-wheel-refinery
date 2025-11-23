@@ -1,12 +1,11 @@
+import pytest
 from pathlib import Path
 
-import pytest
+pytest.importorskip("fastapi")
+from fastapi.testclient import TestClient  # type: ignore  # noqa: E402
 
-fastapi = pytest.importorskip("fastapi")
-from fastapi.testclient import TestClient  # type: ignore
-
-from s390x_wheel_refinery.history import BuildHistory
-from s390x_wheel_refinery.web import create_app
+from s390x_wheel_refinery.history import BuildHistory  # noqa: E402
+from s390x_wheel_refinery.web import create_app  # noqa: E402
 
 
 def test_web_endpoints(tmp_path: Path):

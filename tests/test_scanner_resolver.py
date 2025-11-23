@@ -1,17 +1,14 @@
 from pathlib import Path
 
+from conftest import write_dummy_wheel
 from s390x_wheel_refinery.config import build_config
 from s390x_wheel_refinery.resolver import build_plan
 from s390x_wheel_refinery.scanner import scan_wheels
 
 
 def test_scan_and_resolve_reuse_vs_build(tmp_path: Path):
-    # Reusable pure wheel
-    from tests.conftest import write_dummy_wheel
-
-    reusable = write_dummy_wheel(tmp_path, "purepkg", "1.0.0", python_tag="py3", abi_tag="none", platform_tag="any")
-    # Incompatible wheel triggers rebuild
-    rebuild = write_dummy_wheel(
+    write_dummy_wheel(tmp_path, "purepkg", "1.0.0", python_tag="py3", abi_tag="none", platform_tag="any")
+    write_dummy_wheel(
         tmp_path,
         "nativepkg",
         "1.0.0",
