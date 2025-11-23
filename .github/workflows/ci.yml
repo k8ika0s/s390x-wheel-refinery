@@ -96,18 +96,18 @@ jobs:
           mkdir -p /tmp/input /tmp/output /tmp/cache
           # Create a pure wheel and an incompatible wheel to force plan/build path (build will noop)
           python - <<'PY'
-from pathlib import Path
-import zipfile
-base = Path("/tmp/input")
-def write_whl(name, version, python_tag, abi_tag, platform_tag, requires=None):
-    requires = requires or []
-    dist_info = f"{name.replace('-', '_')}-{version}.dist-info"
-    meta = "\n".join([f"Name: {name}", f"Version: {version}", *(f"Requires-Dist: {r}" for r in requires)])
-    path = base / f"{name}-{version}-{python_tag}-{abi_tag}-{platform_tag}.whl"
-    with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr(f"{dist_info}/METADATA", meta)
-write_whl("purepkg", "1.0.0", "py3", "none", "any")
-write_whl("nativepkg", "1.0.0", "cp311", "cp311", "manylinux2014_x86_64", requires=["dep==1.0.0"])
-PY
+          from pathlib import Path
+          import zipfile
+          base = Path("/tmp/input")
+          def write_whl(name, version, python_tag, abi_tag, platform_tag, requires=None):
+              requires = requires or []
+              dist_info = f"{name.replace('-', '_')}-{version}.dist-info"
+              meta = "\n".join([f"Name: {name}", f"Version: {version}", *(f"Requires-Dist: {r}" for r in requires)])
+              path = base / f"{name}-{version}-{python_tag}-{abi_tag}-{platform_tag}.whl"
+              with zipfile.ZipFile(path, "w") as zf:
+                  zf.writestr(f"{dist_info}/METADATA", meta)
+          write_whl("purepkg", "1.0.0", "py3", "none", "any")
+          write_whl("nativepkg", "1.0.0", "cp311", "cp311", "manylinux2014_x86_64", requires=["dep==1.0.0"])
+          PY
           refinery --input /tmp/input --output /tmp/output --cache /tmp/cache --python 3.11 --platform-tag manylinux2014_s390x --jobs 1 --skip-known-failures
           test -f /tmp/output/manifest.json
