@@ -31,6 +31,7 @@ def create_app(history: BuildHistory) -> FastAPI:
         failures = history.top_failures(limit=top_failures)
         slowest = history.top_slowest(limit=10)
         status_counts = history.status_counts_recent(limit=50)
+        recent_failures = history.recent_failures(limit=10)
         return TEMPLATES.TemplateResponse(
             "home.html",
             {
@@ -39,6 +40,7 @@ def create_app(history: BuildHistory) -> FastAPI:
                 "failures": failures,
                 "slowest": slowest,
                 "status_counts": status_counts,
+                "recent_failures": recent_failures,
                 "status_filter": status or "",
                 "package_filter": package or "",
                 "hint_catalog": hint_catalog.hints,

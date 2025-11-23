@@ -98,6 +98,16 @@
           </div>
           {% endfor %}
         </div>
+        <h2>Recent failures</h2>
+        <div class="list">
+          {% for event in recent_failures %}
+          <div class="card">
+            <div><span class="status {{ event.status }}">{{ event.status }}</span> {{ event.name }} {{ event.version }}</div>
+            <div class="meta">{{ event.timestamp }}</div>
+            {% if event.metadata.hint %}<div class="meta">hint: {{ event.metadata.hint }}</div>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
       </div>
     </div>
     <script>
