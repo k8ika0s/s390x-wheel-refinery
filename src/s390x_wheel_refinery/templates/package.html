@@ -64,6 +64,21 @@
     </div>
     {% endfor %}
 
+    <h2>Variant history (last 20)</h2>
+    <div class="chart">
+      {% for event in variants %}
+        <div class="meta">{{ event.metadata.get('variant', 'unknown') }}: {{ event.status }}</div>
+        <div class="bar-container"><div class="bar" style="width: 120px;"></div></div>
+      {% endfor %}
+    </div>
+    <h2>Actions</h2>
+    <div class="card">
+      <div class="meta">Retry with generated recipe (uses hint catalog recipes where available).</div>
+      <form method="post" action="/package/{{ summary.name }}/retry" style="margin-top:8px;">
+        <button class="action-btn" type="submit">Retry with generated recipe</button>
+      </form>
+    </div>
+
     <h2>Alerts</h2>
     {% if summary.status_counts.get('failed', 0) > 0 or summary.status_counts.get('missing', 0) > 0 %}
       <div class="card">

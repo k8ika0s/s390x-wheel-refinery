@@ -186,6 +186,17 @@ class BuildHistory:
             rows = conn.execute(query, params).fetchall()
         return [_row_to_event(row) for row in rows]
 
+    def variant_history(self, name: str, limit: int = 100) -> List[BuildEvent]:
+        query = """
+            SELECT * FROM build_events
+            WHERE name = ? AND metadata_json LIKE '%variant%'
+            ORDER BY id DESC
+            LIMIT ?
+        """
+        with sqlite3.connect(self.path) as conn:
+            rows = conn.execute(query, (name, limit)).fetchall()
+        return [_row_to_event(row) for row in rows]
+
     def package_summary(self, name: str) -> "PackageSummary":
         query = """
             SELECT status, COUNT(*) FROM build_events

@@ -9,6 +9,11 @@ from fastapi.templating import Jinja2Templates
 
 from .history import BuildHistory, BuildEvent, FailureStat, PackageSummary
 from .hints import HintCatalog, Hint
+from .resolver import build_plan
+from .config import build_config
+from .scanner import scan_wheels
+from .manifest import write_manifest
+from . import builder as builder_module
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -53,6 +58,7 @@ def create_app(history: BuildHistory) -> FastAPI:
         events = history.recent(limit=200, status=None)
         package_events = [event for event in events if event.name.lower() == name.lower()]
         failures = history.failures_over_time(name=name, limit=50)
+        variants = history.variant_history(name, limit=20)
         return TEMPLATES.TemplateResponse(
             "package.html",
             {
@@ -60,6 +66,7 @@ def create_app(history: BuildHistory) -> FastAPI:
                 "summary": summary,
                 "events": package_events,
                 "failures": failures,
+                "variants": variants,
             },
         )
 
@@ -102,6 +109,10 @@ def create_app(history: BuildHistory) -> FastAPI:
     @app.get("/api/failures")
     def api_failures(limit: int = Query(50, le=500), name: Optional[str] = None):
         return history.failures_over_time(name=name, limit=limit)
+
+    @app.get("/api/variants/{name}")
+    def api_variants(name: str, limit: int = Query(100, le=500)):
+        return history.variant_history(name, limit=limit)
 
     @app.get("/api/package/{name}")
     def api_package(name: str) -> PackageSummary:
@@ -153,3 +164,7 @@ def create_app(history: BuildHistory) -> FastAPI:
         return JSONResponse(status_code=500, content={"detail": str(exc)})
 
     return app
+    @app.post("/package/{name}/retry")
+    async def retry_with_recipe(name: str, request: Request):
+        # Basic action: no-op placeholder returning a message; actual build orchestration is out of scope for UI.
+        return JSONResponse({"detail": f"Retry with recipe requested for {name}. Trigger via CLI/automation."})
