@@ -217,6 +217,7 @@ def main(argv: List[str] | None = None) -> int:
                 try:
                     result = future.result()
                     manifest_entries.append(result.entry)
+                    _enqueue_parents(jobs_to_run, job, history, builder, manifest_entries, config, run_id, executor)
                 except Exception as exc:  # noqa: BLE001
                     meta = None
                     if isinstance(exc, builder_module.BuildAttemptError):
@@ -298,6 +299,7 @@ def _run_single_build(builder, job, manifest_entries, history, config, run_id):
     try:
         result = builder.build_job(job)
         manifest_entries.append(result.entry)
+        _enqueue_parents([], job, history, builder, manifest_entries, config, run_id, None)
     except Exception as exc:  # noqa: BLE001
         meta = None
         if isinstance(exc, builder_module.BuildAttemptError):
@@ -327,6 +329,63 @@ def _run_single_build(builder, job, manifest_entries, history, config, run_id):
             detail=str(exc),
             metadata=meta,
         )
+
+
+def _enqueue_parents(queue, job, history, builder, manifest_entries, config, run_id, executor):
+    if not job.parents:
+        return
+    parent_names = {p.lower() for p in job.parents}
+    for parent_name in parent_names:
+        # Avoid duplicates; only enqueue if not completed
+        key = (parent_name, job.version)
+        if key in getattr(builder, "_completed", set()):
+            continue
+        parent_job = builder_module.BuildJob(
+            name=parent_name,
+            version="latest",
+            python_tag=config.python_tag,
+            platform_tag=config.target_platform_tag,
+            source_spec=parent_name,
+            reason="requeued after dependency build",
+            depth=job.depth + 1,
+            parents=[],
+            children=[],
+        )
+        history.record_event(
+            run_id=run_id,
+            name=parent_job.name,
+            version=parent_job.version,
+            python_tag=config.python_tag,
+            platform_tag=config.target_platform_tag,
+            status="requeued_parent",
+            source_spec=parent_job.source_spec,
+            detail="Requeued after dependency build",
+        )
+        if executor:
+            fut = executor.submit(builder.build_job, parent_job)
+            try:
+                result = fut.result()
+                manifest_entries.append(result.entry)
+            except Exception as exc:  # noqa: BLE001
+                meta = None
+                if isinstance(exc, builder_module.BuildAttemptError):
+                    meta = {
+                        "log_path": str(exc.log_path),
+                        "hint": exc.hint,
+                        "duration_seconds": exc.duration,
+                    }
+                manifest_entries.append(
+                    builder_module.ManifestEntry(
+                        name=parent_job.name,
+                        version=parent_job.version,
+                        status="failed",
+                        detail=str(exc),
+                        metadata=meta,
+                    )
+                )
+        else:
+            result = builder.build_job(parent_job)
+            manifest_entries.append(result.entry)
 
 
 def _run_history(args: argparse.Namespace) -> int:

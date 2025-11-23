@@ -21,6 +21,7 @@
       .two-col { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
       .bar { height: 12px; background: linear-gradient(90deg, #38bdf8, #22c55e); border-radius: 6px; }
       .bar-container { background: #1e293b; border-radius: 6px; padding: 4px; }
+      .chart { background: #1e293b; padding: 12px; border-radius: 8px; }
     </style>
   </head>
   <body>
@@ -85,6 +86,15 @@
             <div class="meta">pattern: {{ hint.pattern }}</div>
             <div class="meta">dnf: {{ hint.packages.get('dnf', []) }}</div>
             <div class="meta">apt: {{ hint.packages.get('apt', []) }}</div>
+          </div>
+          {% endfor %}
+        </div>
+        <h2>Status counts (recent)</h2>
+        <div class="chart">
+          {% for status, count in status_counts.items() %}
+          <div class="meta">{{ status }}: {{ count }}</div>
+          <div class="bar-container">
+            <div class="bar" style="width: {{ 10 + count * 8 }}px;"></div>
           </div>
           {% endfor %}
         </div>

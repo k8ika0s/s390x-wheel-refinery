@@ -14,6 +14,9 @@ class BuildJob:
     reason: str
     depth: int = 0
     parents: list[str] = field(default_factory=list)
+    children: list[str] = field(default_factory=list)
+    resource_cpu: float | None = None
+    resource_mem: float | None = None
 
 
 @dataclass

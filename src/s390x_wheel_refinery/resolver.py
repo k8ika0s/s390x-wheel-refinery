@@ -10,6 +10,7 @@ from packaging.version import InvalidVersion, Version
 from .config import RefineryConfig, UpgradeStrategy
 from .index import IndexClient
 from .dependency_expander import missing_python_deps, build_jobs_for_missing
+from .models import BuildJob
 from .models import BuildJob, Plan, ReusableWheel
 from .scanner import WheelInfo
 
@@ -22,6 +23,7 @@ def build_plan(
     *,
     index_client: Optional[IndexClient] = None,
     max_dep_depth: int = 2,
+    max_dep_attempts: int = 1,
 ) -> Plan:
     plan = Plan()
     reusable_versions: Dict[str, Set[Version]] = defaultdict(set)
@@ -107,7 +109,7 @@ def build_plan(
         plan.missing_requirements.append(str(req))
 
     # Dependency expansion: recursive bounded
-    _expand_dependencies(plan, wheels, config, index_client, max_dep_depth=max_dep_depth)
+    _expand_dependencies(plan, wheels, config, index_client, max_dep_depth=max_dep_depth, max_dep_attempts=max_dep_attempts)
 
     return plan
 
@@ -119,10 +121,14 @@ def _expand_dependencies(
     index_client: Optional[IndexClient],
     *,
     max_dep_depth: int,
+    max_dep_attempts: int,
 ) -> None:
     if not index_client or max_dep_depth <= 0:
         return
+    # Only expand deps for jobs within depth budget
     to_consider = [job for job in plan.to_build if job.depth < max_dep_depth]
+    if not to_consider:
+        return
     missing = missing_python_deps(wheels, to_consider)
     if not missing:
         return
@@ -131,12 +137,13 @@ def _expand_dependencies(
         config.python_tag,
         config.target_platform_tag,
         reason="dependency expansion",
-        max_count=5,
+        max_count=max_dep_attempts,
         depth=1,
-        parent=",".join(job.name for job in to_consider),
     )
-    plan.dependency_expansions.extend(expansion_jobs)
-    plan.to_build.extend(expansion_jobs)
+    for exp in expansion_jobs:
+        exp.parents = list({job.name for job in to_consider})
+        plan.dependency_expansions.append(exp)
+        plan.to_build.append(exp)
 
 
 def _already_planned_version(name: str, version: str, jobs: Iterable[BuildJob]) -> bool:

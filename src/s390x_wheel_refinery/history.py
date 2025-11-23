@@ -131,6 +131,16 @@ class BuildHistory:
             rows = conn.execute(query, (limit,)).fetchall()
         return [DurationStat(name=row[0], avg_duration=row[1], failures=row[2]) for row in rows]
 
+    def status_counts_recent(self, *, limit: int = 50) -> Dict[str, int]:
+        query = """
+            SELECT status, COUNT(*) FROM (
+                SELECT status FROM build_events ORDER BY id DESC LIMIT ?
+            ) GROUP BY status
+        """
+        with sqlite3.connect(self.path) as conn:
+            rows = conn.execute(query, (limit,)).fetchall()
+        return {row[0]: row[1] for row in rows}
+
     def variant_success_rate(self, name: str) -> dict:
         query = """
             SELECT json_extract(metadata_json, '$.variant') as variant,

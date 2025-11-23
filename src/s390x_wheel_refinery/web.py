@@ -30,6 +30,7 @@ def create_app(history: BuildHistory) -> FastAPI:
             recent_events = [event for event in recent_events if event.name.lower() == package.lower()]
         failures = history.top_failures(limit=top_failures)
         slowest = history.top_slowest(limit=10)
+        status_counts = history.status_counts_recent(limit=50)
         return TEMPLATES.TemplateResponse(
             "home.html",
             {
@@ -37,6 +38,7 @@ def create_app(history: BuildHistory) -> FastAPI:
                 "recent": recent_events,
                 "failures": failures,
                 "slowest": slowest,
+                "status_counts": status_counts,
                 "status_filter": status or "",
                 "package_filter": package or "",
                 "hint_catalog": hint_catalog.hints,
@@ -103,6 +105,10 @@ def create_app(history: BuildHistory) -> FastAPI:
         if not event:
             return JSONResponse(status_code=404, content={"detail": "not found"})
         return event
+
+    @app.get("/api/summary")
+    def api_summary():
+        return {"status_counts": history.status_counts_recent(limit=50)}
 
     @app.get("/logs/{name}/{version}")
     def view_log(name: str, version: str):
