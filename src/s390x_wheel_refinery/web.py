@@ -9,11 +9,7 @@ from fastapi.templating import Jinja2Templates
 
 from .history import BuildHistory, BuildEvent, FailureStat, PackageSummary
 from .hints import HintCatalog, Hint
-from .resolver import build_plan
-from .config import build_config
-from .scanner import scan_wheels
-from .manifest import write_manifest
-from . import builder as builder_module
+from .queue import RetryQueue, RetryRequest
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -21,6 +17,7 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 def create_app(history: BuildHistory) -> FastAPI:
     app = FastAPI(title="s390x Wheel Refinery History")
     hint_catalog = HintCatalog(Path(__file__).parent.parent / "data" / "hints.yaml")
+    retry_queue = RetryQueue(Path("/cache/retry_queue.json"))
 
     @app.get("/")
     def home(
@@ -128,6 +125,24 @@ def create_app(history: BuildHistory) -> FastAPI:
     @app.get("/api/summary")
     def api_summary():
         return {"status_counts": history.status_counts_recent(limit=50), "failures": history.recent_failures(limit=20)}
+
+    @app.post("/package/{name}/retry")
+    async def retry_with_recipe(name: str, version: str = "latest"):
+        recipe_steps = []
+        for hint in hint_catalog.hints:
+            if hint.recipes:
+                recipe_steps.extend(hint.recipes.get("dnf", []))
+                recipe_steps.extend(hint.recipes.get("apt", []))
+        req = RetryRequest(
+            package=name,
+            version=version,
+            python_tag="cp311",
+            platform_tag="manylinux2014_s390x",
+            recipes=recipe_steps,
+        )
+        retry_queue.add(req)
+        queued = retry_queue._load()
+        return JSONResponse({"detail": f"Enqueued retry for {name}", "queue_length": len(queued)})
 
     @app.get("/logs/{name}/{version}")
     def view_log(name: str, version: str):
