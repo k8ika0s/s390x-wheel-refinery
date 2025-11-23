@@ -18,7 +18,9 @@ def schedule_jobs(jobs: Iterable[BuildJob], history: BuildHistory, strategy: str
         scheduled = []
         for job in jobs:
             avg = _avg_duration(history, job.name)
-            priority = avg if avg is not None else float("inf")
+            depth_priority = job.depth if hasattr(job, "depth") else 0
+            duration_priority = avg if avg is not None else float("inf")
+            priority = (depth_priority, duration_priority)
             scheduled.append(ScheduledJob(job=job, priority=priority))
         scheduled.sort(key=lambda j: j.priority)
         return [sj.job for sj in scheduled]

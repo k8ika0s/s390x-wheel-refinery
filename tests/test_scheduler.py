@@ -28,8 +28,9 @@ def test_schedule_shortest_first(tmp_path: Path):
     )
 
     jobs = [
-        BuildJob(name="slowpkg", version="1.0", python_tag="cp311", platform_tag="manylinux2014_s390x", source_spec="", reason=""),
-        BuildJob(name="fastpkg", version="1.0", python_tag="cp311", platform_tag="manylinux2014_s390x", source_spec="", reason=""),
+        BuildJob(name="fastpkg", version="1.0", python_tag="cp311", platform_tag="manylinux2014_s390x", source_spec="", reason="", depth=0),
+        BuildJob(name="slowpkg", version="1.0", python_tag="cp311", platform_tag="manylinux2014_s390x", source_spec="", reason="", depth=1),
     ]
     ordered = schedule_jobs(jobs, history, strategy="shortest-first")
+    # Depth is primary, then avg duration
     assert ordered[0].name == "fastpkg"
