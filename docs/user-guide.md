@@ -1,0 +1,68 @@
+# s390x Wheel Refinery — Friendly Guide
+
+This guide is for anyone (non-technical to semi-technical) who wants to turn any pile of Python wheels into s390x wheels for mainframe use.
+
+## What it does (in plain words)
+- Reads the wheels you drop into an input folder.
+- Reuses wheels that already work on s390x and rebuilds the rest.
+- Learns from failures: suggests missing system packages, tries again with those, and remembers what worked.
+- Runs safely in a container so your machine stays clean.
+- Shows a web dashboard with statuses, hints, and live logs.
+
+## Quickest path
+1) Make three folders: `/input` (your wheels), `/output` (results), `/cache` (for history/logs).
+2) Run:
+```
+refinery \
+  --input /input \
+  --output /output \
+  --cache /cache \
+  --python 3.11 \
+  --container-preset rocky \
+  --jobs 1
+```
+3) If it fails, check the dashboard (below) to see hints and logs.
+
+## Dashboard
+- Start it: `refinery serve --db /cache/history.db --host 0.0.0.0 --port 8000`
+- Open in your browser: `http://localhost:8000`
+- You’ll see:
+  - Recent builds with statuses (reused, built, failed).
+  - Top failures and slow packages (with simple bars).
+  - Package pages with average build time, alerts, and log links.
+  - A hint catalog showing which system packages to install for common errors.
+  - Live log streaming per package/version.
+
+## Key options (plain-English)
+- `--python 3.11`: Target Python version for the rebuilt wheels.
+- `--container-preset rocky` (or `fedora`/`ubuntu`): Run in a container so the host isn’t changed. Add `--container-cpu`/`--container-memory` to limit resources.
+- `--jobs 2`: Build multiple packages at once (after a first warm-up run with `--jobs 1`).
+- `--auto-apply-suggestions`: When the tool spots missing libs/headers, it suggests system packages and can auto-try again with them.
+- `--fallback-latest`: If the exact version isn’t available for s390x, try the latest compatible one.
+- `--skip-known-failures`: Don’t retry packages that already failed.
+- `--attempt-timeout`, `--max-attempts`, `--attempt-backoff-base/max`: Control how long/ how many times to try and how long to wait between tries.
+- `--schedule shortest-first`: Build shorter packages first using past timing data.
+
+## Where things go
+- New s390x wheels: `/output`
+- Logs: `/cache/logs/...`
+- Manifest: `/output/manifest.json` (what happened to each package)
+- History database: `/cache/history.db` (used by the dashboard)
+
+## Handling failures
+1) Open the dashboard, find the failing package.
+2) Read the hint (e.g., “Suggested packages: dnf: openblas-devel | apt: libopenblas-dev”).
+3) Re-run with `--auto-apply-suggestions` (or add those packages to your build image).
+4) If it keeps failing, use `--skip-known-failures` to move on, then address it later.
+
+## Tips for AI/ML stacks
+- Use `rocky` preset or a custom image with OpenBLAS/LAPACK and build tools installed.
+- Keep `/cache` between runs so successes/hints/logs are remembered.
+- Start with `--jobs 1` to warm up, then increase `--jobs` for speed.
+
+## If you want more control
+- Inspect `manifest.json` for per-package details (attempt, log path, hints).
+- Query history from CLI: `refinery history --db /cache/history.db --recent 20 --top-failures 10 --json`
+- Limit container resources: `--container-cpu 2 --container-memory 4g`
+
+Run the command, watch the dashboard, and collect your s390x wheels. The tool learns from each run to make the next one smoother.***

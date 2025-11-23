@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Iterable, List
+
+from .models import BuildJob
+from .history import BuildHistory
+
+
+@dataclass
+class ScheduledJob:
+    job: BuildJob
+    priority: float
+
+
+def schedule_jobs(jobs: Iterable[BuildJob], history: BuildHistory, strategy: str = "shortest-first") -> List[BuildJob]:
+    if strategy == "shortest-first":
+        scheduled = []
+        for job in jobs:
+            avg = _avg_duration(history, job.name)
+            priority = avg if avg is not None else float("inf")
+            scheduled.append(ScheduledJob(job=job, priority=priority))
+        scheduled.sort(key=lambda j: j.priority)
+        return [sj.job for sj in scheduled]
+    return list(jobs)
+
+
+def _avg_duration(history: BuildHistory, name: str):
+    summary = history.package_summary(name)
+    return summary.avg_duration

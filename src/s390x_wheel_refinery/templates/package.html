@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>{{ summary.name }} history</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; background: #0f172a; color: #e2e8f0; }
+      h1, h2 { margin-bottom: 8px; }
+      a { color: #38bdf8; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .card { background: #1e293b; padding: 12px 16px; border-radius: 8px; margin-bottom: 12px; }
+      .status { font-weight: bold; }
+      .status.built { color: #22c55e; }
+      .status.failed { color: #f87171; }
+      .status.missing { color: #fbbf24; }
+      .status.reused, .status.cached { color: #a3e635; }
+      .status.system_recipe_failed { color: #fb7185; }
+      .meta { font-size: 12px; color: #cbd5e1; }
+    </style>
+  </head>
+  <body>
+    <h1>{{ summary.name }} history</h1>
+    <div class="card">
+      <h2>Status counts</h2>
+      {% for status, count in summary.status_counts.items() %}
+        <div>{{ status }}: {{ count }}</div>
+      {% endfor %}
+      {% if summary.latest %}
+      <div class="meta">Latest: {{ summary.latest.status }} {{ summary.latest.version }} at {{ summary.latest.timestamp }}</div>
+      {% endif %}
+      {% if summary.avg_duration %}
+      <div class="meta">Avg attempt duration: {{ summary.avg_duration }}s</div>
+      {% endif %}
+    </div>
+
+    <h2>Recent events</h2>
+    {% for event in events %}
+    <div class="card">
+      <div>
+        <span class="status {{ event.status }}">{{ event.status }}</span>
+        {{ event.name }} {{ event.version }}
+      </div>
+      <div class="meta">{{ event.python_tag }}/{{ event.platform_tag }} | {{ event.timestamp }}</div>
+      {% if event.detail %}<div class="meta">detail: {{ event.detail }}</div>{% endif %}
+      {% if event.wheel_path %}<div class="meta">wheel: {{ event.wheel_path }}</div>{% endif %}
+    </div>
+    {% endfor %}
+
+    <h2>Alerts</h2>
+    {% if summary.status_counts.get('failed', 0) > 0 or summary.status_counts.get('missing', 0) > 0 %}
+      <div class="card">
+        <div class="meta">This package has failures or missing entries. Consider reviewing hint catalog suggestions and overrides.</div>
+      </div>
+    {% else %}
+      <div class="card"><div class="meta">No alerts.</div></div>
+    {% endif %}
+    {% if summary.avg_duration and summary.avg_duration > 120 %}
+      <div class="card"><div class="meta">Long builds (avg {{ summary.avg_duration }}s). Consider caching deps or resource limits.</div></div>
+    {% endif %}
+  </body>
+</html>

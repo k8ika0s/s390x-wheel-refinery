@@ -1,0 +1,81 @@
+errors:
+  - pattern: "cannot find -lssl"
+    packages:
+      dnf: ["openssl-devel"]
+      apt: ["libssl-dev"]
+  - pattern: "cannot find -lcrypto"
+    packages:
+      dnf: ["openssl-devel"]
+      apt: ["libssl-dev"]
+  - pattern: "cannot find -lz"
+    packages:
+      dnf: ["zlib-devel"]
+      apt: ["zlib1g-dev"]
+  - pattern: "cannot find -lbz2"
+    packages:
+      dnf: ["bzip2-devel"]
+      apt: ["libbz2-dev"]
+  - pattern: "cannot find -lsqlite3"
+    packages:
+      dnf: ["sqlite-devel"]
+      apt: ["libsqlite3-dev"]
+  - pattern: "cannot find -lcurl"
+    packages:
+      dnf: ["libcurl-devel"]
+      apt: ["libcurl4-openssl-dev"]
+  - pattern: "cannot find -llzma"
+    packages:
+      dnf: ["xz-devel"]
+      apt: ["liblzma-dev"]
+  - pattern: "cannot find -luuid"
+    packages:
+      dnf: ["libuuid-devel"]
+      apt: ["uuid-dev"]
+  - pattern: "fatal error: openssl/ssl.h"
+    packages:
+      dnf: ["openssl-devel"]
+      apt: ["libssl-dev"]
+  - pattern: "fatal error: zlib.h"
+    packages:
+      dnf: ["zlib-devel"]
+      apt: ["zlib1g-dev"]
+  - pattern: "fatal error: bzlib.h"
+    packages:
+      dnf: ["bzip2-devel"]
+      apt: ["libbz2-dev"]
+  - pattern: "fatal error: lzma.h"
+    packages:
+      dnf: ["xz-devel"]
+      apt: ["liblzma-dev"]
+  - pattern: "fatal error: ffi.h"
+    packages:
+      dnf: ["libffi-devel"]
+      apt: ["libffi-dev"]
+  - pattern: "fatal error: expat.h"
+    packages:
+      dnf: ["expat-devel"]
+      apt: ["libexpat1-dev"]
+  - pattern: "fatal error: Python.h"
+    packages:
+      dnf: ["python3-devel"]
+      apt: ["python3-dev"]
+  - pattern: "cannot find -lopenblas"
+    packages:
+      dnf: ["openblas-devel"]
+      apt: ["libopenblas-dev"]
+  - pattern: "cannot find -llapack"
+    packages:
+      dnf: ["lapack-devel"]
+      apt: ["liblapack-dev"]
+  - pattern: "fatal error: cblas.h"
+    packages:
+      dnf: ["openblas-devel"]
+      apt: ["libopenblas-dev"]
+  - pattern: "fatal error: torch/extension.h"
+    packages:
+      dnf: ["libtorch-devel"]
+      apt: ["libtorch-dev"]
+  - pattern: "fatal error: numpy/arrayobject.h"
+    packages:
+      dnf: ["python3-numpy"]
+      apt: ["python3-numpy"]
