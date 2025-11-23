@@ -53,6 +53,7 @@ refinery \
 ## Web UI / API
 - Start: `refinery serve --db /cache/history.db --host 0.0.0.0 --port 8000`
 - Features: recent events, top failures, top slow packages (avg duration + failures), package pages (alerts, avg duration), hint catalog, log links, SSE streaming (`/logs/{name}/{version}/stream`), APIs for stats (`/api/top-failures`, `/api/top-slowest`, `/api/hints`).
+- Package pages also show recent failures (with hints/recipes) and variant history; dashboard shows recent failures and status counts.
 
 ## Manifest & history
 - Manifest: `<output>/manifest.json` with status, path, detail, and metadata (variant, attempt, log_path, duration, hints).
