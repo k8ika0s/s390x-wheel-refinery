@@ -100,9 +100,9 @@ from pathlib import Path
 import zipfile
 base = Path("/tmp/input")
 def write_whl(name, version, python_tag, abi_tag, platform_tag, requires=None):
-              requires = requires or []
-              dist_info = f"{name.replace('-', '_')}-{version}.dist-info"
-              meta = "\n".join([f"Name: {name}", f"Version: {version}", *(f"Requires-Dist: {r}" for r in requires)])
+    requires = requires or []
+    dist_info = f"{name.replace('-', '_')}-{version}.dist-info"
+    meta = "\n".join([f"Name: {name}", f"Version: {version}", *(f"Requires-Dist: {r}" for r in requires)])
     path = base / f"{name}-{version}-{python_tag}-{abi_tag}-{platform_tag}.whl"
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr(f"{dist_info}/METADATA", meta)
