@@ -152,7 +152,7 @@ class WheelBuilder:
                     if hint and self.config.auto_apply_suggestions:
                         self._apply_suggestion(job, hint)
                     if hint:
-                        last_hint_steps = _recipe_steps_from_hint(hint)
+                        last_hint_steps = self._recipe_steps_from_hint(hint)
                 if self.history:
                     self.history.record_event(
                         run_id=self.run_id,
@@ -564,7 +564,7 @@ class WheelBuilder:
             if suggestion not in override.system_packages:
                 override.system_packages.append(suggestion)
                 LOG.info("Auto-applied suggested system package for %s: %s", job.name, suggestion)
-        for step in _recipe_steps_from_hint(hint):
+        for step in self._recipe_steps_from_hint(hint):
             if step not in override.system_recipe:
                 override.system_recipe.append(step)
 

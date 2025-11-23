@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
