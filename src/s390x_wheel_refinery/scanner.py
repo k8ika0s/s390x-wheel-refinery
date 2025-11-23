@@ -31,9 +31,11 @@ class WheelInfo:
     def supports(self, python_tag: str, platform_tag: str) -> bool:
         """Check if the wheel works for the target Python and platform."""
         for tag in self.tags:
-            python_ok = tag.python in {python_tag, "py3"} or tag.python.startswith("py3")
-            platform_ok = tag.platform == "any" or tag.platform == platform_tag or (
-                tag.platform.endswith("_s390x") and platform_tag.endswith("_s390x")
+            interpreter = getattr(tag, "interpreter", "")
+            platform = getattr(tag, "platform", "")
+            python_ok = interpreter in {python_tag, "py3"} or interpreter.startswith("py3")
+            platform_ok = platform == "any" or platform == platform_tag or (
+                platform.endswith("_s390x") and platform_tag.endswith("_s390x")
             )
             if python_ok and platform_ok:
                 return True

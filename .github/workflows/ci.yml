@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feature/tests]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_s390x_build:
+        description: "Run s390x emulated build"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+      - name: Run ruff
+        run: ruff check src tests
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+      - name: Run tests
+        run: pytest -q
+
+  smoke-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build web image (smoke)
+        run: docker build -t refinery-web:ci -f containers/web/Dockerfile .
+
+  s390x-build:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_s390x_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+        - uses: actions/checkout@v4
+        - uses: docker/setup-qemu-action@v3
+          with:
+            platforms: all
+        - uses: docker/setup-buildx-action@v3
+        - name: Build builder image for s390x (emulated)
+          run: |
+            docker buildx build --platform linux/s390x -t refinery-rocky-s390x:ci -f containers/rocky/Dockerfile --load .
+
+  smoke-dummy-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Create dummy wheels and run refinery
+        run: |
+          mkdir -p /tmp/input /tmp/output /tmp/cache
+          # Create a pure wheel and an incompatible wheel to force plan/build path (build will noop)
+          python - <<'PY'
+from pathlib import Path
+import zipfile
+base = Path("/tmp/input")
+def write_whl(name, version, python_tag, abi_tag, platform_tag, requires=None):
+    requires = requires or []
+    dist_info = f"{name.replace('-', '_')}-{version}.dist-info"
+    meta = "\n".join([f"Name: {name}", f"Version: {version}", *(f"Requires-Dist: {r}" for r in requires)])
+    path = base / f"{name}-{version}-{python_tag}-{abi_tag}-{platform_tag}.whl"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(f"{dist_info}/METADATA", meta)
+write_whl("purepkg", "1.0.0", "py3", "none", "any")
+write_whl("nativepkg", "1.0.0", "cp311", "cp311", "manylinux2014_x86_64", requires=["dep==1.0.0"])
+PY
+          refinery --input /tmp/input --output /tmp/output --cache /tmp/cache --python 3.11 --platform-tag manylinux2014_s390x --jobs 1 --skip-known-failures
+          test -f /tmp/output/manifest.json
