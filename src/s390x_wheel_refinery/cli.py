@@ -343,6 +343,9 @@ def _enqueue_parents(queue, job, history, builder, manifest_entries, config, run
         # respect depth budget
         if job.depth + 1 > config.max_attempts:
             continue
+        # avoid cycles
+        if parent_name == job.name.lower():
+            continue
         parent_job = builder_module.BuildJob(
             name=parent_name,
             version="latest",
