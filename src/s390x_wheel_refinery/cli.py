@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import uvicorn
 
 from . import builder as builder_module
-from .config import UpgradeStrategy, build_config
+from .config import build_config
 from .history import BuildHistory
 from .index import IndexClient
 from .manifest import write_manifest
