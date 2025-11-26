@@ -11,8 +11,6 @@ from typing import List
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import uvicorn
-
 from . import builder as builder_module
 from .config import build_config
 from .history import BuildHistory
@@ -20,8 +18,9 @@ from .index import IndexClient
 from .manifest import write_manifest
 from .models import Manifest, ManifestEntry
 from .resolver import build_plan
-from .web import create_app
 from .scanner import scan_wheels
+from .worker import process_queue
+from .queue import RetryQueue
 
 LOG = logging.getLogger("s390x_wheel_refinery")
 
@@ -32,6 +31,10 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
         return _parse_history_args(argv[1:])
     if argv and argv[0] == "serve":
         return _parse_serve_args(argv[1:])
+    if argv and argv[0] == "worker":
+        return _parse_worker_args(argv[1:])
+    if argv and argv[0] == "queue":
+        return _parse_queue_args(argv[1:])
     return _parse_run_args(argv)
 
 
@@ -102,12 +105,53 @@ def _parse_serve_args(argv: List[str]) -> argparse.Namespace:
     return parser.parse_args(argv, namespace=argparse.Namespace(command="serve"))
 
 
+def _parse_worker_args(argv: List[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Process retry queue and rebuild requested packages.")
+    parser.add_argument("--input", required=True, type=Path, help="Directory containing foreign wheels.")
+    parser.add_argument("--output", required=True, type=Path, help="Directory to write s390x wheels to.")
+    parser.add_argument("--cache", required=True, type=Path, help="Shared cache directory.")
+    parser.add_argument("--python", required=True, dest="python_version", help="Target Python version (e.g. 3.11).")
+    parser.add_argument(
+        "--platform-tag",
+        default="manylinux2014_s390x",
+        help="Target platform tag (default: manylinux2014_s390x).",
+    )
+    parser.add_argument(
+        "--container-image",
+        help="Container image to run builds in (bind-mounts cache/output).",
+    )
+    parser.add_argument(
+        "--container-preset",
+        choices=["rocky", "fedora", "ubuntu"],
+        help="Preset container base to use when container-image is not provided.",
+    )
+    parser.add_argument(
+        "--history-db",
+        type=Path,
+        help="Path to history database (defaults to <cache>/history.db).",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
+    return parser.parse_args(argv, namespace=argparse.Namespace(command="worker"))
+
+
+def _parse_queue_args(argv: List[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Inspect retry queue.")
+    parser.add_argument("--queue-path", type=Path, help="Path to retry_queue.json (defaults to <cache>/retry_queue.json).")
+    parser.add_argument("--cache", type=Path, help="Cache directory (used when queue-path is not provided).")
+    parser.add_argument("--json", action="store_true", help="Emit JSON.")
+    return parser.parse_args(argv, namespace=argparse.Namespace(command="queue"))
+
+
 def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv)
     if getattr(args, "command", "run") == "history":
         return _run_history(args)
     if getattr(args, "command", "run") == "serve":
         return _run_server(args)
+    if getattr(args, "command", "run") == "worker":
+        return _run_worker(args)
+    if getattr(args, "command", "run") == "queue":
+        return _run_queue(args)
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(message)s")
 
@@ -340,6 +384,12 @@ def _enqueue_parents(queue, job, history, builder, manifest_entries, config, run
         key = (parent_name, job.version)
         if key in getattr(builder, "_completed", set()):
             continue
+        # respect depth budget
+        if job.depth + 1 > config.max_attempts:
+            continue
+        # avoid cycles
+        if parent_name == job.name.lower():
+            continue
         parent_job = builder_module.BuildJob(
             name=parent_name,
             version="latest",
@@ -435,9 +485,44 @@ def _run_history(args: argparse.Namespace) -> int:
 
 
 def _run_server(args: argparse.Namespace) -> int:
+    import uvicorn
+    from .web import create_app
+
     history = BuildHistory(args.history_db)
     app = create_app(history)
     uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
+    return 0
+
+
+def _run_worker(args: argparse.Namespace) -> int:
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(message)s")
+    history_path = args.history_db or args.cache / "history.db"
+    process_queue(
+        input_dir=args.input,
+        output_dir=args.output,
+        cache_dir=args.cache,
+        history_path=history_path,
+        python_version=args.python_version,
+        platform_tag=args.platform_tag,
+        container_image=args.container_image,
+        container_preset=args.container_preset,
+    )
+    return 0
+
+
+def _run_queue(args: argparse.Namespace) -> int:
+    queue_path = args.queue_path
+    if not queue_path:
+        if not args.cache:
+            print("Provide --queue-path or --cache to locate retry_queue.json", file=sys.stderr)
+            return 1
+        queue_path = args.cache / "retry_queue.json"
+    queue = RetryQueue(queue_path)
+    length = len(queue)
+    if args.json:
+        print(json.dumps({"queue": queue_path.as_posix(), "length": length}, indent=2))
+    else:
+        print(f"Queue: {queue_path} length={length}")
     return 0
 
 

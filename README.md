@@ -24,6 +24,7 @@ refinery \
   --auto-apply-suggestions
 ```
 - Exit code is non-zero if any requirements are missing or builds fail.
+- To reprocess failed packages queued from the web UI: `refinery worker --input /input --output /output --cache /cache --python 3.11`
 
 ## Key flags
 - Paths: `--input`, `--output`, `--cache`
@@ -53,6 +54,36 @@ refinery \
 ## Web UI / API
 - Start: `refinery serve --db /cache/history.db --host 0.0.0.0 --port 8000`
 - Features: recent events, top failures, top slow packages (avg duration + failures), package pages (alerts, avg duration), hint catalog, log links, SSE streaming (`/logs/{name}/{version}/stream`), APIs for stats (`/api/top-failures`, `/api/top-slowest`, `/api/hints`).
+- Package pages also show recent failures (with hints/recipes) and variant history; dashboard shows recent failures and status counts.
+- Retry queue: POST `/package/{name}/retry` (UI button or API) stores a request in `<cache>/retry_queue.json` with suggested recipes. Run `refinery worker ...` to consume the queue and rebuild those packages.
+- Queue visibility & trigger: UI shows queue depth and offers “Run worker now,” which calls `/api/worker/trigger` (enabled when the web container has access to `/input`, `/output`, `/cache` or a worker webhook is configured).
+- Auth: optional `WORKER_TOKEN` env protects queue/worker endpoints (supply via `X-Worker-Token` or `?token=` when invoking).
+- Queue CLI: `refinery queue --cache /cache` prints queue length; `--queue-path` overrides the default.
+- Token cookie helper: `POST /api/session/token?token=<WORKER_TOKEN>` sets a `worker_token` cookie for the browser, avoiding query/header injection in the UI.
+- Worker service container (example docker-compose):
+  ```yaml
+  services:
+    refinery-web:
+      image: <your-web-image>
+      environment:
+        HISTORY_DB: /cache/history.db
+        WORKER_WEBHOOK_URL: http://worker:9000/trigger
+        WORKER_TOKEN: supersecret
+      volumes:
+        - /input:/input:ro
+        - /output:/output
+        - /cache:/cache
+    worker:
+      image: <your-web-image>  # or dedicated worker image
+      command: ["uvicorn", "s390x_wheel_refinery.worker_service:app", "--host", "0.0.0.0", "--port", "9000"]
+      environment:
+        HISTORY_DB: /cache/history.db
+        WORKER_TOKEN: supersecret
+      volumes:
+        - /input:/input:ro
+        - /output:/output
+        - /cache:/cache
+  ```
 
 ## Manifest & history
 - Manifest: `<output>/manifest.json` with status, path, detail, and metadata (variant, attempt, log_path, duration, hints).
@@ -63,6 +94,14 @@ refinery \
 - Auto-apply suggestions adds system_packages + recipe steps; one extra hint-based retry runs when hints exist.
 - Bounded dependency expansion auto-plans missing Python deps (depth-limited).
 - Adaptive variant ordering uses past success rates per package; exponential backoff between attempts; timeouts per attempt.
+- Parents are requeued after dependency builds (bounded by depth/attempt budgets).
+
+## Retry queue & worker
+- Web UI/API enqueue retries into `<cache>/retry_queue.json` (includes requested version, python tag, platform tag, and recipe steps).
+- `refinery worker --input ... --output ... --cache ... --python 3.11` consumes the queue using the same history/cache, applies the queued recipes as overrides, and rebuilds matching jobs.
+- Useful for follow-up retries after triage without re-running the full pipeline; the queue is emptied atomically when processed.
+- Web-triggered worker: When the web container is given mounts for `/input`, `/output`, and `/cache` (or overrides via `WORKER_*` env vars), the UI “Run worker now” button and `/api/worker/trigger` will run a queue drain in-process. Optional `WORKER_AUTORUN_INTERVAL` (seconds) enables periodic drains.
+- Remote worker service: Set `WORKER_WEBHOOK_URL` (and `WORKER_TOKEN`) in the web container to call a remote worker service instead of running locally. Start the worker service with `uvicorn s390x_wheel_refinery.worker_service:app --host 0.0.0.0 --port 9000` in a container that mounts `/input`, `/output`, and `/cache`.
 
 ## Scheduling & resources
 - Shortest-first uses recorded avg durations; FIFO available.

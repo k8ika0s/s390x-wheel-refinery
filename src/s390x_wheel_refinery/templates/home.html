@@ -22,6 +22,8 @@
       .bar { height: 12px; background: linear-gradient(90deg, #38bdf8, #22c55e); border-radius: 6px; }
       .bar-container { background: #1e293b; border-radius: 6px; padding: 4px; }
       .chart { background: #1e293b; padding: 12px; border-radius: 8px; }
+      .button { padding:6px 10px;border:1px solid #38bdf8;border-radius:6px;background:#0ea5e9;color:#0f172a;font-weight:bold;cursor:pointer; }
+      .button:disabled { opacity:0.5; cursor:not-allowed; }
     </style>
   </head>
   <body>
@@ -55,6 +57,17 @@
         </div>
       </div>
       <div class="section">
+        <h2>Retry queue</h2>
+        <div class="card">
+          <div class="meta">Queue length: <span id="queue-length">{{ queue_length }}</span></div>
+          <div class="meta">Worker mode: {{ worker_mode or 'unavailable' }}</div>
+          {% if worker_mode %}
+            <button id="trigger-worker" class="button" type="button">Run worker now</button>
+            <div id="worker-status" class="meta"></div>
+          {% else %}
+            <div class="meta">Worker not configured (set WORKER_WEBHOOK_URL or WORKER_* paths).</div>
+          {% endif %}
+        </div>
         <h2>Top failures</h2>
         <div class="list">
           {% for fail in failures %}
@@ -98,6 +111,16 @@
           </div>
           {% endfor %}
         </div>
+        <h2>Recent failures</h2>
+        <div class="list">
+          {% for event in recent_failures %}
+          <div class="card">
+            <div><span class="status {{ event.status }}">{{ event.status }}</span> {{ event.name }} {{ event.version }}</div>
+            <div class="meta">{{ event.timestamp }}</div>
+            {% if event.metadata.hint %}<div class="meta">hint: {{ event.metadata.hint }}</div>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
       </div>
     </div>
     <script>
@@ -115,6 +138,30 @@
             };
             evtSource.onerror = () => evtSource.close();
           });
+      }
+      const triggerBtn = document.getElementById('trigger-worker');
+      if (triggerBtn) {
+        triggerBtn.addEventListener('click', () => {
+          triggerBtn.disabled = true;
+          const headers = {};
+          const token = getCookie('worker_token');
+          if (token) headers['X-Worker-Token'] = token;
+          fetch('/api/worker/trigger', {method: 'POST', headers})
+            .then(r => r.json())
+            .then(data => {
+              document.getElementById('worker-status').textContent = data.detail || JSON.stringify(data);
+              if (data.queue_length !== undefined) {
+                document.getElementById('queue-length').textContent = data.queue_length;
+              }
+            })
+            .catch(() => { document.getElementById('worker-status').textContent = 'Failed to trigger worker'; })
+            .finally(() => { triggerBtn.disabled = false; });
+        });
+      }
+      function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
       }
     </script>
   </body>

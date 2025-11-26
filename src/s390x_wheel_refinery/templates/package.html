@@ -16,9 +16,15 @@
       .status.reused, .status.cached { color: #a3e635; }
       .status.system_recipe_failed { color: #fb7185; }
       .meta { font-size: 12px; color: #cbd5e1; }
+      .chart { background: #1e293b; padding: 12px; border-radius: 8px; }
+      .bar { height: 12px; background: linear-gradient(90deg, #22c55e, #38bdf8); border-radius: 6px; }
+      .bar-container { background: #0b1220; border-radius: 6px; padding: 4px; }
+      .button { padding:6px 10px;border:1px solid #38bdf8;border-radius:6px;background:#0ea5e9;color:#0f172a;font-weight:bold;cursor:pointer; }
+      .button:disabled { opacity:0.5; cursor:not-allowed; }
     </style>
   </head>
   <body>
+    <a href="/">← Back</a>
     <h1>{{ summary.name }} history</h1>
     <div class="card">
       <h2>Status counts</h2>
@@ -33,6 +39,20 @@
       {% endif %}
     </div>
 
+    <h2>Recent failures</h2>
+    {% for event in failures %}
+    <div class="card">
+      <div>
+        <span class="status {{ event.status }}">{{ event.status }}</span>
+        {{ event.name }} {{ event.version }}
+      </div>
+      <div class="meta">{{ event.python_tag }}/{{ event.platform_tag }} | {{ event.timestamp }}</div>
+      {% if event.detail %}<div class="meta">detail: {{ event.detail }}</div>{% endif %}
+      {% if event.metadata.hint %}<div class="meta">hint: {{ event.metadata.hint }}</div>{% endif %}
+      {% if event.metadata.system_recipe %}<div class="meta">recipes: {{ event.metadata.system_recipe }}</div>{% endif %}
+    </div>
+    {% endfor %}
+
     <h2>Recent events</h2>
     {% for event in events %}
     <div class="card">
@@ -46,6 +66,29 @@
     </div>
     {% endfor %}
 
+    <h2>Variant history (last 20)</h2>
+    <div class="chart">
+      {% for event in variants %}
+        <div class="meta">{{ event.metadata.get('variant', 'unknown') }}: {{ event.status }}</div>
+        <div class="bar-container"><div class="bar" style="width: 120px;"></div></div>
+      {% endfor %}
+    </div>
+    <h2>Actions</h2>
+    <div class="card">
+      <div class="meta">Retry with generated recipe (uses hint catalog recipes where available).</div>
+      <form method="post" action="/package/{{ summary.name }}/retry" style="margin-top:8px;">
+        <button class="action-btn" type="submit">Retry with generated recipe</button>
+      </form>
+      {% if worker_mode %}
+        <div class="meta" style="margin-top:8px;">Queue length: <span id="queue-length">{{ queue_length }}</span></div>
+        <div class="meta">Worker mode: {{ worker_mode }}</div>
+        <button id="trigger-worker" class="button" type="button">Run worker now</button>
+        <div id="worker-status" class="meta"></div>
+      {% else %}
+        <div class="meta" style="margin-top:8px;">Worker not configured (set WORKER_WEBHOOK_URL or WORKER_* paths).</div>
+      {% endif %}
+    </div>
+
     <h2>Alerts</h2>
     {% if summary.status_counts.get('failed', 0) > 0 or summary.status_counts.get('missing', 0) > 0 %}
       <div class="card">
@@ -57,5 +100,31 @@
     {% if summary.avg_duration and summary.avg_duration > 120 %}
       <div class="card"><div class="meta">Long builds (avg {{ summary.avg_duration }}s). Consider caching deps or resource limits.</div></div>
     {% endif %}
+    <script>
+      const triggerBtn = document.getElementById('trigger-worker');
+      if (triggerBtn) {
+        triggerBtn.addEventListener('click', () => {
+          triggerBtn.disabled = true;
+          const headers = {};
+          const token = getCookie('worker_token');
+          if (token) headers['X-Worker-Token'] = token;
+          fetch('/api/worker/trigger', {method: 'POST', headers})
+            .then(r => r.json())
+            .then(data => {
+              document.getElementById('worker-status').textContent = data.detail || JSON.stringify(data);
+              if (data.queue_length !== undefined) {
+                document.getElementById('queue-length').textContent = data.queue_length;
+              }
+            })
+            .catch(() => { document.getElementById('worker-status').textContent = 'Failed to trigger worker'; })
+            .finally(() => { triggerBtn.disabled = false; });
+        });
+      }
+      function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+      }
+    </script>
   </body>
 </html>

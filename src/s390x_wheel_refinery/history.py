@@ -141,6 +141,17 @@ class BuildHistory:
             rows = conn.execute(query, (limit,)).fetchall()
         return {row[0]: row[1] for row in rows}
 
+    def recent_failures(self, *, limit: int = 20) -> List["BuildEvent"]:
+        query = """
+            SELECT * FROM build_events
+            WHERE status IN ('failed', 'failed_attempt', 'missing', 'system_recipe_failed')
+            ORDER BY id DESC
+            LIMIT ?
+        """
+        with sqlite3.connect(self.path) as conn:
+            rows = conn.execute(query, (limit,)).fetchall()
+        return [_row_to_event(row) for row in rows]
+
     def variant_success_rate(self, name: str) -> dict:
         query = """
             SELECT json_extract(metadata_json, '$.variant') as variant,
@@ -159,6 +170,32 @@ class BuildHistory:
             total = row[2] or 1
             rates[variant] = success / total
         return rates
+
+    def failures_over_time(self, *, name: Optional[str] = None, limit: int = 50) -> List[BuildEvent]:
+        query = """
+            SELECT * FROM build_events
+            WHERE status IN ('failed', 'failed_attempt', 'missing', 'system_recipe_failed')
+        """
+        params: list = []
+        if name:
+            query += " AND name = ?"
+            params.append(name)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        with sqlite3.connect(self.path) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [_row_to_event(row) for row in rows]
+
+    def variant_history(self, name: str, limit: int = 100) -> List[BuildEvent]:
+        query = """
+            SELECT * FROM build_events
+            WHERE name = ? AND metadata_json LIKE '%variant%'
+            ORDER BY id DESC
+            LIMIT ?
+        """
+        with sqlite3.connect(self.path) as conn:
+            rows = conn.execute(query, (name, limit)).fetchall()
+        return [_row_to_event(row) for row in rows]
 
     def package_summary(self, name: str) -> "PackageSummary":
         query = """

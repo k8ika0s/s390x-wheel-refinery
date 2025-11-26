@@ -79,3 +79,6 @@ errors:
     packages:
       dnf: ["python3-numpy"]
       apt: ["python3-numpy"]
+    recipes:
+      dnf: ["dnf install -y python3-numpy"]
+      apt: ["apt-get update && apt-get install -y python3-numpy"]
