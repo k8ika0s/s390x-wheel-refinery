@@ -19,6 +19,8 @@
       .chart { background: #1e293b; padding: 12px; border-radius: 8px; }
       .bar { height: 12px; background: linear-gradient(90deg, #22c55e, #38bdf8); border-radius: 6px; }
       .bar-container { background: #0b1220; border-radius: 6px; padding: 4px; }
+      .button { padding:6px 10px;border:1px solid #38bdf8;border-radius:6px;background:#0ea5e9;color:#0f172a;font-weight:bold;cursor:pointer; }
+      .button:disabled { opacity:0.5; cursor:not-allowed; }
     </style>
   </head>
   <body>
@@ -77,6 +79,14 @@
       <form method="post" action="/package/{{ summary.name }}/retry" style="margin-top:8px;">
         <button class="action-btn" type="submit">Retry with generated recipe</button>
       </form>
+      {% if worker_mode %}
+        <div class="meta" style="margin-top:8px;">Queue length: <span id="queue-length">{{ queue_length }}</span></div>
+        <div class="meta">Worker mode: {{ worker_mode }}</div>
+        <button id="trigger-worker" class="button" type="button">Run worker now</button>
+        <div id="worker-status" class="meta"></div>
+      {% else %}
+        <div class="meta" style="margin-top:8px;">Worker not configured (set WORKER_WEBHOOK_URL or WORKER_* paths).</div>
+      {% endif %}
     </div>
 
     <h2>Alerts</h2>
@@ -90,5 +100,31 @@
     {% if summary.avg_duration and summary.avg_duration > 120 %}
       <div class="card"><div class="meta">Long builds (avg {{ summary.avg_duration }}s). Consider caching deps or resource limits.</div></div>
     {% endif %}
+    <script>
+      const triggerBtn = document.getElementById('trigger-worker');
+      if (triggerBtn) {
+        triggerBtn.addEventListener('click', () => {
+          triggerBtn.disabled = true;
+          const headers = {};
+          const token = getCookie('worker_token');
+          if (token) headers['X-Worker-Token'] = token;
+          fetch('/api/worker/trigger', {method: 'POST', headers})
+            .then(r => r.json())
+            .then(data => {
+              document.getElementById('worker-status').textContent = data.detail || JSON.stringify(data);
+              if (data.queue_length !== undefined) {
+                document.getElementById('queue-length').textContent = data.queue_length;
+              }
+            })
+            .catch(() => { document.getElementById('worker-status').textContent = 'Failed to trigger worker'; })
+            .finally(() => { triggerBtn.disabled = false; });
+        });
+      }
+      function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+      }
+    </script>
   </body>
 </html>

@@ -22,15 +22,19 @@ class RetryQueue:
         if not self.path.exists():
             self._save([])
 
-    def add(self, request: RetryRequest) -> None:
+    def add(self, request: RetryRequest) -> int:
         data = self._load()
         data.append(asdict(request))
         self._save(data)
+        return len(data)
 
     def pop_all(self) -> List[RetryRequest]:
         data = self._load()
         self._save([])
         return [RetryRequest(**item) for item in data]
+
+    def __len__(self) -> int:
+        return len(self._load())
 
     def _load(self) -> list:
         try:

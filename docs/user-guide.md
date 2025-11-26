@@ -55,6 +55,23 @@ refinery \
 3) Re-run with `--auto-apply-suggestions` (or add those packages to your build image).
 4) If it keeps failing, use `--skip-known-failures` to move on, then address it later.
 
+## Retry later with the queue
+- On a package page in the dashboard, click **Retry with recipe** (or call `POST /package/{name}/retry`), which drops a request into `/cache/retry_queue.json`.
+- When you’re ready, run the worker to consume the queue (uses the same cache/history):
+```
+refinery worker \
+  --input /input \
+  --output /output \
+  --cache /cache \
+  --python 3.11
+```
+- The worker applies the queued recipe steps as overrides and rebuilds the matching packages. The queue is emptied after each worker run.
+- In the dashboard you’ll also see the queue length and a **Run worker now** button. It works when the web container can see `/input`, `/output`, and `/cache` (or when `WORKER_*` env vars point to them). You can also enable a periodic drain with `WORKER_AUTORUN_INTERVAL` (seconds).
+- If you prefer an external worker: run `uvicorn s390x_wheel_refinery.worker_service:app --host 0.0.0.0 --port 9000` in a container that has the same mounts, then set `WORKER_WEBHOOK_URL=http://worker:9000/trigger` (and optionally `WORKER_TOKEN`) in the web container. The UI “Run worker now” will call the webhook instead of running locally.
+- Optional auth: set `WORKER_TOKEN` to require `X-Worker-Token` (or `?token=`) for queue/worker actions.
+- CLI queue check: `refinery queue --cache /cache` shows queue length (use `--queue-path` to override).
+- Cookie tip: if you don’t want the token in URLs, set a cookie named `worker_token` in the browser; the UI will send it automatically when triggering the worker.
+
 ## Tips for AI/ML stacks
 - Use `rocky` preset or a custom image with OpenBLAS/LAPACK and build tools installed.
 - Keep `/cache` between runs so successes/hints/logs are remembered.
