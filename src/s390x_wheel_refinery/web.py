@@ -10,7 +10,7 @@ from typing import List, Optional
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Query, Request, Response
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
@@ -101,11 +101,15 @@ async def _trigger_worker_webhook(url: str, token: Optional[str]) -> tuple[bool,
                 raise RuntimeError(f"Webhook responded {resp.status}")
             return resp.read().decode()
 
-    try:
-        body = await asyncio.to_thread(_call)
-        return True, body or "worker triggered via webhook"
-    except Exception as exc:  # noqa: BLE001
-        return False, str(exc)
+    last_exc: Exception | None = None
+    for _ in range(2):  # simple retry
+        try:
+            body = await asyncio.to_thread(_call)
+            return True, body or "worker triggered via webhook"
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            await asyncio.sleep(1)
+    return False, str(last_exc) if last_exc else "webhook failed"
 
 
 def create_app(history: BuildHistory) -> FastAPI:
@@ -316,6 +320,16 @@ def create_app(history: BuildHistory) -> FastAPI:
         if not ok:
             return JSONResponse(status_code=500, content={"detail": detail})
         return {"detail": detail, "queue_cleared": True, "queue_length": len(retry_queue)}
+
+    @app.post("/api/session/token")
+    def set_token(token: str, response: Response):
+        if not worker_token:
+            return JSONResponse(status_code=404, content={"detail": "worker token not configured"})
+        if token != worker_token:
+            return JSONResponse(status_code=403, content={"detail": "forbidden"})
+        # Set a cookie so UI calls can include the token without adding it to query params.
+        response.set_cookie("worker_token", token, httponly=False, samesite="lax")
+        return {"detail": "token set in cookie"}
 
     @app.get("/logs/{name}/{version}")
     def view_log(name: str, version: str):

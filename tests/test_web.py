@@ -80,3 +80,13 @@ def test_worker_trigger_webhook(monkeypatch, tmp_path: Path):
     assert resp.status_code == 200
     assert called["url"] == "http://worker/trigger"
     assert called["token"] == "secret"
+
+
+def test_set_token_cookie(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("WORKER_TOKEN", "secret")
+    history = BuildHistory(tmp_path / "history.db")
+    app = create_app(history)
+    client = TestClient(app)
+    resp = client.post("/api/session/token?token=secret")
+    assert resp.status_code == 200
+    assert any(c.startswith("worker_token=") for c in resp.headers.get("set-cookie", "").split(";"))

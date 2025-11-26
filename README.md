@@ -59,6 +59,7 @@ refinery \
 - Queue visibility & trigger: UI shows queue depth and offers “Run worker now,” which calls `/api/worker/trigger` (enabled when the web container has access to `/input`, `/output`, `/cache` or a worker webhook is configured).
 - Auth: optional `WORKER_TOKEN` env protects queue/worker endpoints (supply via `X-Worker-Token` or `?token=` when invoking).
 - Queue CLI: `refinery queue --cache /cache` prints queue length; `--queue-path` overrides the default.
+- Token cookie helper: `POST /api/session/token?token=<WORKER_TOKEN>` sets a `worker_token` cookie for the browser, avoiding query/header injection in the UI.
 - Worker service container (example docker-compose):
   ```yaml
   services:

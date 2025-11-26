@@ -70,7 +70,7 @@ refinery worker \
 - If you prefer an external worker: run `uvicorn s390x_wheel_refinery.worker_service:app --host 0.0.0.0 --port 9000` in a container that has the same mounts, then set `WORKER_WEBHOOK_URL=http://worker:9000/trigger` (and optionally `WORKER_TOKEN`) in the web container. The UI “Run worker now” will call the webhook instead of running locally.
 - Optional auth: set `WORKER_TOKEN` to require `X-Worker-Token` (or `?token=`) for queue/worker actions.
 - CLI queue check: `refinery queue --cache /cache` shows queue length (use `--queue-path` to override).
-- Cookie tip: if you don’t want the token in URLs, set a cookie named `worker_token` in the browser; the UI will send it automatically when triggering the worker.
+- Cookie tip: if you don’t want the token in URLs, set a cookie named `worker_token` in the browser (or call `POST /api/session/token?token=<your_token>`); the UI will send it automatically when triggering the worker.
 
 ## Tips for AI/ML stacks
 - Use `rocky` preset or a custom image with OpenBLAS/LAPACK and build tools installed.
