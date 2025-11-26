@@ -10,7 +10,6 @@ from packaging.version import InvalidVersion, Version
 from .config import RefineryConfig, UpgradeStrategy
 from .index import IndexClient
 from .dependency_expander import missing_python_deps, build_jobs_for_missing
-from .models import BuildJob
 from .models import BuildJob, Plan, ReusableWheel
 from .scanner import WheelInfo
 

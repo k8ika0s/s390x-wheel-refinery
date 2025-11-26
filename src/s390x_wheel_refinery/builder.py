@@ -318,7 +318,7 @@ class WheelBuilder:
         if not built:
             raise RuntimeError(f"Build finished but wheel not found for {job.name}=={job.version}")
         target = self._copy_to_output(built)
-        self._attempt_counts[key] = attempts + 1
+        self._attempt_counts[(job.name.lower(), job.version)] = attempt
         duration = time.time() - start_time
         detail = self._detail_with_overrides(
             f"{job.reason}; variant={variant.name}; attempt={attempt}; recipe_ran={recipe_ran}; log={log_path}",
