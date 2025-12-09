@@ -11,24 +11,31 @@ We want a fast, scalable API service in Go that acts as the “traffic controlle
 - Config surfacing: show current strategy (pinned/upgrade), target Python/platform, index settings, environment info.
 
 ### Backends and contracts
-- **Queue backend:** start with file/JSON for parity, but design to swap to Redis/SQS later (interface-based).
-- **History/hints store:** start with SQLite/Postgres-ready schema for events, variants, hints, logs refs, manifests.
-- **Logs/artifacts:** return references/URLs; actual blobs can stay on disk/object storage for now.
-- **Worker trigger:** HTTP webhook payload compatible with existing Python worker; include token.
-- **API schemas:** lock contracts for summary/recent/history search, plan/manifest, queue (list/enqueue/clear), worker trigger, hint CRUD, log fetch/search, config view, metrics.
+- **Queue backend:** define an interface; support file/JSON initially, but make Redis and Kafka plug-ins straightforward. Goal: swap backend via config without API changes.
+- **History/hints store:** Postgres as default; docker-compose launches Postgres, but allow pointing to external Postgres via env/config. Schema kept portable.
+- **Logs/artifacts:** centralized logging/audit tables (not just path refs). Wheel links can point to output/cache; store log records (or references) in DB; add optional text search.
+- **Worker trigger:** support both HTTP webhook (POST, token optional) and local trigger. Keep payload compatible with current Python worker (`{action:"drain"}`); optionally support a smoke/dry-run.
+- **API surface:** summary, recent/history search, queue (list/enqueue/clear/stats), worker trigger, hint CRUD, log fetch/search, metrics/health, config view, manifests/artifact links. Build plan exposed, but no “why” reasoning needed.
 
 ### First implementation steps (proposed)
-1) Define API spec (OpenAPI/JSON schemas) for core endpoints: summary, recent/history search, plan, manifest, queue ops, worker trigger, hint CRUD, log fetch, metrics, config view.
-2) Choose initial storage: SQLite for history/hints/manifest; file-backed queue (with interface to swap backends); logs referenced by path/URL.
-3) Implement read-only endpoints first (summary/recent/history search/plan/manifest/hints/log refs/metrics/config) to unblock UI wiring.
-4) Add queue/enqueue/clear and worker trigger (webhook/local) with token auth on writes; expose queue stats (length, oldest age).
-5) Add hint CRUD endpoints; record which hint matched which event in history.
+1) Define API spec (OpenAPI/JSON schemas) for: summary, recent/history search (pagination/filters), plan, manifest/artifacts, queue ops (list/enqueue/clear/stats), worker trigger (local/webhook), hint CRUD, log fetch/search, metrics/health, config view.
+2) Storage wiring: Postgres schema for history/hints/logs/manifests; queue interface with file backend first, Redis/Kafka adapters sketched; log records stored in DB with optional file refs.
+3) Implement read-only endpoints first (summary/recent/history, plan/manifest/artifacts, hints read, logs read, metrics/health, config) to unblock UI wiring.
+4) Add queue/enqueue/clear/stats and worker trigger (webhook/local) with token stub; expose queue length and oldest age.
+5) Add hint CRUD endpoints; record matched hint ids on events; validation for patterns/recipes.
 6) Add log search/tail endpoint (basic text search over stored logs).
-7) Observability and ops: health/readiness, structured logging, Prometheus metrics.
+7) Observability: health/readiness, structured logging, Prometheus metrics (optional, not a blocker).
 
-### Open decisions to align on
-- Queue backend: stick to file for now or introduce Redis? (recommend file first, interface ready for Redis).
-- DB choice: SQLite vs Postgres for history/hints; start with SQLite, keep schema portable.
-- Log storage: keep as file path refs under cache/output, or push to object storage later.
-- Auth: continue simple token for write actions; optional role split (read vs write) later.
-- API versioning: prefix routes (e.g., /api/v1) to ease rollout alongside the existing Python API.
+### Endpoint draft (coarse)
+- `GET /summary`, `/recent`, `/history` (filters: package/status/date/run_id; pagination with sensible defaults, e.g., limit 50, max 500).
+- `GET /plan`, `/manifest`, `/artifacts` (links/paths to wheels).
+- `GET /queue`, `POST /queue/enqueue`, `POST /queue/clear`, `GET /queue/stats` (length, oldest age).
+- `POST /worker/trigger` (local or webhook based on config), optional `POST /worker/smoke`.
+- `GET /hints`, `POST/PUT/DELETE /hints/{id}`.
+- `GET /logs/{name}/{version}`, `GET /logs/search`.
+- `GET /metrics`, `GET /health`, `GET /config`.
+Auth: stubbed (open for now); reserve header/query/cookie token for future writes.
+
+### Notes
+- No legacy API coexistence needed; this Go service is the first deploy.
+- Defaults (pagination/timeouts) to be proposed with the implementation.
