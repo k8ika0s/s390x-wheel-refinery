@@ -1,4 +1,3 @@
-```mermaid
 flowchart TD
     HISTORY[(History DB)] --> SUMMARY[Summary/recent/failures]
     HISTORY --> VARIANTS[Variants, events]
@@ -13,4 +12,3 @@ flowchart TD
     QAPI --> API
     API --> WORKER
     API --> ENQUEUE[POST /package/{name}/retry]
-```

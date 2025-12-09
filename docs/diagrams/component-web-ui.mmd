@@ -1,4 +1,3 @@
-```mermaid
 flowchart TD
     API[API endpoints\nsummary/recent/queue/hints/logs] --> FETCH[Fetch & Poll]
     FETCH --> DASH[Dashboard\nfilters + charts]
@@ -7,4 +6,3 @@ flowchart TD
     FETCH --> LOGS[Log viewer\nautoscroll/open/copy]
     ACTIONS[User actions\nenqueue/trigger/clear] --> API
     THEME[Theme toggle] -.> UI
-```

@@ -1,4 +1,3 @@
-```mermaid
 sequenceDiagram
     participant Builder
     participant History
@@ -12,4 +11,3 @@ sequenceDiagram
     Builder->>Queue: Enqueue retry with recipes
     Queue-->>Builder: Next retry job
     Builder->>History: Record success/fail + hint used
-```

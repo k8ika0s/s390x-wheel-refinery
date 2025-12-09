@@ -1,4 +1,3 @@
-```mermaid
 flowchart TD
     PLAN[Build job\n(name, version, py tag, platform)] --> FETCH[Fetch source (sdist)]
     FETCH --> SETUP[Create venv\ninstall build deps]
@@ -9,4 +8,3 @@ flowchart TD
     RETRY --> CHECK
     STORE --> HISTORY[Record event/log\nstatus, duration, variant]
     RETRY -. if max retries fail .-> HISTORY
-```

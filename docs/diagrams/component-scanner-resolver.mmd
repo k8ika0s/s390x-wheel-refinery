@@ -1,4 +1,3 @@
-```mermaid
 flowchart TD
     IN[Scan input wheels] --> META[Parse METADATA\n(name, version, tags)]
     META --> CLASS{Pure vs native?}
@@ -8,4 +7,3 @@ flowchart TD
     DEPS --> PLAN[Emit build plan/graph\n(target py/platform)]
     REUSE -.-> PLAN
     PLAN --> OUT[Status counts\nfor UI/API]
-```

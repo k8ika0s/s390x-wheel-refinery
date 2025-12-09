@@ -1,4 +1,3 @@
-```mermaid
 flowchart TD
     PR[Pull Request] --> LINT[Ruff lint]
     PR --> PYTEST[Pytest]
@@ -10,4 +9,3 @@ flowchart TD
     UITEST --> PIPELINE
     SMOKE --> PIPELINE
     PIPELINE[CI summary\npass/fail] --> MERGE[Ready to merge]
-```

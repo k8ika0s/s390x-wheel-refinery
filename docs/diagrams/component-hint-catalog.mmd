@@ -1,4 +1,3 @@
-```mermaid
 flowchart TD
     ERR[Build error logs] --> MATCH[Match hint patterns]
     MATCH --> RECIPES[System recipes\n(dnf/apt/notes)]
@@ -8,4 +7,3 @@ flowchart TD
     CATALOG --> API
     API --> UI[Display hints]
     API -. future .-> CRUD[Edit hints (add/update/delete)]
-```
