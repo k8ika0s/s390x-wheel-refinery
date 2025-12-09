@@ -12,15 +12,20 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query, Request, Response
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from fastapi.templating import Jinja2Templates
 
 from .history import BuildHistory, BuildEvent, FailureStat, PackageSummary
 from .hints import HintCatalog, Hint
 from .queue import RetryQueue, RetryRequest
 from .worker import process_queue
 
-TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+class RetryPayload(BaseModel):
+    version: str | None = "latest"
+    python_tag: str | None = None
+    platform_tag: str | None = None
+    recipes: List[str] | None = None
 
 
 @dataclass
@@ -147,77 +152,17 @@ def create_app(history: BuildHistory) -> FastAPI:
                 await task
 
     app = FastAPI(title="s390x Wheel Refinery History", lifespan=lifespan)
-
-    class RetryPayload(BaseModel):
-        version: str | None = "latest"
-        python_tag: str | None = None
-        platform_tag: str | None = None
-        recipes: List[str] | None = None
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/")
-    def home(
-        request: Request,
-        recent: int = 20,
-        top_failures: int = 10,
-        status: Optional[str] = Query(None, description="Filter recent events by status"),
-        package: Optional[str] = Query(None, description="Filter recent events by package name"),
-    ):
-        recent_events = history.recent(limit=recent, status=status)
-        if package:
-            recent_events = [event for event in recent_events if event.name.lower() == package.lower()]
-        failures = history.top_failures(limit=top_failures)
-        slowest = history.top_slowest(limit=10)
-        status_counts = history.status_counts_recent(limit=50)
-        recent_failures = history.recent_failures(limit=10)
-        return TEMPLATES.TemplateResponse(
-            "home.html",
-            {
-                "request": request,
-                "recent": recent_events,
-                "failures": failures,
-                "slowest": slowest,
-                "status_counts": status_counts,
-                "recent_failures": recent_failures,
-                "status_filter": status or "",
-                "package_filter": package or "",
-                "hint_catalog": hint_catalog.hints,
-                "queue_length": len(retry_queue),
-                "worker_mode": worker_mode,
-            },
-        )
-
-    @app.get("/package/{name}")
-    def package_page(request: Request, name: str):
-        summary = history.package_summary(name)
-        events = history.recent(limit=200, status=None)
-        package_events = [event for event in events if event.name.lower() == name.lower()]
-        failures = history.failures_over_time(name=name, limit=50)
-        variants = history.variant_history(name, limit=20)
-        return TEMPLATES.TemplateResponse(
-            "package.html",
-            {
-                "request": request,
-                "summary": summary,
-                "events": package_events,
-                "failures": failures,
-                "variants": variants,
-                "queue_length": len(retry_queue),
-                "worker_mode": worker_mode,
-            },
-        )
-
-    @app.get("/event/{name}/{version}")
-    def event_detail(request: Request, name: str, version: str):
-        event = history.last_event(name, version)
-        if not event:
-            return JSONResponse(status_code=404, content={"detail": "not found"})
-        return TEMPLATES.TemplateResponse(
-            "event.html",
-            {
-                "request": request,
-                "event": event,
-            },
-        )
+    def health():
+        return {"status": "ok"}
 
     @app.get("/api/recent")
     def api_recent(
@@ -282,7 +227,21 @@ def create_app(history: BuildHistory) -> FastAPI:
         auth_error = _auth_guard(worker_token, request)
         if auth_error:
             return auth_error
-        return {"length": len(retry_queue), "worker_available": worker_mode is not None, "worker_mode": worker_mode}
+        items = retry_queue.list()
+        return {
+            "length": len(items),
+            "worker_available": worker_mode is not None,
+            "worker_mode": worker_mode,
+            "items": [req.__dict__ for req in items],
+        }
+
+    @app.post("/api/queue/clear")
+    def api_queue_clear(request: Request):
+        auth_error = _auth_guard(worker_token, request)
+        if auth_error:
+            return auth_error
+        retry_queue.clear()
+        return {"detail": "Queue cleared", "queue_length": len(retry_queue)}
 
     @app.post("/package/{name}/retry")
     async def retry_with_recipe(name: str, payload: RetryPayload, request: Request):

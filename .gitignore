@@ -11,3 +11,5 @@ build/
 dist/
 .DS_Store
 *.egg-info/
+ui/node_modules/
+ui/dist/

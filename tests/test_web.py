@@ -32,6 +32,7 @@ def test_web_endpoints(tmp_path: Path):
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["length"] == 0
+    assert payload["items"] == []
 
 
 def test_worker_trigger(monkeypatch, tmp_path: Path):

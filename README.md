@@ -8,7 +8,7 @@ Refine arbitrary Python wheels into a coherent, reproducible set of s390x wheels
 - **Dynamic recovery**: Catalog-driven hints (dnf/apt) for missing libs/headers (AI/ML-friendly), auto-apply suggestions, and bounded dependency expansion to auto-build missing Python deps.
 - **Isolation & control**: Run in containers (Rocky/Fedora/Ubuntu presets or custom images) with CPU/mem limits; cache/output bind-mounted to keep the host clean.
 - **Concurrency & scheduling**: Parallel builds with warmed cache/venv; shortest-first scheduling using observed durations.
-- **Observability**: Manifest with rich metadata, SQLite history of all events, logs on disk, SSE log streaming, and a FastAPI/Jinja control panel (charts, catalog, alerts).
+- **Observability**: Manifest with rich metadata, SQLite history of all events, logs on disk, SSE log streaming, JSON APIs, and a React SPA control panel (charts, catalog, alerts).
 
 ## Quick start
 ```bash
@@ -47,24 +47,24 @@ refinery \
 
 ## Containers
 - Builder bases: `containers/rocky/Dockerfile`, `containers/fedora/Dockerfile`, `containers/ubuntu/Dockerfile`
-- Web/control-plane: `containers/web/Dockerfile`
-- Make targets: `make build-rocky|build-fedora|build-ubuntu|build-web TAG=latest REGISTRY=local`
-- Serve UI: `docker run -p 8000:8000 -v /cache:/cache local/refinery-web:latest` (expects `HISTORY_DB=/cache/history.db`).
+- API/control-plane: `containers/web/Dockerfile` (FastAPI JSON APIs only)
+- React SPA UI: `containers/ui/Dockerfile`
+- Make targets: `make build-rocky|build-fedora|build-ubuntu|build-web TAG=latest REGISTRY=local` (or build UI with `docker build -f containers/ui/Dockerfile .`)
 
 ## Web UI / API
-- Start: `refinery serve --db /cache/history.db --host 0.0.0.0 --port 8000`
-- Features: recent events, top failures, top slow packages (avg duration + failures), package pages (alerts, avg duration), hint catalog, log links, SSE streaming (`/logs/{name}/{version}/stream`), APIs for stats (`/api/top-failures`, `/api/top-slowest`, `/api/hints`).
-- Package pages also show recent failures (with hints/recipes) and variant history; dashboard shows recent failures and status counts.
-- Retry queue: POST `/package/{name}/retry` (UI button or API) stores a request in `<cache>/retry_queue.json` with suggested recipes. Run `refinery worker ...` to consume the queue and rebuild those packages.
-- Queue visibility & trigger: UI shows queue depth and offers “Run worker now,” which calls `/api/worker/trigger` (enabled when the web container has access to `/input`, `/output`, `/cache` or a worker webhook is configured).
+- Start API: `refinery serve --db /cache/history.db --host 0.0.0.0 --port 8000`
+- React SPA: build/run `containers/ui/Dockerfile` (or `npm install && npm run dev` in `ui/` with `VITE_API_BASE=http://localhost:8000`).
+- Features: recent events, top failures, top slow packages, variant history, hint catalog, queue length, worker trigger, and retry enqueue. Logs stream via `/logs/{name}/{version}/stream`. APIs for stats remain under `/api/*`.
+- Retry queue: POST `/package/{name}/retry` (SPA button or API) stores a request in `<cache>/retry_queue.json` with suggested recipes. Run `refinery worker ...` to consume the queue and rebuild those packages.
+- Queue visibility & trigger: SPA shows queue depth and offers “Run worker now,” which calls `/api/worker/trigger` (enabled when the API container has access to `/input`, `/output`, `/cache` or a worker webhook is configured).
 - Auth: optional `WORKER_TOKEN` env protects queue/worker endpoints (supply via `X-Worker-Token` or `?token=` when invoking).
 - Queue CLI: `refinery queue --cache /cache` prints queue length; `--queue-path` overrides the default.
 - Token cookie helper: `POST /api/session/token?token=<WORKER_TOKEN>` sets a `worker_token` cookie for the browser, avoiding query/header injection in the UI.
 - Worker service container (example docker-compose):
   ```yaml
   services:
-    refinery-web:
-      image: <your-web-image>
+    api:
+      image: <your-api-image>
       environment:
         HISTORY_DB: /cache/history.db
         WORKER_WEBHOOK_URL: http://worker:9000/trigger
@@ -74,7 +74,7 @@ refinery \
         - /output:/output
         - /cache:/cache
     worker:
-      image: <your-web-image>  # or dedicated worker image
+      image: <your-api-image>
       command: ["uvicorn", "s390x_wheel_refinery.worker_service:app", "--host", "0.0.0.0", "--port", "9000"]
       environment:
         HISTORY_DB: /cache/history.db
@@ -83,6 +83,16 @@ refinery \
         - /input:/input:ro
         - /output:/output
         - /cache:/cache
+    ui:
+      image: <your-ui-image>
+      build:
+        context: .
+        dockerfile: containers/ui/Dockerfile
+        args:
+          VITE_API_BASE: http://api:8000
+      ports:
+        - "3000:80"
+      depends_on: [api]
   ```
 
 ## Manifest & history

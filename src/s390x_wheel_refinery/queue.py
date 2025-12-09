@@ -33,6 +33,12 @@ class RetryQueue:
         self._save([])
         return [RetryRequest(**item) for item in data]
 
+    def clear(self) -> None:
+        self._save([])
+
+    def list(self) -> List[RetryRequest]:
+        return [RetryRequest(**item) for item in self._load()]
+
     def __len__(self) -> int:
         return len(self._load())
 

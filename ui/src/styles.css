@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-bg text-slate-100 antialiased;
+}
+
+.theme-light {
+  background: #f8fafc;
+  color: #0f172a;
+}
+.theme-light body {
+  background: #f8fafc;
+  color: #0f172a;
+}
+.theme-light .glass {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: #e2e8f0;
+}
+.theme-light .chip {
+  border-color: #cbd5e1;
+  color: #0f172a;
+  background: rgba(148, 163, 184, 0.15);
+}
+.theme-light .btn-secondary {
+  @apply text-slate-700;
+}
+.theme-light .input {
+  background: #fff;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+.theme-light .status.built,
+.theme-light .status.cached,
+.theme-light .status.reused {
+  color: #16a34a;
+}
+.theme-light .status.failed,
+.theme-light .status.system_recipe_failed {
+  color: #dc2626;
+}
+
+.glass {
+  @apply bg-panel border border-border rounded-xl backdrop-blur-xs;
+}
+
+.chip {
+  @apply inline-block px-2 py-0.5 rounded-full border border-border text-xs text-slate-200;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center px-3 py-2 rounded-lg font-semibold cursor-pointer transition;
+}
+
+.btn:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+.btn:focus-visible,
+.chip:focus-visible,
+input:focus-visible {
+  @apply outline-none ring-2 ring-accent ring-offset-0;
+}
+
+.btn-primary {
+  @apply btn bg-accent text-slate-900 hover:brightness-110;
+}
+
+.btn-secondary {
+  @apply btn border border-border text-accent hover:bg-slate-800;
+}
+
+.input {
+  @apply w-full px-3 py-2 rounded-lg border border-border bg-slate-900 text-slate-100 outline-none focus:ring-2 focus:ring-accent;
+}
+
+.status {
+  @apply font-semibold uppercase text-xs;
+}
+.status.built,
+.status.cached,
+.status.reused {
+  @apply text-green-400;
+}
+.status.failed,
+.status.system_recipe_failed {
+  @apply text-red-400;
+}
+.status.missing,
+.status.skipped_known_failure {
+  @apply text-amber-300;
+}
+
+.skeleton {
+  @apply bg-slate-800/80 animate-pulse rounded;
+}
+
+.toast {
+  @apply glass p-3 shadow-lg cursor-pointer transition-transform;
+}
+.toast:hover {
+  @apply -translate-y-0.5;
+}
+.toast-success {
+  @apply border border-green-500/40;
+}
+.toast-error {
+  @apply border border-red-500/40;
+}
+
+.muted {
+  @apply text-slate-400;
+}
+
+.error {
+  @apply text-red-400;
+}

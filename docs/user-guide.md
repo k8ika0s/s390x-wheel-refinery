@@ -21,17 +21,14 @@ refinery \
   --container-preset rocky \
   --jobs 1
 ```
-3) If it fails, check the dashboard (below) to see hints and logs.
+3) If it fails, check the dashboard (React SPA) to see hints and logs.
 
-## Dashboard
-- Start it: `refinery serve --db /cache/history.db --host 0.0.0.0 --port 8000`
-- Open in your browser: `http://localhost:8000`
-- You’ll see:
-  - Recent builds with statuses (reused, built, failed).
-  - Top failures and slow packages (with simple bars).
-  - Package pages with average build time, alerts, and log links.
-  - A hint catalog showing which system packages to install for common errors.
-  - Live log streaming per package/version.
+## Dashboard (React SPA)
+Start the API with:
+```
+refinery serve --db /cache/history.db --host 0.0.0.0 --port 8000
+```
+Then run the React dashboard pointing at that API. From `ui/`, run `npm install && VITE_API_BASE=http://localhost:8000 npm run dev` for local work, or build the production UI container in `containers/ui/Dockerfile` (served on port 3000 by default). The SPA shows recent events (reused, built, failed), top failures and slow packages, hint catalog, queue depth with items, worker trigger, variant history, per-package detail pages, and log viewing (via `/logs/...`). The UI now includes a sticky header with environment/API and token badges, toasts for actions, skeleton states while loading, paginated/sortable event tables with sticky headers, a richer queue table (select, bulk retry, clear), tabs on package detail (overview/events/hints), paginated variants/failures, and log viewers with autoscroll/download controls.
 
 ## Key options (plain-English)
 - `--python 3.11`: Target Python version for the rebuilt wheels.
@@ -66,8 +63,8 @@ refinery worker \
   --python 3.11
 ```
 - The worker applies the queued recipe steps as overrides and rebuilds the matching packages. The queue is emptied after each worker run.
-- In the dashboard you’ll also see the queue length and a **Run worker now** button. It works when the web container can see `/input`, `/output`, and `/cache` (or when `WORKER_*` env vars point to them). You can also enable a periodic drain with `WORKER_AUTORUN_INTERVAL` (seconds).
-- If you prefer an external worker: run `uvicorn s390x_wheel_refinery.worker_service:app --host 0.0.0.0 --port 9000` in a container that has the same mounts, then set `WORKER_WEBHOOK_URL=http://worker:9000/trigger` (and optionally `WORKER_TOKEN`) in the web container. The UI “Run worker now” will call the webhook instead of running locally.
+- In the dashboard you’ll also see the queue length and a **Run worker now** button. It works when the API container can see `/input`, `/output`, and `/cache` (or when `WORKER_*` env vars point to them). You can also enable a periodic drain with `WORKER_AUTORUN_INTERVAL` (seconds) in local mode.
+- If you prefer an external worker: run `uvicorn s390x_wheel_refinery.worker_service:app --host 0.0.0.0 --port 9000` in a container that has the same mounts, then set `WORKER_WEBHOOK_URL=http://worker:9000/trigger` (and optionally `WORKER_TOKEN`) in the API container. The UI “Run worker now” will call the webhook instead of running locally.
 - Optional auth: set `WORKER_TOKEN` to require `X-Worker-Token` (or `?token=`) for queue/worker actions.
 - CLI queue check: `refinery queue --cache /cache` shows queue length (use `--queue-path` to override).
 - Cookie tip: if you don’t want the token in URLs, set a cookie named `worker_token` in the browser (or call `POST /api/session/token?token=<your_token>`); the UI will send it automatically when triggering the worker.
