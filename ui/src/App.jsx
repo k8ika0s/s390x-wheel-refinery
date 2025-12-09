@@ -321,7 +321,7 @@ function PackageDetail({ token, pushToast }) {
                   <span>{f.name} {f.version}</span>
                   <span className="chip">{f.status}</span>
                 </div>
-              )) : <div className="text-slate-400 text-sm">No failures</div>}
+              )) : <EmptyState title="No failures" detail="Great! No recent failures logged for this package." />}
               {failures?.length > pageSize && (
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span>Page {failurePage} / {failuresPaged.total}</span>
@@ -338,7 +338,7 @@ function PackageDetail({ token, pushToast }) {
                   <span className="text-slate-400">{v.metadata?.variant || "unknown"}</span>
                   <span className="chip">{v.status}</span>
                 </div>
-              )) : <div className="text-slate-400 text-sm">No variant history</div>}
+              )) : <EmptyState title="No variant history" detail="No variant attempts recorded yet." />}
               {variants?.length > pageSize && (
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span>Page {variantPage} / {variantsPaged.total}</span>
@@ -419,7 +419,7 @@ function PackageDetail({ token, pushToast }) {
                 <div className="text-slate-400">apt: {(h.packages?.apt || []).join(", ") || "-"}</div>
                 {h.note && <div className="text-slate-400">note: {h.note}</div>}
               </div>
-            )) : <div className="text-slate-400 text-sm">No hints recorded for this package.</div>}
+            )) : <EmptyState title="No hints" detail="No hint recipes recorded for this package." />}
             {hints?.length > pageSize && (
               <div className="flex items-center gap-2 text-xs text-slate-400">
                 <span>Page {hintsPage} / {hintsPaged.total}</span>
