@@ -226,7 +226,13 @@ def create_app(history: BuildHistory) -> FastAPI:
         auth_error = _auth_guard(worker_token, request)
         if auth_error:
             return auth_error
-        return {"length": len(retry_queue), "worker_available": worker_mode is not None, "worker_mode": worker_mode}
+        items = retry_queue.list()
+        return {
+            "length": len(items),
+            "worker_available": worker_mode is not None,
+            "worker_mode": worker_mode,
+            "items": [req.__dict__ for req in items],
+        }
 
     @app.post("/package/{name}/retry")
     async def retry_with_recipe(name: str, payload: RetryPayload, request: Request):

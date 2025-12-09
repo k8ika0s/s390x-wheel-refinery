@@ -9,4 +9,9 @@ export default defineConfig({
   preview: {
     port: 4173,
   },
+  test: {
+    globals: true,
+    environment: "jsdom",
+    setupFiles: "./vitest.setup.js",
+  },
 });

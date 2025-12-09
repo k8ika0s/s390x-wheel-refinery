@@ -25,14 +25,16 @@ async function request(path, options = {}, token) {
 }
 
 export async function fetchDashboard(token) {
-  const [summary, recent, failures, slowest, queue] = await Promise.all([
+  const [summary, recent, failures, slowest, queue, hints] = await Promise.all([
     request("/api/summary", {}, token),
     request("/api/recent?limit=25", {}, token),
     request("/api/top-failures?limit=10", {}, token),
     request("/api/top-slowest?limit=10", {}, token),
     request("/api/queue", {}, token),
+    request("/api/hints", {}, token),
   ]);
-  return { summary, recent, failures, slowest, queue };
+  const metrics = await request("/api/metrics", {}, token).catch(() => null);
+  return { summary, recent, failures, slowest, queue, hints, metrics };
 }
 
 export function triggerWorker(token) {
@@ -46,4 +48,25 @@ export function enqueueRetry(name, version, token) {
 
 export function setCookieToken(token) {
   return request(`/api/session/token?token=${encodeURIComponent(token)}`, { method: "POST" }, token);
+}
+
+export function fetchPackageDetail(name, token, limit = 50) {
+  return Promise.all([
+    request(`/api/package/${encodeURIComponent(name)}`, {}, token),
+    request(`/api/variants/${encodeURIComponent(name)}?limit=50`, {}, token),
+    request(`/api/failures?name=${encodeURIComponent(name)}&limit=${limit}`, {}, token),
+    request(`/api/recent?package=${encodeURIComponent(name)}&limit=${limit}`, {}, token),
+  ]).then(([summary, variants, failures, events]) => ({ summary, variants, failures, events }));
+}
+
+export function fetchLog(name, version, token) {
+  return request(`/logs/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, {}, token);
+}
+
+export function fetchRecent({ limit = 25, packageFilter, status }, token) {
+  const params = new URLSearchParams();
+  params.set("limit", limit);
+  if (packageFilter) params.set("package", packageFilter);
+  if (status) params.set("status", status);
+  return request(`/api/recent?${params.toString()}`, {}, token);
 }

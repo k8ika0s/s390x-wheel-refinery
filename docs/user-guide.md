@@ -28,7 +28,7 @@ Start the API with:
 ```
 refinery serve --db /cache/history.db --host 0.0.0.0 --port 8000
 ```
-Then run the React dashboard pointing at that API. From `ui/`, run `npm install && VITE_API_BASE=http://localhost:8000 npm run dev` for local work, or build the production UI container in `containers/ui/Dockerfile` (served on port 3000 by default). The SPA shows recent events (reused, built, failed), top failures and slow packages, hint catalog, queue depth, worker trigger, variant history, and log links with streaming.
+Then run the React dashboard pointing at that API. From `ui/`, run `npm install && VITE_API_BASE=http://localhost:8000 npm run dev` for local work, or build the production UI container in `containers/ui/Dockerfile` (served on port 3000 by default). The SPA shows recent events (reused, built, failed), top failures and slow packages, hint catalog, queue depth with items, worker trigger, variant history, per-package detail pages, and log viewing (via `/logs/...`).
 
 ## Key options (plain-English)
 - `--python 3.11`: Target Python version for the rebuilt wheels.
