@@ -26,10 +26,13 @@ function Skeleton({ className = "" }) {
   return <div className={`skeleton ${className}`} />;
 }
 
-function EmptyState({ title = "Nothing here", detail, actionLabel, onAction }) {
+function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, icon = "🫗" }) {
   return (
     <div className="glass p-4 text-slate-300 text-sm space-y-2 border-dashed border border-border">
-      <div className="font-semibold">{title}</div>
+      <div className="flex items-center gap-2 font-semibold">
+        <span>{icon}</span>
+        <span>{title}</span>
+      </div>
       {detail && <div className="text-slate-500">{detail}</div>}
       {actionLabel && onAction && (
         <button className="btn btn-secondary px-2 py-1 text-xs" onClick={onAction}>{actionLabel}</button>
@@ -399,6 +402,21 @@ function PackageDetail({ token, pushToast }) {
                     <a className="btn btn-secondary px-2 py-1 text-xs" href={logDownloadHref} target="_blank" rel="noreferrer">
                       Open log
                     </a>
+                  )}
+                  {logDownloadHref && (
+                    <button
+                      className="btn btn-secondary px-2 py-1 text-xs"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard?.writeText(logDownloadHref);
+                          pushToast?.({ type: "success", title: "Copied log URL", message: logDownloadHref });
+                        } catch {
+                          pushToast?.({ type: "error", title: "Copy failed", message: "Could not copy log URL" });
+                        }
+                      }}
+                    >
+                      Copy URL
+                    </button>
                   )}
                 </div>
               </div>
