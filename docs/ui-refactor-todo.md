@@ -20,6 +20,16 @@
 - Export links: manifest/history CSV/JSON links; log download button.
 - Admin banner for webhook/local mode and token state.
 
+## Next wave (Tailwind/UI polish)
+- Adopt Tailwind-based styling with a glassy dark theme, iconography, and consistent spacing.
+- Add sidebar/top nav with environment badge and API base indicator.
+- Add toasts/snackbars for actions (enqueue, trigger worker, token save).
+- Add skeleton loaders and better loading states for cards/tables/logs.
+- Implement pagination/sorting on tables and sticky headers.
+- Add tabs in package detail (overview, attempts/variants, failures, logs, hints).
+- Add log viewer panel with stream toggle, auto-scroll, and download link.
+- Add queue list with items and basic controls; show worker health/status.
+
 ## Backend/API support
 - API already exposes: summary, recent, top failures/slowest, queue, metrics, logs, retry enqueue, worker trigger.
 - No changes needed for API; ensure CORS remains open for the SPA.
