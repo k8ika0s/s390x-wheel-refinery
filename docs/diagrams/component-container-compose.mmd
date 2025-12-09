@@ -1,0 +1,17 @@
+flowchart TD
+    subgraph Compose
+        API[api service\nFastAPI + worker trigger]
+        WORKER[worker service\noptional webhook]
+        UI[ui service\nReact SPA]
+        VOL_IN[/input/]
+        VOL_OUT[/output/]
+        VOL_CACHE[/cache/]
+    end
+    VOL_IN --- API
+    VOL_OUT --- API
+    VOL_CACHE --- API
+    VOL_IN --- WORKER
+    VOL_OUT --- WORKER
+    VOL_CACHE --- WORKER
+    API <---> WORKER
+    UI --> API

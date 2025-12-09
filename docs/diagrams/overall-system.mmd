@@ -1,0 +1,31 @@
+flowchart LR
+    subgraph Inputs
+        W[Input wheels /input]
+        CFG[Config python version, indexes, strategy]
+    end
+    SR[Scanner/Resolver<br/>classify & plan]
+    PLAN[Build Plan<br/>reuse vs rebuild]
+    Q[Retry Queue<br/>pending rebuilds]
+    B[Builder/Worker<br/>build/retry variants]
+    C[Cache /cache<br/>reused/built wheels]
+    O[Output /output<br/>s390x wheels]
+    H[History DB<br/>events, variants, hints]
+    M[Manifest<br/>run output summary]
+    API[API/Control Plane]
+    UI[Web UI React SPA]
+
+    W --> SR
+    CFG --> SR
+    SR --> PLAN
+    PLAN --> Q
+    Q --> B
+    B --> C
+    B --> O
+    B --> H
+    B --> M
+    C -. reuse .-> SR
+    H --> API
+    M --> API
+    Q --> API
+    API <--> UI
+    API --> B

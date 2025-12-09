@@ -1,0 +1,10 @@
+flowchart TD
+    PLAN[Build plan / failures] --> ENQ[Enqueue retry request\npackage, version, tags, recipes]
+    UI[UI/API enqueue action] --> ENQ
+    ENQ --> FILE[retry_queue.json]
+    FILE --> LIST[List queue]
+    FILE --> CLEAR[Clear queue]
+    FILE --> POP[Pop all for worker]
+    POP --> WORKER[Worker processes\nbuild + record event]
+    LIST --> UI
+    CLEAR --> UI

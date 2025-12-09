@@ -1,0 +1,10 @@
+flowchart TD
+    PLAN[Build job\nname, version, py tag, platform] --> FETCH[Fetch source sdist]
+    FETCH --> SETUP[Create venv\ninstall build deps]
+    SETUP --> BUILD[Run PEP 517 build]
+    BUILD --> CHECK{Build ok?}
+    CHECK -->|Yes| STORE[Store wheel\ncache + output]
+    CHECK -->|No| RETRY[Apply hint recipes\nretry variants]
+    RETRY --> CHECK
+    STORE --> HISTORY[Record event/log\nstatus, duration, variant]
+    RETRY -. if max retries fail .-> HISTORY

@@ -1,0 +1,19 @@
+flowchart TD
+    subgraph Host s390x
+        subgraph Compose Stack
+            API[api: FastAPI/worker trigger]
+            UI[ui: React SPA]
+            WORKER[worker: optional webhook runner]
+            VOL_IN[/input/]
+            VOL_OUT[/output/]
+            VOL_CACHE[/cache/]
+        end
+    end
+    VOL_IN --- API
+    VOL_OUT --- API
+    VOL_CACHE --- API
+    VOL_IN --- WORKER
+    VOL_OUT --- WORKER
+    VOL_CACHE --- WORKER
+    UI --> API
+    API <-- webhook --> WORKER
