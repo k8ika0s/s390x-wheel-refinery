@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Link, useParams } from "react-router-dom";
-import { API_BASE, enqueueRetry, fetchDashboard, fetchLog, fetchPackageDetail, fetchRecent, setCookieToken, triggerWorker } from "./api";
+import { API_BASE, clearQueue, enqueueRetry, fetchDashboard, fetchLog, fetchPackageDetail, fetchRecent, setCookieToken, triggerWorker } from "./api";
 
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
 
@@ -364,6 +364,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
   const [message, setMessage] = useState("");
   const [retryPkg, setRetryPkg] = useState("");
   const [retryVersion, setRetryVersion] = useState("latest");
+  const [selectedQueue, setSelectedQueue] = useState({});
 
   const [pkgFilter, setPkgFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -434,6 +435,39 @@ function Dashboard({ token, onTokenChange, pushToast }) {
     }
   };
 
+  const handleBulkRetry = async () => {
+    const items = Object.values(selectedQueue);
+    if (!items.length) {
+      pushToast?.({ type: "error", title: "No selection", message: "Select queue items first" });
+      return;
+    }
+    setMessage("");
+    try {
+      for (const item of items) {
+        await enqueueRetry(item.package, item.version, authToken);
+      }
+      pushToast?.({ type: "success", title: "Enqueued retries", message: `${items.length} item(s) queued` });
+      clearSelected();
+      await load();
+    } catch (e) {
+      setError(e.message);
+      pushToast?.({ type: "error", title: "Bulk retry failed", message: e.message });
+    }
+  };
+
+  const handleClearQueue = async () => {
+    if (!window.confirm("Clear all items from the queue?")) return;
+    try {
+      const resp = await clearQueue(authToken);
+      pushToast?.({ type: "success", title: "Queue cleared", message: resp.detail || "Cleared" });
+      clearSelected();
+      await load();
+    } catch (e) {
+      setError(e.message);
+      pushToast?.({ type: "error", title: "Clear queue failed", message: e.message });
+    }
+  };
+
   const handleSaveToken = async () => {
     localStorage.setItem("refinery_token", authToken);
     onTokenChange?.(authToken);
@@ -459,6 +493,21 @@ function Dashboard({ token, onTokenChange, pushToast }) {
     const matchPkg = search ? `${e.name} ${e.version}`.toLowerCase().includes(search.toLowerCase()) : true;
     return matchPkg;
   });
+
+  const toggleSelectQueue = (item) => {
+    const key = `${item.package}@${item.version || "latest"}`;
+    setSelectedQueue((prev) => {
+      const next = { ...prev };
+      if (next[key]) {
+        delete next[key];
+      } else {
+        next[key] = item;
+      }
+      return next;
+    });
+  };
+
+  const clearSelected = () => setSelectedQueue({});
 
   const renderLoading = () => (
     <div className="space-y-4">
@@ -576,11 +625,20 @@ function Dashboard({ token, onTokenChange, pushToast }) {
               <span className="chip">{workerMode}</span>
             </div>
             <button className="btn btn-primary" onClick={handleTriggerWorker}>Run worker now</button>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
+                Retry selected
+              </button>
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
+                Clear queue
+              </button>
+            </div>
             {queueItemsSorted.length > 0 && (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-xs border border-border rounded-lg">
                   <thead className="bg-slate-900 text-slate-400">
                     <tr>
+                      <th className="px-2 py-2"></th>
                       <th className="text-left px-2 py-2">Package</th>
                       <th className="text-left px-2 py-2">Version</th>
                       <th className="text-left px-2 py-2">Python</th>
@@ -589,15 +647,21 @@ function Dashboard({ token, onTokenChange, pushToast }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {queueItemsSorted.map((q, idx) => (
+                    {queueItemsSorted.map((q, idx) => {
+                      const key = `${q.package}@${q.version || "latest"}`;
+                      const checked = Boolean(selectedQueue[key]);
+                      return (
                       <tr key={`${q.package}-${q.version}-${idx}`} className="border-t border-slate-800">
+                        <td className="px-2 py-2">
+                          <input type="checkbox" checked={checked} onChange={() => toggleSelectQueue(q)} />
+                        </td>
                         <td className="px-2 py-2">{q.package}</td>
                         <td className="px-2 py-2">{q.version || "latest"}</td>
                         <td className="px-2 py-2 text-slate-400">{q.python_tag || "-"}</td>
                         <td className="px-2 py-2 text-slate-400">{q.platform_tag || "-"}</td>
                         <td className="px-2 py-2 text-slate-400 truncate">{(q.recipes || []).join(", ") || "-"}</td>
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>

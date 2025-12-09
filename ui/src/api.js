@@ -46,6 +46,10 @@ export function enqueueRetry(name, version, token) {
   return request(`/package/${encodeURIComponent(name)}/retry`, { method: "POST", body }, token);
 }
 
+export function clearQueue(token) {
+  return request("/api/queue/clear", { method: "POST" }, token);
+}
+
 export function setCookieToken(token) {
   return request(`/api/session/token?token=${encodeURIComponent(token)}`, { method: "POST" }, token);
 }

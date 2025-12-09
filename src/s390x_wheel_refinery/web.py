@@ -234,6 +234,14 @@ def create_app(history: BuildHistory) -> FastAPI:
             "items": [req.__dict__ for req in items],
         }
 
+    @app.post("/api/queue/clear")
+    def api_queue_clear(request: Request):
+        auth_error = _auth_guard(worker_token, request)
+        if auth_error:
+            return auth_error
+        retry_queue.clear()
+        return {"detail": "Queue cleared", "queue_length": len(retry_queue)}
+
     @app.post("/package/{name}/retry")
     async def retry_with_recipe(name: str, payload: RetryPayload, request: Request):
         auth_error = _auth_guard(worker_token, request)
