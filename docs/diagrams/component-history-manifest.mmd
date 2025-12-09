@@ -1,5 +1,5 @@
 flowchart TD
-    EVT[Build events\n(reuse/build/fail)] --> DB[(History DB)]
+    EVT[Build events\nreuse/build/fail] --> DB[History DB]
     DB --> SUMMARY[Status counts\nfailures/slowest]
     DB --> VARIANTS[Variant history\nper package]
     DB --> LOGREFS[Log references]

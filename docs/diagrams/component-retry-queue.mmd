@@ -1,5 +1,5 @@
 flowchart TD
-    PLAN[Build plan / failures] --> ENQ[Enqueue retry request\n(package, version, tags, recipes)]
+    PLAN[Build plan / failures] --> ENQ[Enqueue retry request\npackage, version, tags, recipes]
     UI[UI/API enqueue action] --> ENQ
     ENQ --> FILE[(retry_queue.json)]
     FILE --> LIST[List queue]

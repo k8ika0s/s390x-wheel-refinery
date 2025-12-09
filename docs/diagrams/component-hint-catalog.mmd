@@ -1,9 +1,9 @@
 flowchart TD
     ERR[Build error logs] --> MATCH[Match hint patterns]
-    MATCH --> RECIPES[System recipes\n(dnf/apt/notes)]
+    MATCH --> RECIPES[System recipes\ndnf/apt/notes]
     RECIPES --> RETRY[Feed recipes into retry]
     MATCH --> RECORD[Record matched hint\nwith event]
-    CATALOG[Hint catalog\n(YAML today)] --> MATCH
+    CATALOG[Hint catalog\nYAML today] --> MATCH
     CATALOG --> API
     API --> UI[Display hints]
-    API -. future .-> CRUD[Edit hints (add/update/delete)]
+    API -. future .-> CRUD[Edit hints add/update/delete]
