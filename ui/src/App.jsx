@@ -41,9 +41,11 @@ function Layout({ children, tokenActive }) {
               <span className="chip bg-slate-800 border-border text-xs text-slate-300">Token: none</span>
             )}
           </div>
-          <div className="flex items-center gap-2 text-sm text-slate-400">
+          <nav className="flex items-center gap-3 text-sm text-slate-200">
             <Link to="/" className="hover:text-accent">Dashboard</Link>
-          </div>
+            <a className="text-xs text-slate-500">|</a>
+            <span className="text-xs text-slate-400">Status filters: tap chips below</span>
+          </nav>
         </div>
       </header>
       <main>{children}</main>
@@ -620,7 +622,10 @@ function Dashboard({ token, onTokenChange, pushToast }) {
 
       <div className="glass p-4 space-y-3">
         <div className="flex flex-wrap gap-3">
-          <input className="input max-w-xs" placeholder="Filter package" value={pkgFilter} onChange={(e) => setPkgFilter(e.target.value)} />
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Filter package</div>
+            <input className="input max-w-xs" placeholder="Filter package" value={pkgFilter} onChange={(e) => setPkgFilter(e.target.value)} />
+          </div>
           <input className="input max-w-xs" placeholder="Search recent (name/version)" value={search} onChange={(e) => setSearch(e.target.value)} />
           <input className="input max-w-[140px]" placeholder="Recent limit" value={recentLimit} onChange={(e) => setRecentLimit(Number(e.target.value) || 25)} />
           <input className="input max-w-[180px]" placeholder="Poll ms (0=off)" value={pollMs} onChange={(e) => setPollMs(Number(e.target.value) || 0)} />
