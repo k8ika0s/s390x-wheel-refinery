@@ -627,82 +627,62 @@ function Dashboard({ token, onTokenChange, pushToast }) {
       {error && <div className="text-red-400 text-sm">{error}</div>}
       {message && <div className="text-green-400 text-sm">{message}</div>}
 
-      {loading && !dashboard ? (
-        renderLoading()
-      ) : (
-        <Summary summary={dashboard?.summary} />
-      )}
-
-      <div className="glass p-4 space-y-3">
-        <div className="flex flex-wrap gap-3">
-          <div className="space-y-1">
-            <div className="text-xs text-slate-400">Filter package</div>
-            <input className="input max-w-xs" placeholder="Filter package" value={pkgFilter} onChange={(e) => setPkgFilter(e.target.value)} />
-          </div>
-          <input className="input max-w-xs" placeholder="Search recent (name/version)" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <input className="input max-w-[140px]" placeholder="Recent limit" value={recentLimit} onChange={(e) => setRecentLimit(Number(e.target.value) || 25)} />
-          <input className="input max-w-[180px]" placeholder="Poll ms (0=off)" value={pollMs} onChange={(e) => setPollMs(Number(e.target.value) || 0)} />
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {STATUS_CHIPS.map((s) => {
-            const active = statusFilter === s;
-            return (
-              <button
-                key={s}
-                className={`chip cursor-pointer ${active ? "bg-accent text-slate-900" : "hover:bg-slate-800"}`}
-                onClick={() => setStatusFilter(active ? "" : s)}
-              >
-                {s}
-              </button>
-            );
-          })}
-          {statusFilter && (
-            <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setStatusFilter("")}>
-              Clear status filter
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <TopList
-          title="Top failures"
-          items={dashboard?.failures || []}
-          render={(f) => (
-            <div key={f.name} className="flex items-center justify-between text-sm text-slate-200">
-              <span>{f.name}</span>
-              <span className="chip">{f.failures} failures</span>
+      <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
+        <div className="space-y-4">
+          <div className="glass p-4 space-y-3">
+            <div className="text-lg font-semibold">Filters</div>
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <div className="text-xs text-slate-400">Filter package</div>
+                <input className="input w-full" placeholder="Filter package" value={pkgFilter} onChange={(e) => setPkgFilter(e.target.value)} />
+              </div>
+              <input className="input w-full" placeholder="Search recent (name/version)" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <div className="flex gap-2">
+                <input className="input w-1/2" placeholder="Recent limit" value={recentLimit} onChange={(e) => setRecentLimit(Number(e.target.value) || 25)} />
+                <input className="input w-1/2" placeholder="Poll ms (0=off)" value={pollMs} onChange={(e) => setPollMs(Number(e.target.value) || 0)} />
+              </div>
             </div>
-          )}
-        />
-        <TopList
-          title="Top slow packages"
-          items={dashboard?.slowest || []}
-          render={(s) => (
-            <div key={s.name} className="flex items-center justify-between text-sm text-slate-200">
-              <span>{s.name}</span>
-              <span className="chip">{s.avg_duration}s avg</span>
-            </div>
-          )}
-        />
-        <StatCard title="Queue & worker">
-          <div className="space-y-2 text-sm text-slate-200">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Queue length</span>
-              <span className="chip">{queueLength}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400">Worker mode</span>
-              <span className="chip">{workerMode}</span>
-            </div>
-            <button className="btn btn-primary" onClick={handleTriggerWorker}>Run worker now</button>
             <div className="flex flex-wrap gap-2">
-              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
-                Retry selected
-              </button>
-              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
-                Clear queue
-              </button>
+              {STATUS_CHIPS.map((s) => {
+                const active = statusFilter === s;
+                return (
+                  <button
+                    key={s}
+                    className={`chip cursor-pointer ${active ? "bg-accent text-slate-900" : "hover:bg-slate-800"}`}
+                    onClick={() => setStatusFilter(active ? "" : s)}
+                  >
+                    {s}
+                  </button>
+                );
+              })}
+              {statusFilter && (
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setStatusFilter("")}>
+                  Clear status filter
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="glass p-4 space-y-3">
+            <div className="text-lg font-semibold">Queue controls</div>
+            <div className="space-y-2 text-sm text-slate-200">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Queue length</span>
+                <span className="chip">{queueLength}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Worker mode</span>
+                <span className="chip">{workerMode}</span>
+              </div>
+              <button className="btn btn-primary w-full" onClick={handleTriggerWorker}>Run worker now</button>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
+                  Retry selected
+                </button>
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
+                  Clear queue
+                </button>
+              </div>
             </div>
             {queueItemsSorted.length > 0 && (
               <div className="overflow-x-auto">
@@ -738,50 +718,78 @@ function Dashboard({ token, onTokenChange, pushToast }) {
               </div>
             )}
           </div>
-        </StatCard>
-        <StatCard title="Hints">
-          <div className="space-y-2 max-h-52 overflow-auto text-sm text-slate-200">
-            {hints.length ? hints.map((h, idx) => (
-              <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
-                <div className="font-semibold">Pattern: {h.pattern}</div>
-                <div className="text-slate-400">dnf: {(h.packages?.dnf || []).join(", ") || "-"}</div>
-                <div className="text-slate-400">apt: {(h.packages?.apt || []).join(", ") || "-"}</div>
-              </div>
-            )) : <div className="text-slate-400">No hints loaded</div>}
-          </div>
-        </StatCard>
-      </div>
 
-      {metrics && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <StatCard title="Metrics snapshot">
-            <div className="space-y-2 text-sm text-slate-200">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">Queue length</span>
-                <span className="chip">{metrics.queue_length}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">Worker mode</span>
-                <span className="chip">{metrics.worker_mode || "unknown"}</span>
-              </div>
+          <div className="glass p-4 space-y-3">
+            <div className="text-lg font-semibold">Enqueue retry</div>
+            <div className="flex flex-col gap-3">
+              <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
+              <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
+              <button className="btn btn-primary" onClick={handleRetry}>Enqueue</button>
             </div>
-          </StatCard>
+            <div className="text-slate-400 text-sm">
+              Uses API: POST /package/&lt;name&gt;/retry (adds hint-derived recipes automatically).
+            </div>
+          </div>
         </div>
-      )}
 
-      <div className="glass p-4 space-y-3">
-        <div className="text-lg font-semibold">Enqueue retry</div>
-        <div className="flex flex-col md:flex-row gap-3">
-          <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
-          <input className="input md:max-w-[180px]" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
-          <button className="btn btn-primary" onClick={handleRetry}>Enqueue</button>
-        </div>
-        <div className="text-slate-400 text-sm">
-          Uses API: POST /package/&lt;name&gt;/retry (adds hint-derived recipes automatically).
+        <div className="space-y-4">
+          {loading && !dashboard ? (
+            renderLoading()
+          ) : (
+            <Summary summary={dashboard?.summary} />
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <TopList
+              title="Top failures"
+              items={dashboard?.failures || []}
+              render={(f) => (
+                <div key={f.name} className="flex items-center justify-between text-sm text-slate-200">
+                  <span>{f.name}</span>
+                  <span className="chip">{f.failures} failures</span>
+                </div>
+              )}
+            />
+            <TopList
+              title="Top slow packages"
+              items={dashboard?.slowest || []}
+              render={(s) => (
+                <div key={s.name} className="flex items-center justify-between text-sm text-slate-200">
+                  <span>{s.name}</span>
+                  <span className="chip">{s.avg_duration}s avg</span>
+                </div>
+              )}
+            />
+            <StatCard title="Hints">
+              <div className="space-y-2 max-h-52 overflow-auto text-sm text-slate-200">
+                {hints.length ? hints.map((h, idx) => (
+                  <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
+                    <div className="font-semibold">Pattern: {h.pattern}</div>
+                    <div className="text-slate-400">dnf: {(h.packages?.dnf || []).join(", ") || "-"}</div>
+                    <div className="text-slate-400">apt: {(h.packages?.apt || []).join(", ") || "-"}</div>
+                  </div>
+                )) : <div className="text-slate-400">No hints loaded</div>}
+              </div>
+            </StatCard>
+            {metrics && (
+              <StatCard title="Metrics snapshot">
+                <div className="space-y-2 text-sm text-slate-200">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Queue length</span>
+                    <span className="chip">{metrics.queue_length}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Worker mode</span>
+                    <span className="chip">{metrics.worker_mode || "unknown"}</span>
+                  </div>
+                </div>
+              </StatCard>
+            )}
+          </div>
+
+          <EventsTable events={filteredRecent} />
         </div>
       </div>
-
-      <EventsTable events={filteredRecent} />
     </div>
   );
 }
