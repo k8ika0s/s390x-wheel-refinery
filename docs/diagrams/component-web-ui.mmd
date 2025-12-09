@@ -1,0 +1,10 @@
+```mermaid
+flowchart TD
+    API[API endpoints\nsummary/recent/queue/hints/logs] --> FETCH[Fetch & Poll]
+    FETCH --> DASH[Dashboard\nfilters + charts]
+    FETCH --> QUEUE[Queue table\nselect/bulk actions]
+    FETCH --> PKG[Package detail\ntabs events/variants/hints]
+    FETCH --> LOGS[Log viewer\nautoscroll/open/copy]
+    ACTIONS[User actions\nenqueue/trigger/clear] --> API
+    THEME[Theme toggle] -.> UI
+```

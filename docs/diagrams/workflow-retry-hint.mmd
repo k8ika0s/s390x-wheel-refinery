@@ -1,0 +1,15 @@
+```mermaid
+sequenceDiagram
+    participant Builder
+    participant History
+    participant HintCatalog
+    participant Queue
+
+    Builder->>HintCatalog: Load patterns/recipes
+    Builder->>History: Record failure + logs
+    Builder->>HintCatalog: Match errors -> recipes
+    HintCatalog-->>Builder: Suggested system packages
+    Builder->>Queue: Enqueue retry with recipes
+    Queue-->>Builder: Next retry job
+    Builder->>History: Record success/fail + hint used
+```

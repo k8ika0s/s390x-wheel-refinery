@@ -1,0 +1,14 @@
+```mermaid
+flowchart TD
+    EVT[Build events\n(reuse/build/fail)] --> DB[(History DB)]
+    DB --> SUMMARY[Status counts\nfailures/slowest]
+    DB --> VARIANTS[Variant history\nper package]
+    DB --> LOGREFS[Log references]
+    DB --> RECENT[Recent events]
+    DB --> MANIFEST[Manifest writer]
+    MANIFEST --> FILE[/manifest.json/]
+    SUMMARY --> API
+    RECENT --> API
+    FILE --> API
+    DB --> API
+```

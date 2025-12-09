@@ -1,0 +1,13 @@
+```mermaid
+flowchart TD
+    PR[Pull Request] --> LINT[Ruff lint]
+    PR --> PYTEST[Pytest]
+    PR --> UITEST[UI tests (vitest)]
+    PR --> SMOKE[Smoke dummy run\nscan/plan/manifest]
+    MANUAL[Manual s390x job] -. optional .-> PIPELINE
+    LINT --> PIPELINE
+    PYTEST --> PIPELINE
+    UITEST --> PIPELINE
+    SMOKE --> PIPELINE
+    PIPELINE[CI summary\npass/fail] --> MERGE[Ready to merge]
+```
