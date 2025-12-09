@@ -345,7 +345,7 @@ function PackageDetail({ token, pushToast }) {
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
-                <thead className="text-slate-400">
+                <thead className="text-slate-400 sticky top-0 bg-slate-900">
                   <tr className="border-b border-border">
                     <th className="text-left py-2">Status</th>
                     <th className="text-left py-2">Version</th>
