@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Routes, Route, Link, useParams } from "react-router-dom";
+import { Routes, Route, Link, useParams, useLocation } from "react-router-dom";
 import { API_BASE, clearQueue, enqueueRetry, fetchDashboard, fetchLog, fetchPackageDetail, fetchRecent, setCookieToken, triggerWorker } from "./api";
 
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
@@ -27,6 +27,8 @@ function Skeleton({ className = "" }) {
 }
 
 function Layout({ children, tokenActive }) {
+  const location = useLocation();
+  const isActive = (path) => location.pathname === path || (path !== "/" && location.pathname.startsWith(path));
   return (
     <div className="min-h-screen bg-bg text-slate-100">
       <header className="glass sticky top-0 z-40 backdrop-blur-xs border-b border-border">
@@ -42,8 +44,8 @@ function Layout({ children, tokenActive }) {
             )}
           </div>
           <nav className="flex items-center gap-3 text-sm text-slate-200">
-            <Link to="/" className="hover:text-accent">Dashboard</Link>
-            <a className="text-xs text-slate-500">|</a>
+            <Link to="/" className={`hover:text-accent ${isActive("/") ? "text-accent font-semibold" : ""}`}>Dashboard</Link>
+            <span className="text-xs text-slate-500">|</span>
             <span className="text-xs text-slate-400">Status filters: tap chips below</span>
           </nav>
         </div>
@@ -127,7 +129,7 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
     }
   };
 
-  if (!events?.length) return <div className="text-slate-400 text-sm">No events yet.</div>;
+  if (!events?.length) return <div className="text-slate-400 text-sm">No events yet. Try clearing filters or increasing the recent limit.</div>;
   return (
     <div className="glass p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -624,7 +626,12 @@ function Dashboard({ token, onTokenChange, pushToast }) {
         </div>
       </div>
 
-      {error && <div className="text-red-400 text-sm">{error}</div>}
+      {error && (
+        <div className="glass p-3 border border-red-500/40 text-sm text-red-200 flex items-center justify-between">
+          <span>{error}</span>
+          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>Retry</button>
+        </div>
+      )}
       {message && <div className="text-green-400 text-sm">{message}</div>}
 
       <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
