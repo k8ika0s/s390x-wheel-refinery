@@ -87,18 +87,38 @@ function Summary({ summary }) {
 
 function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
   const [page, setPage] = useState(1);
+  const [sortKey, setSortKey] = useState("timestamp");
+  const [sortDir, setSortDir] = useState("desc");
+
   const sorted = (events || []).slice().sort((a, b) => {
-    if (a.timestamp && b.timestamp) {
-      return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+    const dir = sortDir === "asc" ? 1 : -1;
+    if (sortKey === "status") {
+      return dir * (a.status || "").localeCompare(b.status || "");
     }
-    return (b.name || "").localeCompare(a.name || "");
+    if (sortKey === "package") {
+      return dir * (`${a.name || ""}${a.version || ""}`.localeCompare(`${b.name || ""}${b.version || ""}`));
+    }
+    // default timestamp
+    if (a.timestamp && b.timestamp) {
+      return dir * (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    }
+    return dir * (b.name || "").localeCompare(a.name || "");
   });
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const pageItems = sorted.slice((page - 1) * pageSize, page * pageSize);
 
   useEffect(() => {
     setPage(1);
-  }, [events, pageSize]);
+  }, [events, pageSize, sortKey, sortDir]);
+
+  const toggleSort = (key) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
 
   if (!events?.length) return <div className="text-slate-400 text-sm">No events yet.</div>;
   return (
@@ -106,6 +126,7 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
       <div className="flex items-center justify-between">
         <div className="text-lg font-semibold">{title}</div>
         <div className="flex items-center gap-2 text-xs text-slate-400">
+          <span>Sort: {sortKey} ({sortDir})</span>
           <span>Page {page} / {totalPages}</span>
           <button className="btn btn-secondary px-2 py-1 text-xs" disabled={page === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</button>
           <button className="btn btn-secondary px-2 py-1 text-xs" disabled={page === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next</button>
@@ -114,9 +135,9 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="text-slate-400">
-            <tr className="border-b border-border">
-              <th className="text-left py-2">Status</th>
-              <th className="text-left py-2">Package</th>
+            <tr className="border-b border-border sticky top-0 bg-slate-900">
+              <th className="text-left py-2 cursor-pointer" onClick={() => toggleSort("status")}>Status</th>
+              <th className="text-left py-2 cursor-pointer" onClick={() => toggleSort("package")}>Package</th>
               <th className="text-left py-2">Python/Platform</th>
               <th className="text-left py-2">Detail</th>
             </tr>
@@ -158,6 +179,9 @@ function PackageDetail({ token, pushToast }) {
   const [autoScroll, setAutoScroll] = useState(true);
   const logRef = useRef(null);
   const [tab, setTab] = useState("overview");
+  const [variantPage, setVariantPage] = useState(1);
+  const [failurePage, setFailurePage] = useState(1);
+  const pageSize = 10;
 
   const load = async () => {
     setLoading(true);
@@ -201,6 +225,13 @@ function PackageDetail({ token, pushToast }) {
     }
   };
 
+  const paged = (items, page) => {
+    const arr = Array.isArray(items) ? items : [];
+    const total = Math.max(1, Math.ceil(arr.length / pageSize));
+    const slice = arr.slice((page - 1) * pageSize, page * pageSize);
+    return { total, slice };
+  };
+
   if (loading) {
     return (
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -231,6 +262,9 @@ function PackageDetail({ token, pushToast }) {
   const { summary, variants, failures, events, hints = [] } = data;
   const logDownloadHref = selectedEvent ? `${API_BASE}/logs/${selectedEvent.name}/${selectedEvent.version}` : null;
 
+  const variantsPaged = paged(variants, variantPage);
+  const failuresPaged = paged(failures, failurePage);
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -257,22 +291,36 @@ function PackageDetail({ token, pushToast }) {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <StatCard title="Recent failures">
             <div className="space-y-2">
-              {failures?.length ? failures.map((f) => (
+              {failuresPaged.slice.length ? failuresPaged.slice.map((f) => (
                 <div key={`${f.name}-${f.version}-${f.timestamp}`} className="flex items-center justify-between text-sm text-slate-200">
                   <span>{f.name} {f.version}</span>
                   <span className="chip">{f.status}</span>
                 </div>
               )) : <div className="text-slate-400 text-sm">No failures</div>}
+              {failures?.length > pageSize && (
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <span>Page {failurePage} / {failuresPaged.total}</span>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" disabled={failurePage === 1} onClick={() => setFailurePage((p) => Math.max(1, p - 1))}>Prev</button>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" disabled={failurePage === failuresPaged.total} onClick={() => setFailurePage((p) => Math.min(failuresPaged.total, p + 1))}>Next</button>
+                </div>
+              )}
             </div>
           </StatCard>
           <StatCard title="Variants">
             <div className="space-y-2">
-              {variants?.length ? variants.map((v, idx) => (
+              {variantsPaged.slice.length ? variantsPaged.slice.map((v, idx) => (
                 <div key={idx} className="flex items-center justify-between text-sm text-slate-200">
                   <span className="text-slate-400">{v.metadata?.variant || "unknown"}</span>
                   <span className="chip">{v.status}</span>
                 </div>
               )) : <div className="text-slate-400 text-sm">No variant history</div>}
+              {variants?.length > pageSize && (
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <span>Page {variantPage} / {variantsPaged.total}</span>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" disabled={variantPage === 1} onClick={() => setVariantPage((p) => Math.max(1, p - 1))}>Prev</button>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" disabled={variantPage === variantsPaged.total} onClick={() => setVariantPage((p) => Math.min(variantsPaged.total, p + 1))}>Next</button>
+                </div>
+              )}
             </div>
           </StatCard>
         </div>
