@@ -10,6 +10,41 @@ body {
   @apply bg-bg text-slate-100 antialiased;
 }
 
+.theme-light {
+  background: #f8fafc;
+  color: #0f172a;
+}
+.theme-light body {
+  background: #f8fafc;
+  color: #0f172a;
+}
+.theme-light .glass {
+  background: rgba(255, 255, 255, 0.85);
+  border-color: #e2e8f0;
+}
+.theme-light .chip {
+  border-color: #cbd5e1;
+  color: #0f172a;
+  background: rgba(148, 163, 184, 0.15);
+}
+.theme-light .btn-secondary {
+  @apply text-slate-700;
+}
+.theme-light .input {
+  background: #fff;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+.theme-light .status.built,
+.theme-light .status.cached,
+.theme-light .status.reused {
+  color: #16a34a;
+}
+.theme-light .status.failed,
+.theme-light .status.system_recipe_failed {
+  color: #dc2626;
+}
+
 .glass {
   @apply bg-panel border border-border rounded-xl backdrop-blur-xs;
 }

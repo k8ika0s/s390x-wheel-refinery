@@ -38,11 +38,11 @@ function EmptyState({ title = "Nothing here", detail, actionLabel, onAction }) {
   );
 }
 
-function Layout({ children, tokenActive }) {
+function Layout({ children, tokenActive, theme, onToggleTheme }) {
   const location = useLocation();
   const isActive = (path) => location.pathname === path || (path !== "/" && location.pathname.startsWith(path));
   return (
-    <div className="min-h-screen bg-bg text-slate-100">
+    <div className={`min-h-screen ${theme === "light" ? "theme-light bg-slate-50 text-slate-900" : "bg-bg text-slate-100"}`}>
       <header className="glass sticky top-0 z-40 backdrop-blur-xs border-b border-border">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -55,11 +55,16 @@ function Layout({ children, tokenActive }) {
               <span className="chip bg-slate-800 border-border text-xs text-slate-300">Token: none</span>
             )}
           </div>
-          <nav className="flex items-center gap-3 text-sm text-slate-200">
-            <Link to="/" className={`hover:text-accent ${isActive("/") ? "text-accent font-semibold" : ""}`}>Dashboard</Link>
-            <span className="text-xs text-slate-500">|</span>
-            <span className="text-xs text-slate-400">Status filters: tap chips below</span>
-          </nav>
+          <div className="flex items-center gap-3 text-sm text-slate-200">
+            <nav className="flex items-center gap-3">
+              <Link to="/" className={`hover:text-accent ${isActive("/") ? "text-accent font-semibold" : ""}`}>Dashboard</Link>
+              <span className="text-xs text-slate-500">|</span>
+              <span className="text-xs text-slate-400 hidden md:inline">Status filters: tap chips below</span>
+            </nav>
+            <button className="btn btn-secondary px-2 py-1 text-xs" onClick={onToggleTheme}>
+              Theme: {theme === "light" ? "Light" : "Dark"}
+            </button>
+          </div>
         </div>
       </header>
       <main>{children}</main>
@@ -830,6 +835,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("refinery_token") || "");
   const [toasts, setToasts] = useState([]);
+  const [theme, setTheme] = useState(() => localStorage.getItem("refinery_theme") || "dark");
 
   const dismissToast = (id) => setToasts((ts) => ts.filter((t) => t.id !== id));
   const pushToast = ({ type = "success", title, message }) => {
@@ -838,8 +844,16 @@ export default function App() {
     setTimeout(() => dismissToast(id), 4000);
   };
 
+  const toggleTheme = () => {
+    setTheme((t) => {
+      const next = t === "light" ? "dark" : "light";
+      localStorage.setItem("refinery_theme", next);
+      return next;
+    });
+  };
+
   return (
-    <Layout tokenActive={Boolean(token)}>
+    <Layout tokenActive={Boolean(token)} theme={theme} onToggleTheme={toggleTheme}>
       <Routes>
         <Route path="/" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} />} />
         <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} />} />
