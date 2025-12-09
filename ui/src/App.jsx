@@ -26,7 +26,7 @@ function Skeleton({ className = "" }) {
   return <div className={`skeleton ${className}`} />;
 }
 
-function Layout({ children }) {
+function Layout({ children, tokenActive }) {
   return (
     <div className="min-h-screen bg-bg text-slate-100">
       <header className="glass sticky top-0 z-40 backdrop-blur-xs border-b border-border">
@@ -35,6 +35,11 @@ function Layout({ children }) {
             <Link to="/" className="text-xl font-bold text-accent">s390x Wheel Refinery</Link>
             <span className="chip bg-slate-800 border-border text-xs">Env: {ENV_LABEL}</span>
             <span className="chip bg-slate-800 border-border text-xs">API: {API_BASE || "same-origin"}</span>
+            {tokenActive ? (
+              <span className="chip bg-emerald-900 border border-emerald-600 text-xs text-emerald-100">Token active</span>
+            ) : (
+              <span className="chip bg-slate-800 border-border text-xs text-slate-300">Token: none</span>
+            )}
           </div>
           <div className="flex items-center gap-2 text-sm text-slate-400">
             <Link to="/" className="hover:text-accent">Dashboard</Link>
@@ -684,7 +689,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
             {queueItemsSorted.length > 0 && (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-xs border border-border rounded-lg">
-                  <thead className="bg-slate-900 text-slate-400">
+                  <thead className="bg-slate-900 text-slate-400 sticky top-0">
                     <tr>
                       <th className="px-2 py-2"></th>
                       <th className="text-left px-2 py-2">Package</th>
@@ -775,7 +780,7 @@ export default function App() {
   };
 
   return (
-    <Layout>
+    <Layout tokenActive={Boolean(token)}>
       <Routes>
         <Route path="/" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} />} />
         <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} />} />
