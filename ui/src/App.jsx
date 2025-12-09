@@ -188,6 +188,7 @@ function PackageDetail({ token, pushToast }) {
   const [tab, setTab] = useState("overview");
   const [variantPage, setVariantPage] = useState(1);
   const [failurePage, setFailurePage] = useState(1);
+  const [hintsPage, setHintsPage] = useState(1);
   const pageSize = 10;
 
   const load = async () => {
@@ -273,6 +274,7 @@ function PackageDetail({ token, pushToast }) {
 
   const variantsPaged = paged(variants, variantPage);
   const failuresPaged = paged(failures, failurePage);
+  const hintsPaged = paged(hints, hintsPage);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -396,7 +398,7 @@ function PackageDetail({ token, pushToast }) {
         <div className="glass p-4 space-y-3">
           <div className="text-lg font-semibold">Hints matched</div>
           <div className="space-y-2">
-            {hints.length ? hints.map((h, idx) => (
+            {hintsPaged.slice.length ? hintsPaged.slice.map((h, idx) => (
               <div key={idx} className="border border-border rounded-lg p-3 space-y-1 text-sm text-slate-200">
                 <div className="font-semibold text-slate-100">Pattern: {h.pattern}</div>
                 <div className="text-slate-400">dnf: {(h.packages?.dnf || []).join(", ") || "-"}</div>
@@ -404,6 +406,13 @@ function PackageDetail({ token, pushToast }) {
                 {h.note && <div className="text-slate-400">note: {h.note}</div>}
               </div>
             )) : <div className="text-slate-400 text-sm">No hints recorded for this package.</div>}
+            {hints?.length > pageSize && (
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <span>Page {hintsPage} / {hintsPaged.total}</span>
+                <button className="btn btn-secondary px-2 py-1 text-xs" disabled={hintsPage === 1} onClick={() => setHintsPage((p) => Math.max(1, p - 1))}>Prev</button>
+                <button className="btn btn-secondary px-2 py-1 text-xs" disabled={hintsPage === hintsPaged.total} onClick={() => setHintsPage((p) => Math.min(hintsPaged.total, p + 1))}>Next</button>
+              </div>
+            )}
           </div>
         </div>
       )}
