@@ -85,6 +85,15 @@ refinery \
         - /cache:/cache
   ```
 
+## Docker Compose deployment (web + worker)
+- Requirements: Docker/compose on the host; create local `input/`, `output/`, and `cache/` directories.
+- Start: `WORKER_TOKEN=changeme docker compose up --build`
+  - Web UI: http://localhost:8000
+  - Worker service: http://localhost:9000 (token-protected)
+- Default config mounts `./input` (read-only), `./output`, and `./cache`. History lives at `./cache/history.db`.
+- The web UI enqueues retries; the worker service consumes the queue. Both share the same volumes.
+- Adjust `WORKER_TOKEN` (and port bindings) as needed. For remote worker builds, point `WORKER_WEBHOOK_URL` at your worker endpoint.
+
 ## Manifest & history
 - Manifest: `<output>/manifest.json` with status, path, detail, and metadata (variant, attempt, log_path, duration, hints).
 - History DB: every reuse/build/fail/missing/system_recipe/attempt with metadata for queries, UI, and adaptive scheduling.
