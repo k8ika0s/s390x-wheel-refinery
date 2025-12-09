@@ -197,7 +197,9 @@ function PackageDetail({ token, pushToast }) {
       const detail = await fetchPackageDetail(name, token, 100);
       setData(detail);
     } catch (e) {
-      setError(e.message);
+      const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
+      setError(msg);
+      pushToast?.({ type: "error", title: "Load failed", message: msg });
     } finally {
       setLoading(false);
     }
@@ -443,7 +445,9 @@ function Dashboard({ token, onTokenChange, pushToast }) {
       const data = await fetchDashboard(authToken);
       setDashboard({ ...data, recent });
     } catch (e) {
-      setError(e.message);
+      const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
+      setError(msg);
+      pushToast?.({ type: "error", title: "Load failed", message: msg });
     } finally {
       setLoading(false);
     }

@@ -15,7 +15,9 @@ async function request(path, options = {}, token) {
   });
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(text || resp.statusText);
+    const err = new Error(text || resp.statusText);
+    err.status = resp.status;
+    throw err;
   }
   const ct = resp.headers.get("content-type") || "";
   if (ct.includes("application/json")) {
