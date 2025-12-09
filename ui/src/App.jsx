@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Link, useParams } from "react-router-dom";
 import { API_BASE, enqueueRetry, fetchDashboard, fetchLog, fetchPackageDetail, fetchRecent, setCookieToken, triggerWorker } from "./api";
 
+const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
+
 function Toasts({ toasts, onDismiss }) {
   return (
     <div className="fixed bottom-4 right-4 z-50 space-y-2 w-full max-w-sm">
@@ -22,6 +24,26 @@ function Toasts({ toasts, onDismiss }) {
 
 function Skeleton({ className = "" }) {
   return <div className={`skeleton ${className}`} />;
+}
+
+function Layout({ children }) {
+  return (
+    <div className="min-h-screen bg-bg text-slate-100">
+      <header className="glass sticky top-0 z-40 backdrop-blur-xs border-b border-border">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Link to="/" className="text-xl font-bold text-accent">s390x Wheel Refinery</Link>
+            <span className="chip bg-slate-800 border-border text-xs">Env: {ENV_LABEL}</span>
+            <span className="chip bg-slate-800 border-border text-xs">API: {API_BASE || "same-origin"}</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-slate-400">
+            <Link to="/" className="hover:text-accent">Dashboard</Link>
+          </div>
+        </div>
+      </header>
+      <main>{children}</main>
+    </div>
+  );
 }
 
 function StatCard({ title, children }) {
@@ -63,11 +85,32 @@ function Summary({ summary }) {
   );
 }
 
-function EventsTable({ events }) {
+function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
+  const [page, setPage] = useState(1);
+  const sorted = (events || []).slice().sort((a, b) => {
+    if (a.timestamp && b.timestamp) {
+      return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+    }
+    return (b.name || "").localeCompare(a.name || "");
+  });
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const pageItems = sorted.slice((page - 1) * pageSize, page * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [events, pageSize]);
+
   if (!events?.length) return <div className="text-slate-400 text-sm">No events yet.</div>;
   return (
     <div className="glass p-4 space-y-3">
-      <div className="text-lg font-semibold">Recent events</div>
+      <div className="flex items-center justify-between">
+        <div className="text-lg font-semibold">{title}</div>
+        <div className="flex items-center gap-2 text-xs text-slate-400">
+          <span>Page {page} / {totalPages}</span>
+          <button className="btn btn-secondary px-2 py-1 text-xs" disabled={page === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</button>
+          <button className="btn btn-secondary px-2 py-1 text-xs" disabled={page === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next</button>
+        </div>
+      </div>
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="text-slate-400">
@@ -79,7 +122,7 @@ function EventsTable({ events }) {
             </tr>
           </thead>
           <tbody>
-            {events.map((e) => (
+            {pageItems.map((e) => (
               <tr key={`${e.name}-${e.version}-${e.timestamp}`} className="border-b border-slate-800">
                 <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
                 <td className="py-2"><Link className="text-accent hover:underline" to={`/package/${e.name}`}>{e.name} {e.version}</Link></td>
@@ -114,6 +157,7 @@ function PackageDetail({ token, pushToast }) {
   const [message, setMessage] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
   const logRef = useRef(null);
+  const [tab, setTab] = useState("overview");
 
   const load = async () => {
     setLoading(true);
@@ -197,81 +241,99 @@ function PackageDetail({ token, pushToast }) {
         </div>
         <Link to="/" className="btn btn-secondary">Back</Link>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <StatCard title="Recent failures">
-          <div className="space-y-2">
-            {failures?.length ? failures.map((f) => (
-              <div key={`${f.name}-${f.version}-${f.timestamp}`} className="flex items-center justify-between text-sm text-slate-200">
-                <span>{f.name} {f.version}</span>
-                <span className="chip">{f.status}</span>
-              </div>
-            )) : <div className="text-slate-400 text-sm">No failures</div>}
-          </div>
-        </StatCard>
-        <StatCard title="Variants">
-          <div className="space-y-2">
-            {variants?.length ? variants.map((v, idx) => (
-              <div key={idx} className="flex items-center justify-between text-sm text-slate-200">
-                <span className="text-slate-400">{v.metadata?.variant || "unknown"}</span>
-                <span className="chip">{v.status}</span>
-              </div>
-            )) : <div className="text-slate-400 text-sm">No variant history</div>}
-          </div>
-        </StatCard>
+      <div className="flex gap-2">
+        {["overview", "events"].map((t) => (
+          <button
+            key={t}
+            className={`btn ${tab === t ? "btn-primary" : "btn-secondary"}`}
+            onClick={() => setTab(t)}
+          >
+            {t === "overview" ? "Overview" : "Events & Logs"}
+          </button>
+        ))}
       </div>
 
-      <div className="glass p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="text-lg font-semibold">Events</div>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="text-slate-400">
-              <tr className="border-b border-border">
-                <th className="text-left py-2">Status</th>
-                <th className="text-left py-2">Version</th>
-                <th className="text-left py-2">Detail</th>
-                <th className="text-left py-2">Log</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((e) => (
-                <tr key={`${e.name}-${e.version}-${e.timestamp}`} className="border-b border-slate-800">
-                  <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
-                  <td className="py-2 text-slate-200">{e.version}</td>
-                  <td className="py-2 text-slate-400">{e.detail || ""}</td>
-                  <td className="py-2"><button className="btn btn-secondary" onClick={() => loadLog(e)}>View log</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {message && <div className="text-slate-400 text-sm">{message}</div>}
-        {selectedEvent && (
-          <div className="glass p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="text-base font-semibold">Log: {selectedEvent.name} {selectedEvent.version}</div>
-              <div className="flex items-center gap-2 text-xs text-slate-400">
-                <span>{selectedEvent.timestamp}</span>
-                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setAutoScroll((v) => !v)}>
-                  Autoscroll: {autoScroll ? "on" : "off"}
-                </button>
-                {logDownloadHref && (
-                  <a className="btn btn-secondary px-2 py-1 text-xs" href={logDownloadHref} target="_blank" rel="noreferrer">
-                    Open log
-                  </a>
-                )}
-              </div>
+      {tab === "overview" && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <StatCard title="Recent failures">
+            <div className="space-y-2">
+              {failures?.length ? failures.map((f) => (
+                <div key={`${f.name}-${f.version}-${f.timestamp}`} className="flex items-center justify-between text-sm text-slate-200">
+                  <span>{f.name} {f.version}</span>
+                  <span className="chip">{f.status}</span>
+                </div>
+              )) : <div className="text-slate-400 text-sm">No failures</div>}
             </div>
-            <pre
-              ref={logRef}
-              className="bg-slate-900 border border-border rounded-lg p-3 max-h-72 overflow-auto text-xs"
-            >
-              {logContent || "No content"}
-            </pre>
+          </StatCard>
+          <StatCard title="Variants">
+            <div className="space-y-2">
+              {variants?.length ? variants.map((v, idx) => (
+                <div key={idx} className="flex items-center justify-between text-sm text-slate-200">
+                  <span className="text-slate-400">{v.metadata?.variant || "unknown"}</span>
+                  <span className="chip">{v.status}</span>
+                </div>
+              )) : <div className="text-slate-400 text-sm">No variant history</div>}
+            </div>
+          </StatCard>
+        </div>
+      )}
+
+      {tab === "events" && (
+        <div className="space-y-3">
+          <div className="glass p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-semibold">Events</div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="text-slate-400">
+                  <tr className="border-b border-border">
+                    <th className="text-left py-2">Status</th>
+                    <th className="text-left py-2">Version</th>
+                    <th className="text-left py-2">Detail</th>
+                    <th className="text-left py-2">Log</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {events.map((e) => (
+                    <tr key={`${e.name}-${e.version}-${e.timestamp}`} className="border-b border-slate-800">
+                      <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
+                      <td className="py-2 text-slate-200">{e.version}</td>
+                      <td className="py-2 text-slate-400">{e.detail || ""}</td>
+                      <td className="py-2"><button className="btn btn-secondary" onClick={() => loadLog(e)}>View log</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {message && <div className="text-slate-400 text-sm">{message}</div>}
           </div>
-        )}
-      </div>
+          {selectedEvent && (
+            <div className="glass p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-base font-semibold">Log: {selectedEvent.name} {selectedEvent.version}</div>
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <span>{selectedEvent.timestamp}</span>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setAutoScroll((v) => !v)}>
+                    Autoscroll: {autoScroll ? "on" : "off"}
+                  </button>
+                  {logDownloadHref && (
+                    <a className="btn btn-secondary px-2 py-1 text-xs" href={logDownloadHref} target="_blank" rel="noreferrer">
+                      Open log
+                    </a>
+                  )}
+                </div>
+              </div>
+              <pre
+                ref={logRef}
+                className="bg-slate-900 border border-border rounded-lg p-3 max-h-72 overflow-auto text-xs"
+              >
+                {logContent || "No content"}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -370,6 +432,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
   const queueLength = dashboard?.queue?.length ?? 0;
   const workerMode = dashboard?.queue?.worker_mode || "unknown";
   const queueItems = dashboard?.queue?.items || [];
+  const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = dashboard?.hints || [];
   const metrics = dashboard?.metrics;
   const recent = dashboard?.recent || [];
@@ -471,7 +534,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
               <span className="chip">{workerMode}</span>
             </div>
             <button className="btn btn-primary" onClick={handleTriggerWorker}>Run worker now</button>
-            {queueItems.length > 0 && (
+            {queueItemsSorted.length > 0 && (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-xs border border-border rounded-lg">
                   <thead className="bg-slate-900 text-slate-400">
@@ -484,7 +547,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {queueItems.map((q, idx) => (
+                    {queueItemsSorted.map((q, idx) => (
                       <tr key={`${q.package}-${q.version}-${idx}`} className="border-t border-slate-800">
                         <td className="px-2 py-2">{q.package}</td>
                         <td className="px-2 py-2">{q.version || "latest"}</td>
@@ -558,12 +621,12 @@ export default function App() {
   };
 
   return (
-    <>
+    <Layout>
       <Routes>
         <Route path="/" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} />} />
         <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} />} />
       </Routes>
       <Toasts toasts={toasts} onDismiss={dismissToast} />
-    </>
+    </Layout>
   );
 }

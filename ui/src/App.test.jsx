@@ -42,7 +42,7 @@ describe("App dashboard", () => {
         <App />
       </MemoryRouter>,
     );
-    await waitFor(() => expect(screen.getByText(/s390x Wheel Refinery/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText(/s390x Wheel Refinery/i).length).toBeGreaterThan(0));
     expect(screen.getByText(/pkg 1.0/)).toBeInTheDocument();
     expect(screen.getAllByText(/Queue length/i).length).toBeGreaterThan(0);
   });
@@ -69,6 +69,7 @@ describe("App dashboard", () => {
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getByText(/pkg/i)).toBeInTheDocument());
+    fireEvent.click(screen.getByText(/Events & Logs/i));
     fireEvent.click(screen.getByText(/View log/i));
     await waitFor(() => expect(screen.getByText(/build log/i)).toBeInTheDocument());
   });
