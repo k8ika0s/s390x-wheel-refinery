@@ -25,8 +25,8 @@
 - Add sidebar/top nav with environment badge and API base indicator. **(initial header added)**
 - Add toasts/snackbars for actions (enqueue, trigger worker, token save). **(done)**
 - Add skeleton loaders and better loading states for cards/tables/logs. **(done)**
-- Implement pagination/sorting on tables and sticky headers.
-- Add tabs in package detail (overview, attempts/variants, failures, logs, hints). **(overview vs events/logs tab added)**
+- Implement pagination/sorting on tables and sticky headers. **(events paginated; sorting TODO)**
+- Add tabs in package detail (overview, attempts/variants, failures, logs, hints). **(overview/events/hints tabs added; variants/failures still in overview)**
 - Add log viewer panel with stream toggle, auto-scroll, and download link. **(initial pass done)**
 - Add queue list with items and basic controls; show worker health/status. **(table added)**
 

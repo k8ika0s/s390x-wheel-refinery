@@ -228,7 +228,7 @@ function PackageDetail({ token, pushToast }) {
   if (error) return <div className="error">{error}</div>;
   if (!data) return null;
 
-  const { summary, variants, failures, events } = data;
+  const { summary, variants, failures, events, hints = [] } = data;
   const logDownloadHref = selectedEvent ? `${API_BASE}/logs/${selectedEvent.name}/${selectedEvent.version}` : null;
 
   return (
@@ -242,13 +242,13 @@ function PackageDetail({ token, pushToast }) {
         <Link to="/" className="btn btn-secondary">Back</Link>
       </div>
       <div className="flex gap-2">
-        {["overview", "events"].map((t) => (
+        {["overview", "events", "hints"].map((t) => (
           <button
             key={t}
             className={`btn ${tab === t ? "btn-primary" : "btn-secondary"}`}
             onClick={() => setTab(t)}
           >
-            {t === "overview" ? "Overview" : "Events & Logs"}
+            {t === "overview" ? "Overview" : t === "events" ? "Events & Logs" : "Hints"}
           </button>
         ))}
       </div>
@@ -334,9 +334,27 @@ function PackageDetail({ token, pushToast }) {
           )}
         </div>
       )}
+
+      {tab === "hints" && (
+        <div className="glass p-4 space-y-3">
+          <div className="text-lg font-semibold">Hints matched</div>
+          <div className="space-y-2">
+            {hints.length ? hints.map((h, idx) => (
+              <div key={idx} className="border border-border rounded-lg p-3 space-y-1 text-sm text-slate-200">
+                <div className="font-semibold text-slate-100">Pattern: {h.pattern}</div>
+                <div className="text-slate-400">dnf: {(h.packages?.dnf || []).join(", ") || "-"}</div>
+                <div className="text-slate-400">apt: {(h.packages?.apt || []).join(", ") || "-"}</div>
+                {h.note && <div className="text-slate-400">note: {h.note}</div>}
+              </div>
+            )) : <div className="text-slate-400 text-sm">No hints recorded for this package.</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const STATUS_CHIPS = ["built", "failed", "reused", "cached", "missing", "skipped_known_failure"];
 
 function Dashboard({ token, onTokenChange, pushToast }) {
   const [authToken, setAuthToken] = useState(localStorage.getItem("refinery_token") || token || "");
@@ -351,6 +369,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
   const [statusFilter, setStatusFilter] = useState("");
   const [recentLimit, setRecentLimit] = useState(25);
   const [pollMs, setPollMs] = useState(10000);
+  const [search, setSearch] = useState("");
 
   const load = async (opts = {}) => {
     const { packageFilter, statusFilter: status } = opts;
@@ -436,6 +455,10 @@ function Dashboard({ token, onTokenChange, pushToast }) {
   const hints = dashboard?.hints || [];
   const metrics = dashboard?.metrics;
   const recent = dashboard?.recent || [];
+  const filteredRecent = recent.filter((e) => {
+    const matchPkg = search ? `${e.name} ${e.version}`.toLowerCase().includes(search.toLowerCase()) : true;
+    return matchPkg;
+  });
 
   const renderLoading = () => (
     <div className="space-y-4">
@@ -496,9 +519,28 @@ function Dashboard({ token, onTokenChange, pushToast }) {
       <div className="glass p-4 space-y-3">
         <div className="flex flex-wrap gap-3">
           <input className="input max-w-xs" placeholder="Filter package" value={pkgFilter} onChange={(e) => setPkgFilter(e.target.value)} />
-          <input className="input max-w-xs" placeholder="Filter status (built,failed,...)" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} />
+          <input className="input max-w-xs" placeholder="Search recent (name/version)" value={search} onChange={(e) => setSearch(e.target.value)} />
           <input className="input max-w-[140px]" placeholder="Recent limit" value={recentLimit} onChange={(e) => setRecentLimit(Number(e.target.value) || 25)} />
           <input className="input max-w-[180px]" placeholder="Poll ms (0=off)" value={pollMs} onChange={(e) => setPollMs(Number(e.target.value) || 0)} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {STATUS_CHIPS.map((s) => {
+            const active = statusFilter === s;
+            return (
+              <button
+                key={s}
+                className={`chip cursor-pointer ${active ? "bg-accent text-slate-900" : "hover:bg-slate-800"}`}
+                onClick={() => setStatusFilter(active ? "" : s)}
+              >
+                {s}
+              </button>
+            );
+          })}
+          {statusFilter && (
+            <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setStatusFilter("")}>
+              Clear status filter
+            </button>
+          )}
         </div>
       </div>
 
@@ -604,7 +646,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
         </div>
       </div>
 
-      <EventsTable events={recent} />
+      <EventsTable events={filteredRecent} />
     </div>
   );
 }
