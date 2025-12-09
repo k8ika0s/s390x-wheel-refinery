@@ -33,3 +33,15 @@
 ## Backend/API support
 - API already exposes: summary, recent, top failures/slowest, queue, metrics, logs, retry enqueue, worker trigger.
 - No changes needed for API; ensure CORS remains open for the SPA.
+
+## New UX backlog (to implement)
+- Build plan visibility: show dependency graph/build plan, pinning vs upgrade strategy, per-node status/reason.
+- Artifact access: manifest viewer/download links and wheel download links for built artifacts.
+- History browsing: paginate/search history beyond “recent”, filter by package/status/date/run id.
+- Cache insight: show cache hits/misses, reused vs rebuilt; add “purge cache for package” (if API support added).
+- Hint management: read/write UI for hint catalog (add/edit/delete recipes and notes).
+- Worker state: display worker/webhook mode, last run time/result, simple activity log; “run smoke test” button.
+- Log ergonomics: search/regex within logs, tail toggle, copy log URL.
+- Queue UX: bulk select by status, sort by age, show age of oldest item, quick refresh.
+- Config/index visibility: display current indexes/upgrade strategy in effect (read-only).
+- Metrics over time: sparklines for success/fail rate and queue depth with trends.
