@@ -26,6 +26,18 @@ function Skeleton({ className = "" }) {
   return <div className={`skeleton ${className}`} />;
 }
 
+function EmptyState({ title = "Nothing here", detail, actionLabel, onAction }) {
+  return (
+    <div className="glass p-4 text-slate-300 text-sm space-y-2 border-dashed border border-border">
+      <div className="font-semibold">{title}</div>
+      {detail && <div className="text-slate-500">{detail}</div>}
+      {actionLabel && onAction && (
+        <button className="btn btn-secondary px-2 py-1 text-xs" onClick={onAction}>{actionLabel}</button>
+      )}
+    </div>
+  );
+}
+
 function Layout({ children, tokenActive }) {
   const location = useLocation();
   const isActive = (path) => location.pathname === path || (path !== "/" && location.pathname.startsWith(path));
@@ -202,7 +214,7 @@ function PackageDetail({ token, pushToast }) {
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
       setError(msg);
-      pushToast?.({ type: "error", title: "Load failed", message: msg });
+      pushToast?.({ type: "error", title: "Load failed", message: msg || "Unknown error" });
     } finally {
       setLoading(false);
     }
@@ -458,7 +470,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
       setError(msg);
-      pushToast?.({ type: "error", title: "Load failed", message: msg });
+      pushToast?.({ type: "error", title: "Load failed", message: msg || "Unknown error" });
     } finally {
       setLoading(false);
     }
@@ -637,7 +649,10 @@ function Dashboard({ token, onTokenChange, pushToast }) {
       <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
         <div className="space-y-4">
           <div className="glass p-4 space-y-3">
-            <div className="text-lg font-semibold">Filters</div>
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Filters</span>
+              <span className="chip text-xs">🎯</span>
+            </div>
             <div className="space-y-2">
               <div className="space-y-1">
                 <div className="text-xs text-slate-400">Filter package</div>
@@ -671,7 +686,10 @@ function Dashboard({ token, onTokenChange, pushToast }) {
           </div>
 
           <div className="glass p-4 space-y-3">
-            <div className="text-lg font-semibold">Queue controls</div>
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Queue controls</span>
+              <span className="chip text-xs">🧰</span>
+            </div>
             <div className="space-y-2 text-sm text-slate-200">
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Queue length</span>
@@ -691,7 +709,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
                 </button>
               </div>
             </div>
-            {queueItemsSorted.length > 0 && (
+            {queueItemsSorted.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-xs border border-border rounded-lg">
                   <thead className="bg-slate-900 text-slate-400 sticky top-0">
@@ -723,11 +741,16 @@ function Dashboard({ token, onTokenChange, pushToast }) {
                   </tbody>
                 </table>
               </div>
+            ) : (
+              <EmptyState title="Queue is empty" detail="No retry requests pending." actionLabel="Refresh" onAction={() => load({ packageFilter: pkgFilter, statusFilter })} />
             )}
           </div>
 
           <div className="glass p-4 space-y-3">
-            <div className="text-lg font-semibold">Enqueue retry</div>
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Enqueue retry</span>
+              <span className="chip text-xs">⏩</span>
+            </div>
             <div className="flex flex-col gap-3">
               <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
               <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
