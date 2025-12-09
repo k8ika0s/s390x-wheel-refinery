@@ -1,9 +1,9 @@
 flowchart TD
-    IN[Scan input wheels] --> META[Parse METADATA\n(name, version, tags)]
+    IN[Scan input wheels] --> META[Parse METADATA\nname, version, tags]
     META --> CLASS{Pure vs native?}
     CLASS -->|Pure & compatible| REUSE[Mark reusable\nno rebuild]
     CLASS -->|Native or mismatch| NEEDS[Mark needs rebuild]
     NEEDS --> DEPS[Expand dependencies\nrespect pinned strategy]
-    DEPS --> PLAN[Emit build plan/graph\n(target py/platform)]
+    DEPS --> PLAN[Emit build plan/graph\ntarget py/platform]
     REUSE -.-> PLAN
     PLAN --> OUT[Status counts\nfor UI/API]
