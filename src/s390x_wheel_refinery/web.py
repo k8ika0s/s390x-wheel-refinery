@@ -21,6 +21,13 @@ from .queue import RetryQueue, RetryRequest
 from .worker import process_queue
 
 
+class RetryPayload(BaseModel):
+    version: str | None = "latest"
+    python_tag: str | None = None
+    platform_tag: str | None = None
+    recipes: List[str] | None = None
+
+
 @dataclass
 class WorkerSettings:
     input_dir: Path
@@ -152,12 +159,6 @@ def create_app(history: BuildHistory) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    class RetryPayload(BaseModel):
-        version: str | None = "latest"
-        python_tag: str | None = None
-        platform_tag: str | None = None
-        recipes: List[str] | None = None
 
     @app.get("/")
     def health():
