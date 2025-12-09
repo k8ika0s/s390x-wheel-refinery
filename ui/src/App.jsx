@@ -1,6 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Link, useParams } from "react-router-dom";
-import { enqueueRetry, fetchDashboard, fetchLog, fetchPackageDetail, fetchRecent, setCookieToken, triggerWorker } from "./api";
+import { API_BASE, enqueueRetry, fetchDashboard, fetchLog, fetchPackageDetail, fetchRecent, setCookieToken, triggerWorker } from "./api";
+
+function Toasts({ toasts, onDismiss }) {
+  return (
+    <div className="fixed bottom-4 right-4 z-50 space-y-2 w-full max-w-sm">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className={`toast ${t.type === "error" ? "toast-error" : "toast-success"}`}
+          onClick={() => onDismiss(t.id)}
+          role="status"
+        >
+          <div className="font-semibold">{t.title || (t.type === "error" ? "Error" : "Success")}</div>
+          <div className="text-sm text-slate-200">{t.message}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Skeleton({ className = "" }) {
+  return <div className={`skeleton ${className}`} />;
+}
 
 function StatCard({ title, children }) {
   return (
@@ -82,7 +104,7 @@ function TopList({ title, items, render }) {
   );
 }
 
-function PackageDetail({ token }) {
+function PackageDetail({ token, pushToast }) {
   const { name } = useParams();
   const [data, setData] = useState(null);
   const [logContent, setLogContent] = useState("");
@@ -90,6 +112,8 @@ function PackageDetail({ token }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [autoScroll, setAutoScroll] = useState(true);
+  const logRef = useRef(null);
 
   const load = async () => {
     setLoading(true);
@@ -105,6 +129,12 @@ function PackageDetail({ token }) {
   };
 
   useEffect(() => {
+    if (autoScroll && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [logContent, autoScroll]);
+
+  useEffect(() => {
     load();
   }, [name, token]);
 
@@ -114,21 +144,48 @@ function PackageDetail({ token }) {
     setMessage("");
     try {
       const resp = await fetchLog(ev.name, ev.version, token);
-      if (resp.content) {
-        setLogContent(resp.content);
+      const content = typeof resp === "string" ? resp : resp?.content;
+      if (content) {
+        setLogContent(content);
       } else {
         setMessage("No log content available");
       }
+      pushToast?.({ type: "success", title: "Log loaded", message: `${ev.name} ${ev.version}` });
     } catch (e) {
       setError(e.message);
+      pushToast?.({ type: "error", title: "Log load failed", message: e.message });
     }
   };
 
-  if (loading) return <div className="muted">Loading package...</div>;
+  if (loading) {
+    return (
+      <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
+        <Skeleton className="h-8 w-48" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <StatCard title="Recent failures">
+            <div className="space-y-2">
+              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-4 w-1/2" />)}
+            </div>
+          </StatCard>
+          <StatCard title="Variants">
+            <div className="space-y-2">
+              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-4 w-1/3" />)}
+            </div>
+          </StatCard>
+        </div>
+        <StatCard title="Events">
+          <div className="space-y-2">
+            {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-4 w-full" />)}
+          </div>
+        </StatCard>
+      </div>
+    );
+  }
   if (error) return <div className="error">{error}</div>;
   if (!data) return null;
 
   const { summary, variants, failures, events } = data;
+  const logDownloadHref = selectedEvent ? `${API_BASE}/logs/${selectedEvent.name}/${selectedEvent.version}` : null;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -194,9 +251,24 @@ function PackageDetail({ token }) {
           <div className="glass p-3 space-y-2">
             <div className="flex items-center justify-between">
               <div className="text-base font-semibold">Log: {selectedEvent.name} {selectedEvent.version}</div>
-              <span className="text-slate-500 text-xs">{selectedEvent.timestamp}</span>
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <span>{selectedEvent.timestamp}</span>
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setAutoScroll((v) => !v)}>
+                  Autoscroll: {autoScroll ? "on" : "off"}
+                </button>
+                {logDownloadHref && (
+                  <a className="btn btn-secondary px-2 py-1 text-xs" href={logDownloadHref} target="_blank" rel="noreferrer">
+                    Open log
+                  </a>
+                )}
+              </div>
             </div>
-            <pre className="bg-slate-900 border border-border rounded-lg p-3 max-h-72 overflow-auto text-xs">{logContent || "No content"}</pre>
+            <pre
+              ref={logRef}
+              className="bg-slate-900 border border-border rounded-lg p-3 max-h-72 overflow-auto text-xs"
+            >
+              {logContent || "No content"}
+            </pre>
           </div>
         )}
       </div>
@@ -204,7 +276,7 @@ function PackageDetail({ token }) {
   );
 }
 
-function Dashboard({ token, onTokenChange }) {
+function Dashboard({ token, onTokenChange, pushToast }) {
   const [authToken, setAuthToken] = useState(localStorage.getItem("refinery_token") || token || "");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -255,9 +327,11 @@ function Dashboard({ token, onTokenChange }) {
     try {
       const resp = await triggerWorker(authToken);
       setMessage(resp.detail || "Worker triggered");
+      pushToast?.({ type: "success", title: "Worker", message: resp.detail || "Triggered worker" });
       await load();
     } catch (e) {
       setError(e.message);
+      pushToast?.({ type: "error", title: "Worker trigger failed", message: e.message });
     }
   };
 
@@ -265,14 +339,17 @@ function Dashboard({ token, onTokenChange }) {
     setMessage("");
     if (!retryPkg) {
       setError("Enter a package name");
+      pushToast?.({ type: "error", title: "Retry failed", message: "Enter a package name" });
       return;
     }
     try {
       const resp = await enqueueRetry(retryPkg, retryVersion, authToken);
       setMessage(resp.detail || "Enqueued");
+      pushToast?.({ type: "success", title: "Enqueued", message: resp.detail || `${retryPkg} queued` });
       await load();
     } catch (e) {
       setError(e.message);
+      pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
     }
   };
 
@@ -287,6 +364,7 @@ function Dashboard({ token, onTokenChange }) {
       }
     }
     setMessage("Token saved");
+    pushToast?.({ type: "success", title: "Token saved", message: "Worker token stored locally" });
   };
 
   const queueLength = dashboard?.queue?.length ?? 0;
@@ -295,6 +373,34 @@ function Dashboard({ token, onTokenChange }) {
   const hints = dashboard?.hints || [];
   const metrics = dashboard?.metrics;
   const recent = dashboard?.recent || [];
+
+  const renderLoading = () => (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <StatCard title="Status counts (recent)">
+          <div className="space-y-2">
+            {[...Array(4)].map((_, i) => (
+              <Skeleton key={i} className="h-4 w-32" />
+            ))}
+          </div>
+        </StatCard>
+        <StatCard title="Recent failures">
+          <div className="space-y-2">
+            {[...Array(3)].map((_, i) => (
+              <Skeleton key={i} className="h-4 w-48" />
+            ))}
+          </div>
+        </StatCard>
+      </div>
+      <StatCard title="Recent events">
+        <div className="space-y-2">
+          {[...Array(5)].map((_, i) => (
+            <Skeleton key={i} className="h-4 w-full" />
+          ))}
+        </div>
+      </StatCard>
+    </div>
+  );
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -318,7 +424,11 @@ function Dashboard({ token, onTokenChange }) {
       {error && <div className="text-red-400 text-sm">{error}</div>}
       {message && <div className="text-green-400 text-sm">{message}</div>}
 
-      <Summary summary={dashboard?.summary} />
+      {loading && !dashboard ? (
+        renderLoading()
+      ) : (
+        <Summary summary={dashboard?.summary} />
+      )}
 
       <div className="glass p-4 space-y-3">
         <div className="flex flex-wrap gap-3">
@@ -362,8 +472,29 @@ function Dashboard({ token, onTokenChange }) {
             </div>
             <button className="btn btn-primary" onClick={handleTriggerWorker}>Run worker now</button>
             {queueItems.length > 0 && (
-              <div className="text-slate-400">
-                Queue: {queueItems.map((q) => `${q.package}@${q.version || "latest"}`).join(", ")}
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs border border-border rounded-lg">
+                  <thead className="bg-slate-900 text-slate-400">
+                    <tr>
+                      <th className="text-left px-2 py-2">Package</th>
+                      <th className="text-left px-2 py-2">Version</th>
+                      <th className="text-left px-2 py-2">Python</th>
+                      <th className="text-left px-2 py-2">Platform</th>
+                      <th className="text-left px-2 py-2">Recipes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {queueItems.map((q, idx) => (
+                      <tr key={`${q.package}-${q.version}-${idx}`} className="border-t border-slate-800">
+                        <td className="px-2 py-2">{q.package}</td>
+                        <td className="px-2 py-2">{q.version || "latest"}</td>
+                        <td className="px-2 py-2 text-slate-400">{q.python_tag || "-"}</td>
+                        <td className="px-2 py-2 text-slate-400">{q.platform_tag || "-"}</td>
+                        <td className="px-2 py-2 text-slate-400 truncate">{(q.recipes || []).join(", ") || "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
@@ -417,10 +548,22 @@ function Dashboard({ token, onTokenChange }) {
 
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem("refinery_token") || "");
+  const [toasts, setToasts] = useState([]);
+
+  const dismissToast = (id) => setToasts((ts) => ts.filter((t) => t.id !== id));
+  const pushToast = ({ type = "success", title, message }) => {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts((ts) => [...ts, { id, type, title, message }]);
+    setTimeout(() => dismissToast(id), 4000);
+  };
+
   return (
-    <Routes>
-      <Route path="/" element={<Dashboard token={token} onTokenChange={setToken} />} />
-      <Route path="/package/:name" element={<PackageDetail token={token} />} />
-    </Routes>
+    <>
+      <Routes>
+        <Route path="/" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} />} />
+        <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} />} />
+      </Routes>
+      <Toasts toasts={toasts} onDismiss={dismissToast} />
+    </>
   );
 }

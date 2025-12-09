@@ -50,3 +50,28 @@ body {
 .status.skipped_known_failure {
   @apply text-amber-300;
 }
+
+.skeleton {
+  @apply bg-slate-800/80 animate-pulse rounded;
+}
+
+.toast {
+  @apply glass p-3 shadow-lg cursor-pointer transition-transform;
+}
+.toast:hover {
+  @apply -translate-y-0.5;
+}
+.toast-success {
+  @apply border border-green-500/40;
+}
+.toast-error {
+  @apply border border-red-500/40;
+}
+
+.muted {
+  @apply text-slate-400;
+}
+
+.error {
+  @apply text-red-400;
+}
