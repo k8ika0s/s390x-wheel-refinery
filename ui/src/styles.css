@@ -26,6 +26,12 @@ body {
   @apply opacity-50 cursor-not-allowed;
 }
 
+.btn:focus-visible,
+.chip:focus-visible,
+input:focus-visible {
+  @apply outline-none ring-2 ring-accent ring-offset-0;
+}
+
 .btn-primary {
   @apply btn bg-accent text-slate-900 hover:brightness-110;
 }

@@ -141,7 +141,7 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
     }
   };
 
-  if (!events?.length) return <div className="text-slate-400 text-sm">No events yet. Try clearing filters or increasing the recent limit.</div>;
+  if (!events?.length) return <EmptyState title="No events" detail="Try clearing filters or increasing the recent limit." />;
   return (
     <div className="glass p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -682,6 +682,9 @@ function Dashboard({ token, onTokenChange, pushToast }) {
                   Clear status filter
                 </button>
               )}
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => { clearFilters(); load({ packageFilter: "", statusFilter: "" }); }}>
+                Clear all
+              </button>
             </div>
           </div>
 
@@ -845,3 +848,10 @@ export default function App() {
     </Layout>
   );
 }
+  const clearFilters = () => {
+    setPkgFilter("");
+    setStatusFilter("");
+    setSearch("");
+    setRecentLimit(25);
+    setPollMs(10000);
+  };
