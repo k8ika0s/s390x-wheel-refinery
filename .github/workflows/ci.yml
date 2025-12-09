@@ -37,6 +37,26 @@ jobs:
       - name: Run ruff
         run: ruff check src tests
 
+  mermaid-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate mermaid diagrams
+        run: |
+          set -euo pipefail
+          if ls docs/diagrams/*.mmd >/dev/null 2>&1; then
+            for f in docs/diagrams/*.mmd; do
+              echo "Checking $f"
+              npx -y @mermaid-js/mermaid-cli@10.9.0 -i "$f" -o /tmp/diagram.svg >/dev/null
+            done
+          else
+            echo "No mermaid files found"
+          fi
+
   test:
     runs-on: ubuntu-latest
     steps:
