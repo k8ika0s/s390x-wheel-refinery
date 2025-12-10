@@ -16,6 +16,29 @@ func TestParseWheelFilename(t *testing.T) {
 	}
 }
 
+func TestNormalizePyTag(t *testing.T) {
+	tests := map[string]string{
+		"3.11":    "cp311",
+		"311":     "cp311",
+		"cp311":   "cp311",
+		"py3":     "cppy3", // unusual, but verify prefix handling
+		"3.10":    "cp310",
+		"py311":   "cppy311",
+		"cp38":    "cp38",
+		"3":       "cp3",
+		"pypy3":   "cppypy3",
+		"3.12.1":  "cp3121",
+		"3.13a1":  "cp313a1",
+		"311-dev": "cp311-dev",
+	}
+	for in, want := range tests {
+		got := normalizePyTag(in)
+		if got != want {
+			t.Fatalf("normalizePyTag(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
 func TestComputePlanReuseVsBuild(t *testing.T) {
 	dir := t.TempDir()
 	// reusable pure wheel
@@ -43,6 +66,33 @@ func TestComputePlanReuseVsBuild(t *testing.T) {
 	}
 }
 
+func TestLoadWriteRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.json")
+	snap := Snapshot{RunID: "abc", Plan: []Node{{Name: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}}}
+	if err := Write(path, snap); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.RunID != snap.RunID || len(got.Plan) != 1 || got.Plan[0].Name != "pkg" {
+		t.Fatalf("round trip mismatch: %+v", got)
+	}
+}
+
+func TestIsCompatible(t *testing.T) {
+	ok := isCompatible(wheelInfo{Name: "p", Version: "1", PythonTag: "cp311", AbiTag: "cp311", PlatformTag: "manylinux2014_s390x"}, "cp311", "manylinux2014_s390x")
+	if !ok {
+		t.Fatalf("expected compatible")
+	}
+	not := isCompatible(wheelInfo{Name: "p", Version: "1", PythonTag: "cp311", AbiTag: "cp311", PlatformTag: "manylinux_x86_64"}, "cp311", "manylinux2014_s390x")
+	if not {
+		t.Fatalf("expected incompatible platform")
+	}
+}
+
 func TestGenerateWritesPlan(t *testing.T) {
 	dir := t.TempDir()
 	planDir := filepath.Join(dir, "cache")
@@ -56,5 +106,34 @@ func TestGenerateWritesPlan(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(planDir, "plan.json")); err != nil {
 		t.Fatalf("plan.json not written: %v", err)
+	}
+}
+
+func TestComputeFixtureMatchesExpected(t *testing.T) {
+	fixtureDir := filepath.Join("testdata")
+	wheelDir := filepath.Join(fixtureDir, "wheels")
+	snap, err := compute(wheelDir, "3.11", "manylinux2014_s390x")
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	expectedPath := filepath.Join(fixtureDir, "expected_plan.json")
+	expSnap, err := Load(expectedPath)
+	if err != nil {
+		t.Fatalf("load expected: %v", err)
+	}
+	if len(snap.Plan) != len(expSnap.Plan) {
+		t.Fatalf("plan length mismatch: got %d want %d", len(snap.Plan), len(expSnap.Plan))
+	}
+	for _, exp := range expSnap.Plan {
+		found := false
+		for _, node := range snap.Plan {
+			if exp.Name == node.Name && exp.Version == node.Version && exp.Action == node.Action {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected node not found: %+v", exp)
+		}
 	}
 }
