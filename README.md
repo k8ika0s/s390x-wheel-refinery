@@ -37,6 +37,7 @@ refinery \
 - Concurrency: `--jobs`, `--schedule {shortest-first,fifo}`
 - Containers: `--container-image`, `--container-preset {rocky,fedora,ubuntu}`, `--container-engine`, `--container-cpu`, `--container-memory`
 - Resilience: `--skip-known-failures`
+- Targeted builds: `--only name` or `--only name==version` to limit which jobs run (repeatable)
 - Logging: `--verbose`
 
 ## Pipeline
@@ -49,7 +50,7 @@ refinery \
 - Builder bases: `containers/rocky/Dockerfile`, `containers/fedora/Dockerfile`, `containers/ubuntu/Dockerfile`
 - Go control-plane: `containers/go-control-plane/Dockerfile` (Postgres/Redis/Kafka ready)
 - React SPA UI: `containers/ui/Dockerfile`
-- Make targets: `make build-rocky|build-fedora|build-ubuntu|build-web TAG=latest REGISTRY=local` (or build UI with `docker build -f containers/ui/Dockerfile .`)
+- Make targets: `make build-rocky|build-fedora|build-ubuntu|build-web TAG=latest REGISTRY=local` (defaults to `podman`; you can set `ENGINE=docker` if preferred). Or build UI directly with `podman build -f containers/ui/Dockerfile .` (or `docker build` if you must).
 
 ## Web UI / API
 - Start Go control-plane: build with `containers/go-control-plane/Dockerfile`, run with Postgres/Redis/Kafka (see compose below), API at `:8080`.
@@ -61,8 +62,9 @@ refinery \
 - Queue CLI: `refinery queue --cache /cache` prints queue length; `--queue-path` overrides the default.
 - Token cookie helper: `POST /api/session/token?token=<WORKER_TOKEN>` sets a `worker_token` cookie for the browser, avoiding query/header injection in the UI.
 
-## Docker compose
-- Go control-plane stack (Postgres/Redis/Kafka + control-plane + worker + UI): `docker-compose -f docker-compose.control-plane.yml up` (API: :8080, UI: :3000). Queue backend selectable via `QUEUE_BACKEND=file|redis|kafka` (compose defaults to redis). Kafka does not support queue clear; use file/redis for dev resets. Worker posts plan/manifest/logs to the Go control-plane when `CONTROL_PLANE_URL`/`CONTROL_PLANE_TOKEN` are set (compose wires these).
+## Compose
+- Go control-plane stack (Postgres/Redis/Kafka + control-plane + Go worker + UI): `podman compose -f docker-compose.control-plane.yml up` (API: :8080, UI: :3000). `docker compose` also works if you prefer Docker. Queue backend selectable via `QUEUE_BACKEND=file|redis|kafka` (compose defaults to redis). Kafka does not support queue clear; use file/redis for dev resets. Worker posts plan/manifest/logs to the Go control-plane when `CONTROL_PLANE_URL`/`CONTROL_PLANE_TOKEN` are set (compose wires these).
+- Podman is expected inside the worker container host; leave `PODMAN_BIN` empty to stub for local smoke, set `PODMAN_BIN=podman` (or similar) for real builds. Override the build entrypoint with `WORKER_RUN_CMD` when needed.
 
 ## Manifest & history
 - Manifest: `<output>/manifest.json` with status, path, detail, and metadata (variant, attempt, log_path, duration, hints).
@@ -77,10 +79,12 @@ refinery \
 
 ## Retry queue & worker
 - Web UI/API enqueue retries into `<cache>/retry_queue.json` (includes requested version, python tag, platform tag, and recipe steps).
-- `refinery worker --input ... --output ... --cache ... --python 3.11` consumes the queue using the same history/cache, applies the queued recipes as overrides, and rebuilds matching jobs.
-- Useful for follow-up retries after triage without re-running the full pipeline; the queue is emptied atomically when processed.
-- Web-triggered worker: When the web container is given mounts for `/input`, `/output`, and `/cache` (or overrides via `WORKER_*` env vars), the UI “Run worker now” button and `/api/worker/trigger` will run a queue drain in-process. Optional `WORKER_AUTORUN_INTERVAL` (seconds) enables periodic drains.
-- Remote worker service: Set `WORKER_WEBHOOK_URL` (and `WORKER_TOKEN`) in the web container to call a remote worker service instead of running locally. Start the worker service with `uvicorn s390x_wheel_refinery.worker_service:app --host 0.0.0.0 --port 9000` in a container that mounts `/input`, `/output`, and `/cache`.
+- Go worker service (container) drains the queue using Podman with `/input`, `/output`, `/cache` bind mounts. Default command inside the build container is `refinery --input /input --output /output --cache /cache --python $PYTHON_TAG --platform-tag $PLATFORM_TAG --only $JOB_NAME==$JOB_VERSION --jobs 1`; override with `WORKER_RUN_CMD`. Environment like `JOB_NAME/JOB_VERSION/PYTHON_TAG/PLATFORM_TAG/RECIPES` are injected.
+- Queue backends: file/JSON, Redis, Kafka (configure via `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`).
+- Worker endpoints: `/health`, `/ready`, and `POST /trigger` (optionally gated by `WORKER_TOKEN`). Control-plane can call the worker webhook; the UI “Run worker now” button calls the control-plane which forwards to the worker.
+- Useful for follow-up retries after triage without re-running the full pipeline; the queue is drained in batches.
+- Podman expectations: set `PODMAN_BIN=podman` (or a stub for local dry-runs). Override the container-side build command with `WORKER_RUN_CMD` when needed; default is `refinery --input /input --output /output --cache /cache --python $PYTHON_TAG --platform-tag $PLATFORM_TAG --only $JOB_NAME==$JOB_VERSION --jobs 1`.
+- Optional requeue on failure: set `REQUEUE_ON_FAILURE=true` and `MAX_REQUEUE_ATTEMPTS` to automatically push failed jobs back onto the queue with attempt counts.
 
 ## Scheduling & resources
 - Shortest-first uses recorded avg durations; FIFO available.

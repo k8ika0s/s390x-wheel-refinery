@@ -16,7 +16,7 @@ from .config import build_config
 from .history import BuildHistory
 from .index import IndexClient
 from .manifest import write_manifest
-from .models import Manifest, ManifestEntry
+from .models import Manifest, ManifestEntry, BuildJob
 from .plan_snapshot import write_plan_snapshot
 from .resolver import build_plan
 from .scanner import scan_wheels
@@ -37,6 +37,35 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     if argv and argv[0] == "queue":
         return _parse_queue_args(argv[1:])
     return _parse_run_args(argv)
+
+
+def _filter_jobs_for_only(jobs: List[BuildJob], only_specs: List[str]) -> List[BuildJob]:
+    """Filter jobs to include only those matching provided specs."""
+    if not only_specs:
+        return jobs
+    wanted: set[tuple[str, str | None]] = set()
+    for spec in only_specs:
+        if "==" in spec:
+            name, version = spec.split("==", 1)
+            name = name.strip()
+            version = version.strip()
+        else:
+            name, version = spec.strip(), None
+        if not name:
+            continue
+        wanted.add((name.lower(), version))
+
+    filtered: List[BuildJob] = []
+    for job in jobs:
+        key = job.name.lower()
+        for name, version in wanted:
+            if key != name:
+                continue
+            if version is not None and job.version != version:
+                continue
+            filtered.append(job)
+            break
+    return filtered
 
 
 def _parse_run_args(argv: List[str]) -> argparse.Namespace:
@@ -76,6 +105,12 @@ def _parse_run_args(argv: List[str]) -> argparse.Namespace:
         "--manifest",
         type=Path,
         help="Manifest output path (defaults to <output>/manifest.json).",
+    )
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        help="Limit builds to the given package (optionally ==version). Can be specified multiple times.",
     )
     parser.add_argument("--skip-known-failures", action="store_true", help="Skip builds whose last history entry failed/missing.")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
@@ -250,6 +285,7 @@ def main(argv: List[str] | None = None) -> int:
 
     from .scheduler import schedule_jobs
     jobs_to_run = schedule_jobs(jobs_to_run, history, strategy=args.schedule)
+    jobs_to_run = _filter_jobs_for_only(jobs_to_run, getattr(args, "only", []))
 
     builder.ensure_ready()
     if args.jobs <= 1:

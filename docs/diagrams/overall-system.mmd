@@ -5,13 +5,13 @@ flowchart LR
     end
     SR[Scanner/Resolver<br/>classify & plan]
     PLAN[Build Plan<br/>reuse vs rebuild]
-    Q[Retry Queue<br/>pending rebuilds]
-    B[Builder/Worker<br/>build/retry variants]
+    Q[Retry Queue<br/>file/Redis/Kafka]
+    B["Go worker using Podman<br/>refinery-build per job"]
     C[Cache /cache<br/>reused/built wheels]
     O[Output /output<br/>s390x wheels]
     H[History DB<br/>events, variants, hints]
     M[Manifest<br/>run output summary]
-    API[API/Control Plane]
+    API[Go Control Plane<br/>logs/metrics/queue/hints]
     UI[Web UI React SPA]
 
     W --> SR

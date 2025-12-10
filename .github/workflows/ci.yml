@@ -90,6 +90,9 @@ jobs:
       - name: Build go-control-plane
         working-directory: go-control-plane
         run: go build ./...
+      - name: Build go-worker
+        working-directory: go-worker
+        run: go build ./...
 
   compose-lint:
     runs-on: ubuntu-latest

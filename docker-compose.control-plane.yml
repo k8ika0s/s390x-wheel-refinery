@@ -63,18 +63,20 @@ services:
   worker:
     build:
       context: .
-      dockerfile: containers/web/Dockerfile
-    command: ["uvicorn", "s390x_wheel_refinery.worker_service:app", "--host", "0.0.0.0", "--port", "9000"]
+      dockerfile: containers/go-worker/Dockerfile
     environment:
-      HISTORY_DB: /cache/history.db
-      WORKER_INPUT_DIR: /input
-      WORKER_OUTPUT_DIR: /output
-      WORKER_CACHE_DIR: /cache
-      WORKER_PYTHON: "3.11"
-      WORKER_PLATFORM_TAG: "manylinux2014_s390x"
+      INPUT_DIR: /input
+      OUTPUT_DIR: /output
+      CACHE_DIR: /cache
+      PYTHON_VERSION: "3.11"
+      PLATFORM_TAG: "manylinux2014_s390x"
       WORKER_TOKEN: ${WORKER_TOKEN:-}
       CONTROL_PLANE_URL: http://control-plane:8080
       CONTROL_PLANE_TOKEN: ${WORKER_TOKEN:-}
+      QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379
+      PODMAN_BIN: podman
+      WORKER_RUN_CMD: refinery-build
     volumes:
       - ./input:/input:ro
       - ./output:/output
