@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -31,6 +32,7 @@ type PodmanRunner struct {
 	PlatformTag string
 	Bin         string
 	Timeout     time.Duration
+	RunCmd      []string
 }
 
 // Run executes a placeholder podman command. In a real implementation this would
@@ -42,14 +44,7 @@ func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string,
 		// Stubbed podman: simulate success.
 		return time.Since(start), "podman stub", nil
 	}
-	args := []string{
-		"run", "--rm",
-		"-v", fmt.Sprintf("%s:/input:ro", p.InputDir),
-		"-v", fmt.Sprintf("%s:/output", p.OutputDir),
-		"-v", fmt.Sprintf("%s:/cache", p.CacheDir),
-	}
-	image := p.defaultImage()
-	args = append(args, image, "/bin/sh", "-c", "echo build "+job.Name+"=="+job.Version)
+	args := p.buildArgs(job)
 
 	runCtx := ctx
 	if p.Timeout > 0 {
@@ -57,8 +52,8 @@ func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string,
 		runCtx, cancel = context.WithTimeout(ctx, p.Timeout)
 		defer cancel()
 	}
-	cmd := exec.CommandContext(runCtx, bin, args...)
-	output, err := cmd.CombinedOutput()
+	execCmd := exec.CommandContext(runCtx, bin, args...)
+	output, err := execCmd.CombinedOutput()
 	if err != nil {
 		return time.Since(start), string(output), fmt.Errorf("podman run failed: %w", err)
 	}
@@ -75,6 +70,36 @@ func (p *PodmanRunner) defaultImage() string {
 	default:
 		return "refinery-rocky:latest"
 	}
+}
+
+func (p *PodmanRunner) buildCmd(job Job) []string {
+	if len(p.RunCmd) > 0 {
+		return p.RunCmd
+	}
+	// Default to a shell command that echoes the job; replace with real build entrypoint as needed.
+	return []string{"/bin/sh", "-c", fmt.Sprintf("echo build %s==%s", job.Name, job.Version)}
+}
+
+// buildArgs assembles the podman arguments with mounts, env, image, and command.
+func (p *PodmanRunner) buildArgs(job Job) []string {
+	args := []string{
+		"run", "--rm",
+		"-v", fmt.Sprintf("%s:/input:ro", p.InputDir),
+		"-v", fmt.Sprintf("%s:/output", p.OutputDir),
+		"-v", fmt.Sprintf("%s:/cache", p.CacheDir),
+		"-e", fmt.Sprintf("JOB_NAME=%s", job.Name),
+		"-e", fmt.Sprintf("JOB_VERSION=%s", job.Version),
+		"-e", fmt.Sprintf("PYTHON_TAG=%s", job.PythonTag),
+		"-e", fmt.Sprintf("PLATFORM_TAG=%s", job.PlatformTag),
+	}
+	if len(job.Recipes) > 0 {
+		args = append(args, "-e", fmt.Sprintf("RECIPES=%s", strings.Join(job.Recipes, ",")))
+	}
+	image := p.defaultImage()
+	cmdArgs := p.buildCmd(job)
+	args = append(args, image)
+	args = append(args, cmdArgs...)
+	return args
 }
 
 // FakeRunner is used in tests.
