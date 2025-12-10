@@ -5,7 +5,7 @@ A fast, container-isolated worker that drains the retry/build queue and rebuilds
 
 ## Scope
 - Queue backends: file/JSON, Redis, Kafka (same interface as control-plane). No dependency on Python queue.
-- Builds: run via Podman with cache/output bind-mounts; presets (rocky/fedora/ubuntu) or custom image. Docker support later. Runner passes job context as env (`JOB_NAME`, `JOB_VERSION`, `PYTHON_TAG`, `PLATFORM_TAG`, optional `RECIPES`) and runs the provided `WORKER_RUN_CMD` (or a simple default echo). Current runner is stubbed unless `PODMAN_BIN` is set.
+- Builds: run via Podman with cache/output bind-mounts; presets (rocky/fedora/ubuntu) or custom image. Runner passes job context as env (`JOB_NAME`, `JOB_VERSION`, `PYTHON_TAG`, `PLATFORM_TAG`, optional `RECIPES`) and runs `WORKER_RUN_CMD` if provided; otherwise defaults to `refinery --input /input --output /output --cache /cache --python $PYTHON_TAG --platform-tag $PLATFORM_TAG --only $JOB_NAME==$JOB_VERSION --jobs 1` inside the container. Docker support later. Stubbed unless `PODMAN_BIN` is set.
 - Plan fallback: loads `plan.json` from /output or /cache; if missing, shells out to the Python CLI (plan-only) to generate one (temporary bridge until Go resolver exists).
 - Reporting: posts manifest/logs/plan and events to the Go control-plane when `CONTROL_PLANE_URL`/`CONTROL_PLANE_TOKEN` are set; always writes manifest locally.
 - Endpoints: `/health`, `/ready`, `POST /trigger` (optional `WORKER_TOKEN`).

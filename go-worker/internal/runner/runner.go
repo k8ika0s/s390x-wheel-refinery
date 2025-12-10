@@ -76,8 +76,13 @@ func (p *PodmanRunner) buildCmd(job Job) []string {
 	if len(p.RunCmd) > 0 {
 		return p.RunCmd
 	}
-	// Default to a shell command that echoes the job; replace with real build entrypoint as needed.
-	return []string{"/bin/sh", "-c", fmt.Sprintf("echo build %s==%s", job.Name, job.Version)}
+	// Default command uses the Python refinery CLI inside the container to build a single job.
+	return []string{
+		"/bin/sh",
+		"-c",
+		"refinery --input /input --output /output --cache /cache --python ${PYTHON_TAG:-3.11} " +
+			"--platform-tag ${PLATFORM_TAG:-manylinux2014_s390x} --only ${JOB_NAME:-}${JOB_VERSION:+==${JOB_VERSION:-}} --jobs 1",
+	}
 }
 
 // buildArgs assembles the podman arguments with mounts, env, image, and command.
