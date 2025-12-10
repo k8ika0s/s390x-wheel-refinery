@@ -10,6 +10,7 @@ A fast, container-isolated worker that drains the retry/build queue and rebuilds
 - Plan fallback: loads `plan.json` from /output or /cache; if missing, uses the Go resolver to scan `/input` wheels and generate `plan.json` (no Python dependency).
 - Reporting: posts manifest/logs/plan and events to the Go control-plane when `CONTROL_PLANE_URL`/`CONTROL_PLANE_TOKEN` are set; always writes manifest locally.
 - Endpoints: `/health`, `/ready`, `POST /trigger` (optional `WORKER_TOKEN`).
+- Plan endpoints: `GET /plan` returns the latest plan if present; `POST /plan` computes a fresh plan using the Go resolver (optional `WORKER_TOKEN` if set).
 - Env: `QUEUE_BACKEND`, `QUEUE_FILE`, `REDIS_URL/REDIS_KEY`, `KAFKA_BROKERS/KAFKA_TOPIC`, `INPUT_DIR/OUTPUT_DIR/CACHE_DIR`, `PYTHON_VERSION`, `PLATFORM_TAG`, `CONTAINER_IMAGE/CONTAINER_PRESET`, `WORKER_TOKEN`, `CONTROL_PLANE_URL/TOKEN`, `PODMAN_BIN`, `WORKER_RUN_CMD`, `RUNNER_TIMEOUT_SEC`, `REQUEUE_ON_FAILURE`, `MAX_REQUEUE_ATTEMPTS`, `BATCH_SIZE`.
 - Reporting: POST manifest/logs/plan/events to the Go control-plane when configured; otherwise write to disk only.
 - Endpoints: `/health`, `/ready`, `POST /trigger` (token optional) to kick off a drain. Optional autorun interval flag/env.
