@@ -1,8 +1,8 @@
 flowchart TD
     Q["Retry queue<br/>file / Redis / Kafka"] -->|Pop batch| MATCH["Match plan.json<br/>(jobs + tags)"]
-    MATCH --> PODMAN[Runner (Podman)\nmount /input /output /cache\npass JOB_* envs]
-    PODMAN --> CMD[Run WORKER_RUN_CMD\n(default refinery-build\n-> refinery --only $JOB==$VER)]
-    CMD --> LOGS[Structured log\nstatus=ok|error\nelapsed_ms, reason]
+    MATCH --> PODMAN["Runner (Podman)<br/>mount /input /output /cache<br/>pass JOB_* envs"]
+    PODMAN --> CMD["Run WORKER_RUN_CMD<br/>(default refinery-build<br/>-> refinery --only $JOB==$VER)"]
+    CMD --> LOGS["Structured log<br/>status=ok|error<br/>elapsed_ms, reason"]
     CMD --> CHECK{Succeeded?}
     CHECK -->|Yes| STORE[Store wheel\ncache + output]
     CHECK -->|No| RETRY[Apply hint recipes\nretry variants\nbounded attempts]
