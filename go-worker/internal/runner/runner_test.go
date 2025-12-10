@@ -51,3 +51,17 @@ func TestPodmanRunnerBuildArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestPodmanRunnerStub(t *testing.T) {
+	r := &PodmanRunner{}
+	dur, logContent, err := r.Run(context.Background(), Job{Name: "pkg", Version: "1.0.0"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(logContent, "podman stub") {
+		t.Fatalf("expected stub log, got %q", logContent)
+	}
+	if dur <= 0 {
+		t.Fatalf("duration should be >0")
+	}
+}

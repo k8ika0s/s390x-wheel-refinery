@@ -155,7 +155,17 @@ func BuildWorker(cfg Config) (*Worker, error) {
 	if q == nil {
 		return nil, errors.New("queue backend not configured")
 	}
-	r := &runner.PodmanRunner{Image: cfg.ContainerImage, InputDir: cfg.InputDir, OutputDir: cfg.OutputDir, CacheDir: cfg.CacheDir, PythonTag: cfg.PythonVersion, PlatformTag: cfg.PlatformTag, Bin: cfg.PodmanBin, RunCmd: cfg.RunCmd}
+	r := &runner.PodmanRunner{
+		Image:       cfg.ContainerImage,
+		InputDir:    cfg.InputDir,
+		OutputDir:   cfg.OutputDir,
+		CacheDir:    cfg.CacheDir,
+		PythonTag:   cfg.PythonVersion,
+		PlatformTag: cfg.PlatformTag,
+		Bin:         cfg.PodmanBin,
+		Timeout:     time.Duration(cfg.RunnerTimeoutSec) * time.Second,
+		RunCmd:      cfg.RunCmd,
+	}
 	rep := &reporter.Client{BaseURL: strings.TrimRight(cfg.ControlPlaneURL, "/"), Token: cfg.ControlPlaneToken}
 	return &Worker{Queue: q, Runner: r, Reporter: rep, Cfg: cfg}, nil
 }

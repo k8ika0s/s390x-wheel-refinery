@@ -26,6 +26,7 @@ type Config struct {
 	ControlPlaneURL   string
 	ControlPlaneToken string
 	PodmanBin         string
+	RunnerTimeoutSec  int
 	AutorunInterval   int
 	BatchSize         int
 	RunCmd            []string
@@ -51,6 +52,7 @@ func fromEnv() Config {
 		ControlPlaneURL:   getenv("CONTROL_PLANE_URL", ""),
 		ControlPlaneToken: getenv("CONTROL_PLANE_TOKEN", ""),
 		PodmanBin:         getenv("PODMAN_BIN", ""), // empty = stub podman; set to podman binary to execute
+		RunnerTimeoutSec:  getenvInt("RUNNER_TIMEOUT_SEC", 900),
 		BatchSize:         getenvInt("BATCH_SIZE", 50),
 		RunCmd:            parseCmd(getenv("WORKER_RUN_CMD", "")),
 	}

@@ -42,7 +42,7 @@ func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string,
 	bin := p.Bin
 	if bin == "" {
 		// Stubbed podman: simulate success.
-		return time.Since(start), "podman stub", nil
+		return time.Since(start), "podman stub (PODMAN_BIN not set)", nil
 	}
 	args := p.buildArgs(job)
 
