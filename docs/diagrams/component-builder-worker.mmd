@@ -1,10 +1,13 @@
 flowchart TD
-    PLAN[Build job\nname, version, py tag, platform] --> FETCH[Fetch source sdist]
-    FETCH --> SETUP[Create venv\ninstall build deps]
-    SETUP --> BUILD[Run PEP 517 build]
-    BUILD --> CHECK{Build ok?}
+    Q[Retry queue\n(file/Redis/Kafka)] -->|Pop batch| MATCH[Match plan.json\n(jobs + tags)]
+    MATCH --> PODMAN[Runner (Podman)\nmount /input /output /cache\npass JOB_* envs]
+    PODMAN --> CMD[Run WORKER_RUN_CMD\n(default refinery-build\n-> refinery --only $JOB==$VER)]
+    CMD --> LOGS[Structured log\nstatus=ok|error\nelapsed_ms, reason]
+    CMD --> CHECK{Succeeded?}
     CHECK -->|Yes| STORE[Store wheel\ncache + output]
-    CHECK -->|No| RETRY[Apply hint recipes\nretry variants]
-    RETRY --> CHECK
-    STORE --> HISTORY[Record event/log\nstatus, duration, variant]
-    RETRY -. if max retries fail .-> HISTORY
+    CHECK -->|No| RETRY[Apply hint recipes\nretry variants\nbounded attempts]
+    RETRY --> PODMAN
+    STORE --> MANIFEST[Write manifest.json\nper-job metadata]
+    MANIFEST --> REPORT[Post manifest/log/event\nto control-plane (optional)]
+    LOGS --> REPORT
+    RETRY -. if max retries fail .-> REPORT

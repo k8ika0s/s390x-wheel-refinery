@@ -1,10 +1,10 @@
 flowchart TD
-    PLAN[Build plan / failures] --> ENQ[Enqueue retry request\npackage, version, tags, recipes]
+    PLAN[Plan or failure event\n(name, version, tags)] --> ENQ[Enqueue retry\n(package, version, tags, recipes)]
     UI[UI/API enqueue action] --> ENQ
-    ENQ --> FILE[retry_queue.json]
+    ENQ --> FILE[retry queue backend\nfile / Redis / Kafka]
     FILE --> LIST[List queue]
     FILE --> CLEAR[Clear queue]
-    FILE --> POP[Pop all for worker]
-    POP --> WORKER[Worker processes\nbuild + record event]
+    FILE --> POP[Pop batch for worker]
+    POP --> WORKER[Go worker (Podman)\nrefinery-build per job\nposts logs/manifest]
     LIST --> UI
     CLEAR --> UI
