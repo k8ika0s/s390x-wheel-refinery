@@ -8,7 +8,7 @@ from .models import Plan
 
 def _nodes_from_plan(plan: Plan, python_tag: str, platform_tag: str):
     nodes = []
-    for reuse in plan.reusable:
+    for reuse in getattr(plan, "reusable", []) or []:
         nodes.append(
             {
                 "name": reuse.name,
@@ -18,7 +18,7 @@ def _nodes_from_plan(plan: Plan, python_tag: str, platform_tag: str):
                 "action": "reuse",
             }
         )
-    for job in plan.to_build:
+    for job in getattr(plan, "to_build", []) or []:
         nodes.append(
             {
                 "name": job.name,
