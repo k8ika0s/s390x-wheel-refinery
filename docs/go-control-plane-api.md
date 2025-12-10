@@ -13,10 +13,11 @@ This draft captures the intended endpoints for the Go control plane, matching th
 **Health/Config/Metrics**
 - `GET /health` → `{status:"ok"}`
 - `GET /config` → current strategy, target python/platform, index settings, queue backend, db info (sanitized).
-- `GET /metrics` → Prometheus if enabled; otherwise 404/501.
+- `GET /metrics` → Prometheus if enabled; otherwise 501 (explicitly stubbed until metrics wiring is added).
 
 **Summary/History**
 - `GET /summary` → status counts (recent window), recent failures list.
+- `GET /summary?failure_limit=` → status counts plus latest failures (default 20).
 - `GET /recent?package=&status=&limit=&offset=` → latest events.
 - `GET /history?package=&status=&run_id=&from=&to=&limit=&offset=` → paginated history.
 - `GET /package/{name}` → package summary (counts + latest).
@@ -27,18 +28,25 @@ This draft captures the intended endpoints for the Go control plane, matching th
 
 **Plan/Manifest/Artifacts**
 - `GET /plan` → current build plan/graph (no “why” reasons).
-- `GET /manifest` → manifest JSON for last run.
-- `GET /artifacts` → list of built wheel paths/URLs.
+- `POST /plan` → save plan snapshot (worker writes run_id + plan array to Postgres).
+- `GET /manifest?limit=` → manifest JSON for last run (default 200, max 1000).
+- `POST /manifest` → save manifest entries (worker writes after build); artifacts are derived from manifest paths/urls.
+- `GET /artifacts?limit=` → list of built wheel paths/URLs (default 200, max 1000).
+
+**Config/Backends**
+- Queue backend selectable via config (`QUEUE_BACKEND=file|redis|kafka`); file/Redis supported, Kafka implemented (no queue clear); file is default.
+- Plan stored in Postgres (JSONB) for quick UI fetch; manifests/logs/history also in Postgres.
+- Session helper: `POST /session/token?token=` sets `worker_token` cookie (browser convenience for protected worker/queue actions).
 
 **Queue**
 - `GET /queue` → items (package, version, tags, recipes, enqueued_at).
 - `GET /queue/stats` → length, oldest age.
 - `POST /queue/enqueue` body `{package, version, python_tag, platform_tag, recipes}`.
-- `POST /queue/clear` → clear queue.
+- `POST /queue/clear` → clear queue (not supported for Kafka backend).
 
 **Worker Trigger**
-- `POST /worker/trigger` → drain queue via local or webhook, returns detail + queue length.
-- `POST /worker/smoke` (optional) → validate mounts/config without draining.
+- `POST /worker/trigger` → drain queue via local or webhook, returns detail + queue length. Honors `X-Worker-Token`/`token` when `WORKER_TOKEN` is set; open otherwise.
+- `POST /worker/smoke` (optional) → validate mounts/config without draining. Same token behavior.
 
 **Hints**
 - `GET /hints` → list hints.
@@ -49,6 +57,8 @@ This draft captures the intended endpoints for the Go control plane, matching th
 **Logs**
 - `GET /logs/{name}/{version}` → log content/metadata.
 - `GET /logs/search?q=&limit=` → simple text search over logs.
+- `POST /logs` → ingest/store a log entry (name/version/content/timestamp auto-set if omitted).
+- `GET /logs/stream/{name}/{version}` → SSE-style single-event stream of the latest log entry.
 
 ### Data shapes (coarse)
 - Event: `{run_id,name,version,python_tag,platform_tag,status,detail,metadata,timestamp,matched_hint_ids?}`

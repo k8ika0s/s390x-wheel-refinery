@@ -31,6 +31,10 @@ paths:
   /summary:
     get:
       summary: Recent status counts and failures
+      parameters:
+        - in: query
+          name: failure_limit
+          schema: { type: integer, default: 20, maximum: 200 }
       responses:
         "200":
           description: Summary
@@ -207,9 +211,30 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/PlanNode"
+    post:
+      summary: Save plan snapshot (worker)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                run_id: { type: string }
+                plan:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PlanNode"
+      responses:
+        "200":
+          description: Saved
   /manifest:
     get:
       summary: Manifest for last run
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 200, maximum: 1000 }
       responses:
         "200":
           content:
@@ -218,9 +243,26 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/ManifestEntry"
+    post:
+      summary: Save manifest entries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/ManifestEntry"
+      responses:
+        "200":
+          description: Saved
   /artifacts:
     get:
       summary: Artifact links/paths
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 200, maximum: 1000 }
       responses:
         "200":
           content:
@@ -264,12 +306,18 @@ paths:
   /queue/clear:
     post:
       summary: Clear queue
+      description: Not supported for Kafka backend; use file/redis if you need clearing.
       responses:
         "200":
           description: Cleared
   /worker/trigger:
     post:
       summary: Trigger worker (local or webhook)
+      parameters:
+        - in: header
+          name: X-Worker-Token
+          required: false
+          schema: { type: string }
       responses:
         "200":
           description: Triggered
@@ -283,6 +331,11 @@ paths:
   /worker/smoke:
     post:
       summary: Optional smoke/dry-run
+      parameters:
+        - in: header
+          name: X-Worker-Token
+          required: false
+          schema: { type: string }
       responses:
         "200":
           description: Smoke result
@@ -371,6 +424,73 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/LogEntry"
+  /logs/stream/{name}/{version}:
+    get:
+      summary: Stream latest log entry (SSE style)
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: SSE with log payload (single event)
+        "400":
+          description: Bad request
+        "500":
+          description: Error
+  /session/token:
+    post:
+      summary: Set worker token cookie (browser helper)
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Token set in cookie
+        "400":
+          description: Token missing
+  /logs/stream/{name}/{version}:
+    get:
+      summary: Stream latest log entry (SSE style)
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: SSE with log payload (single event)
+  /logs:
+    post:
+      summary: Ingest log entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogEntry"
+      responses:
+        "200":
+          description: Saved
+  /metrics:
+    get:
+      summary: Metrics (Prometheus if enabled)
+      responses:
+        "200":
+          description: Metrics output
+        "501":
+          description: Metrics disabled
 components:
   schemas:
     Event:
@@ -471,9 +591,13 @@ components:
     Config:
       type: object
       properties:
-        strategy: { type: string }
-        python_version: { type: string }
-        platform_tag: { type: string }
-        indexes: { type: array, items: { type: string } }
+        http_addr: { type: string }
         queue_backend: { type: string }
+        queue_file: { type: string }
+        redis_url: { type: string }
+        redis_key: { type: string }
+        kafka_brokers: { type: string }
+        kafka_topic: { type: string }
         db: { type: string }
+        worker_webhook: { type: boolean }
+        worker_local_cmd: { type: boolean }

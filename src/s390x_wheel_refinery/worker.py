@@ -7,6 +7,7 @@ from typing import Optional
 from .builder import WheelBuilder
 from .config import PackageOverride, build_config
 from .history import BuildHistory
+from .plan_snapshot import write_plan_snapshot
 from .queue import RetryQueue
 from .resolver import build_plan
 from .scanner import scan_wheels
@@ -43,6 +44,7 @@ def process_queue(
 
     wheels = scan_wheels(input_dir)
     plan = build_plan(wheels, cfg)
+    write_plan_snapshot(plan, cache_dir / "plan.json", run_id="worker", python_tag=python_version, platform_tag=platform_tag)
     for req in requests:
         LOG.info("Processing retry request for %s", req.package)
         matched = False

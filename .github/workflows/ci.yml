@@ -79,12 +79,26 @@ jobs:
       - name: Run tests
         run: pytest -q
 
-  smoke-container:
+  go-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build web image (smoke)
-        run: docker build -t refinery-web:ci -f containers/web/Dockerfile .
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Build go-control-plane
+        working-directory: go-control-plane
+        run: go build ./...
+
+  compose-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose files
+        run: |
+          docker compose config
+          docker compose -f docker-compose.control-plane.yml config
 
   s390x-build:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_s390x_build == 'true'

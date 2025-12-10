@@ -11,10 +11,13 @@ We want a fast, scalable API service in Go that acts as the “traffic controlle
 - Config surfacing: show current strategy (pinned/upgrade), target Python/platform, index settings, environment info.
 
 ### Backends and contracts
-- **Queue backend:** define an interface; support file/JSON initially, but make Redis and Kafka plug-ins straightforward. Goal: swap backend via config without API changes.
+- **Queue backend:** define an interface; file/JSON default, Redis available now, Kafka stubbed for future. Goal: swap backend via config without API changes.
 - **History/hints store:** Postgres as default; docker-compose launches Postgres, but allow pointing to external Postgres via env/config. Schema kept portable.
 - **Logs/artifacts:** centralized logging/audit tables (not just path refs). Wheel links can point to output/cache; store log records (or references) in DB; add optional text search.
+- **Plan storage:** persist the build plan graph in Postgres (JSONB) so UI can fetch the latest plan quickly; worker will write, API will read.
+- **Plan storage:** persist the build plan graph in Postgres (JSONB) so UI can fetch the latest plan quickly; worker will write, API will read.
 - **Worker trigger:** support both HTTP webhook (POST, token optional) and local trigger. Keep payload compatible with current Python worker (`{action:"drain"}`); optionally support a smoke/dry-run.
+- **Worker trigger:** support both HTTP webhook (POST, token optional) and local trigger. Keep payload compatible with current Python worker (`{action:"drain"}`); optionally support a smoke/dry-run. If `WORKER_TOKEN` is set, require `X-Worker-Token`/`token`; otherwise open.
 - **API surface:** summary, recent/history search, queue (list/enqueue/clear/stats), worker trigger, hint CRUD, log fetch/search, metrics/health, config view, manifests/artifact links. Build plan exposed, but no “why” reasoning needed.
 
 ### First implementation steps (proposed)
@@ -24,7 +27,7 @@ We want a fast, scalable API service in Go that acts as the “traffic controlle
 4) Add queue/enqueue/clear/stats and worker trigger (webhook/local) with token stub; expose queue length and oldest age.
 5) Add hint CRUD endpoints; record matched hint ids on events; validation for patterns/recipes.
 6) Add log search/tail endpoint (basic text search over stored logs).
-7) Observability: health/readiness, structured logging, Prometheus metrics (optional, not a blocker).
+7) Observability: health/readiness, structured logging, Prometheus metrics (optional, not a blocker). Metrics endpoint is stubbed until Prometheus is wired—documented explicitly so it is not surprising.
 
 ### Endpoint draft (coarse)
 - `GET /summary`, `/recent`, `/history` (filters: package/status/date/run_id; pagination with sensible defaults, e.g., limit 50, max 500).
@@ -39,3 +42,7 @@ Auth: stubbed (open for now); reserve header/query/cookie token for future write
 ### Notes
 - No legacy API coexistence needed; this Go service is the first deploy.
 - Defaults (pagination/timeouts) to be proposed with the implementation.
+- Compose: `docker-compose.control-plane.yml` brings up Postgres, Redis, Redpanda (Kafka), the Go control-plane, the Python worker (wired to POST plan/manifest/logs back), and the UI pointed at the Go API. File/Redis/Kafka queue backends selectable via env (`QUEUE_BACKEND`).
+- Metrics endpoint is stubbed (501) until Prometheus wiring is added.
+- Kafka backend does not support a “clear” operation; use Redis/file if you need queue clearing during development.
+- Quick start: `docker-compose -f docker-compose.control-plane.yml up` (API :8080, UI :3000). Env overrides: `QUEUE_BACKEND=file|redis|kafka` (default redis), `POSTGRES_DSN`, `REDIS_URL`, `KAFKA_BROKERS`, `WORKER_TOKEN`, `WORKER_WEBHOOK_URL` if you run a remote worker.

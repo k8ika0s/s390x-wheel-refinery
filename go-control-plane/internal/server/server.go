@@ -32,8 +32,16 @@ func (s *Service) routes() {
 		log.Printf("warning: failed to open postgres: %v", err)
 	}
 	var st store.Store = store.NewPostgres(db)
-	var q queue.Backend = queue.NewFileQueue(s.cfg.QueueFile)
-	h := &api.Handler{Store: st, Queue: q}
+	var q queue.Backend
+	switch s.cfg.QueueBackend {
+	case "redis":
+		q = queue.NewRedisQueue(s.cfg.RedisURL, s.cfg.RedisKey)
+	case "kafka":
+		q = queue.NewKafkaQueue(s.cfg.KafkaBrokers, s.cfg.KafkaTopic)
+	default:
+		q = queue.NewFileQueue(s.cfg.QueueFile)
+	}
+	h := &api.Handler{Store: st, Queue: q, Config: s.cfg}
 	h.Routes(s.mux)
 }
 

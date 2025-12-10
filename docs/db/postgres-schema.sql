@@ -47,3 +47,11 @@ CREATE TABLE IF NOT EXISTS manifests (
 );
 CREATE INDEX IF NOT EXISTS idx_manifests_name ON manifests(name);
 CREATE INDEX IF NOT EXISTS idx_manifests_version ON manifests(version);
+
+-- Build plan snapshots (latest fetched for UI)
+CREATE TABLE IF NOT EXISTS plans (
+    id         BIGSERIAL PRIMARY KEY,
+    run_id     TEXT,
+    plan       JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
