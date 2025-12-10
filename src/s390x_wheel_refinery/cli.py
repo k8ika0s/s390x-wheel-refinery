@@ -17,6 +17,7 @@ from .history import BuildHistory
 from .index import IndexClient
 from .manifest import write_manifest
 from .models import Manifest, ManifestEntry
+from .plan_snapshot import write_plan_snapshot
 from .resolver import build_plan
 from .scanner import scan_wheels
 from .worker import process_queue
@@ -186,6 +187,7 @@ def main(argv: List[str] | None = None) -> int:
     LOG.info("Scanning input directory %s", args.input)
     wheels = scan_wheels(args.input)
     plan = build_plan(wheels, config, index_client=index_client)
+    write_plan_snapshot(plan, args.output / "plan.json", run_id=run_id, python_tag=args.python_version, platform_tag=args.platform_tag)
     builder = builder_module.WheelBuilder(args.cache, args.output, config, history=history, run_id=run_id, index_client=index_client)
 
     manifest_entries: List[ManifestEntry] = []

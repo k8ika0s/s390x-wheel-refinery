@@ -1,0 +1,611 @@
+openapi: 3.0.3
+info:
+  title: s390x Wheel Refinery Go Control Plane
+  version: 0.1.0
+servers:
+  - url: /api
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+  /ready:
+    get:
+      summary: Readiness (DB/queue reachable)
+      responses:
+        "200":
+          description: ready
+        "503":
+          description: not ready
+  /config:
+    get:
+      summary: Current config/state
+      responses:
+        "200":
+          description: Config view
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Config"
+  /summary:
+    get:
+      summary: Recent status counts and failures
+      parameters:
+        - in: query
+          name: failure_limit
+          schema: { type: integer, default: 20, maximum: 200 }
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Summary"
+  /recent:
+    get:
+      summary: Recent events
+      parameters:
+        - in: query
+          name: package
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, maximum: 500 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
+  /history:
+    get:
+      summary: History with filters
+      parameters:
+        - in: query
+          name: package
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: run_id
+          schema: { type: string }
+        - in: query
+          name: from
+          schema: { type: integer, description: "unix seconds" }
+        - in: query
+          name: to
+          schema: { type: integer, description: "unix seconds" }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, maximum: 500 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: History
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
+  /package/{name}:
+    get:
+      summary: Package summary
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PackageSummary"
+  /event/{name}/{version}:
+    get:
+      summary: Latest event for version
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+  /failures:
+    get:
+      summary: Failures over time
+      parameters:
+        - in: query
+          name: name
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, maximum: 500 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
+  /variants/{name}:
+    get:
+      summary: Variant history for package
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 100, maximum: 500 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
+  /top-failures:
+    get:
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 10, maximum: 200 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Stat"
+  /top-slowest:
+    get:
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 10, maximum: 200 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Stat"
+  /plan:
+    get:
+      summary: Build plan/graph
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PlanNode"
+    post:
+      summary: Save plan snapshot (worker)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                run_id: { type: string }
+                plan:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PlanNode"
+      responses:
+        "200":
+          description: Saved
+  /manifest:
+    get:
+      summary: Manifest for last run
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 200, maximum: 1000 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ManifestEntry"
+    post:
+      summary: Save manifest entries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/ManifestEntry"
+      responses:
+        "200":
+          description: Saved
+  /artifacts:
+    get:
+      summary: Artifact links/paths
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 200, maximum: 1000 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Artifact"
+  /queue:
+    get:
+      summary: List queue items
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QueueItem"
+  /queue/stats:
+    get:
+      summary: Queue stats
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueStats"
+  /queue/enqueue:
+    post:
+      summary: Enqueue retry/build
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueueItem"
+      responses:
+        "200":
+          description: Enqueued
+  /queue/clear:
+    post:
+      summary: Clear queue
+      description: Not supported for Kafka backend; use file/redis if you need clearing.
+      responses:
+        "200":
+          description: Cleared
+  /worker/trigger:
+    post:
+      summary: Trigger worker (local or webhook)
+      parameters:
+        - in: header
+          name: X-Worker-Token
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail: { type: string }
+                  queue_length: { type: integer }
+  /worker/smoke:
+    post:
+      summary: Optional smoke/dry-run
+      parameters:
+        - in: header
+          name: X-Worker-Token
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Smoke result
+  /hints:
+    get:
+      summary: List hints
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Hint"
+    post:
+      summary: Create hint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Hint"
+      responses:
+        "200":
+          description: Created
+  /hints/{id}:
+    put:
+      summary: Update hint
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Hint"
+      responses:
+        "200":
+          description: Updated
+    delete:
+      summary: Delete hint
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deleted
+  /logs/{name}/{version}:
+    get:
+      summary: Fetch log
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogEntry"
+  /logs/search:
+    get:
+      summary: Search logs (basic text)
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, maximum: 200 }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LogEntry"
+  /logs/stream/{name}/{version}:
+    get:
+      summary: Stream latest log entry (SSE style)
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: SSE with log payload (single event)
+        "400":
+          description: Bad request
+        "500":
+          description: Error
+  /session/token:
+    post:
+      summary: Set worker token cookie (browser helper)
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Token set in cookie
+        "400":
+          description: Token missing
+  /logs/stream/{name}/{version}:
+    get:
+      summary: Stream latest log entry (SSE style)
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: SSE with log payload (single event)
+  /logs:
+    post:
+      summary: Ingest log entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogEntry"
+      responses:
+        "200":
+          description: Saved
+  /metrics:
+    get:
+      summary: Metrics (Prometheus if enabled)
+      responses:
+        "200":
+          description: Metrics output
+        "501":
+          description: Metrics disabled (stub; Prometheus wiring deferred)
+components:
+  schemas:
+    Event:
+      type: object
+      properties:
+        run_id: { type: string }
+        name: { type: string }
+        version: { type: string }
+        python_tag: { type: string }
+        platform_tag: { type: string }
+        status: { type: string }
+        detail: { type: string }
+        metadata: { type: object, additionalProperties: true }
+        timestamp: { type: integer, format: int64 }
+        matched_hint_ids:
+          type: array
+          items: { type: string }
+    PackageSummary:
+      type: object
+      properties:
+        name: { type: string }
+        status_counts: { type: object, additionalProperties: { type: integer } }
+        latest: { $ref: "#/components/schemas/Event" }
+    Hint:
+      type: object
+      properties:
+        id: { type: string }
+        pattern: { type: string }
+        recipes:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+        note: { type: string }
+    LogEntry:
+      type: object
+      properties:
+        name: { type: string }
+        version: { type: string }
+        content: { type: string }
+        timestamp: { type: integer, format: int64 }
+    QueueItem:
+      type: object
+      properties:
+        package: { type: string }
+        version: { type: string }
+        python_tag: { type: string }
+        platform_tag: { type: string }
+        recipes:
+          type: array
+          items: { type: string }
+        enqueued_at: { type: integer, format: int64 }
+    QueueStats:
+      type: object
+      properties:
+        length: { type: integer }
+        oldest_age_seconds: { type: integer, format: int64 }
+    PlanNode:
+      type: object
+      properties:
+        name: { type: string }
+        version: { type: string }
+        python_tag: { type: string }
+        platform_tag: { type: string }
+        action:
+          type: string
+          enum: [build, reuse, skip]
+    ManifestEntry:
+      type: object
+      properties:
+        name: { type: string }
+        version: { type: string }
+        wheel: { type: string }
+        python_tag: { type: string }
+        platform_tag: { type: string }
+        status: { type: string }
+    Artifact:
+      type: object
+      properties:
+        name: { type: string }
+        version: { type: string }
+        path: { type: string }
+        url: { type: string }
+    Stat:
+      type: object
+      properties:
+        name: { type: string }
+        value: { type: number }
+    Summary:
+      type: object
+      properties:
+        status_counts:
+          type: object
+          additionalProperties: { type: integer }
+        failures:
+          type: array
+          items: { $ref: "#/components/schemas/Event" }
+    Config:
+      type: object
+      properties:
+        http_addr: { type: string }
+        queue_backend: { type: string }
+        queue_file: { type: string }
+        redis_url: { type: string }
+        redis_key: { type: string }
+        kafka_brokers: { type: string }
+        kafka_topic: { type: string }
+        db: { type: string }
+        worker_webhook: { type: boolean }
+        worker_local_cmd: { type: boolean }

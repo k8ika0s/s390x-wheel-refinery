@@ -38,6 +38,8 @@ class WorkerSettings:
     platform_tag: str
     container_image: Optional[str]
     container_preset: Optional[str]
+    control_plane_url: Optional[str] = None
+    control_plane_token: Optional[str] = None
 
 
 def _worker_settings_from_env(history_dir: Path) -> Optional[WorkerSettings]:
@@ -49,6 +51,8 @@ def _worker_settings_from_env(history_dir: Path) -> Optional[WorkerSettings]:
     container_image = os.environ.get("WORKER_CONTAINER_IMAGE")
     container_preset = os.environ.get("WORKER_CONTAINER_PRESET")
     history_path = Path(os.environ.get("WORKER_HISTORY_DB", history_dir / "history.db"))
+    control_plane_url = os.environ.get("CONTROL_PLANE_URL")
+    control_plane_token = os.environ.get("CONTROL_PLANE_TOKEN")
 
     for path in (input_dir, output_dir, cache_dir):
         if not path.exists():
@@ -62,6 +66,8 @@ def _worker_settings_from_env(history_dir: Path) -> Optional[WorkerSettings]:
         platform_tag=platform_tag,
         container_image=container_image,
         container_preset=container_preset,
+        control_plane_url=control_plane_url,
+        control_plane_token=control_plane_token,
     )
 
 
@@ -74,6 +80,62 @@ def _auth_guard(token: Optional[str], request: Request):
     if header == token or query == token or cookie == token:
         return None
     return JSONResponse(status_code=403, content={"detail": "forbidden"})
+
+
+def _push_to_control_plane(settings: WorkerSettings) -> None:
+    url = settings.control_plane_url.rstrip("/") if settings.control_plane_url else None
+    if not url:
+        return
+    headers = {"Content-Type": "application/json"}
+    if settings.control_plane_token:
+        headers["X-Worker-Token"] = settings.control_plane_token
+
+    manifest_path = settings.output_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest_data = jsonlib.loads(manifest_path.read_text())
+            req = urllib.request.Request(
+                f"{url}/api/manifest",
+                data=jsonlib.dumps(manifest_data).encode(),
+                headers=headers,
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=15).close()  # noqa: S310
+        except Exception:
+            pass
+
+    log_payload = {
+        "name": "worker",
+        "version": settings.python_version,
+        "content": f"worker run completed; manifest: {manifest_path}",
+    }
+    try:
+        req = urllib.request.Request(
+            f"{url}/api/logs",
+            data=jsonlib.dumps(log_payload).encode(),
+            headers=headers,
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=10).close()  # noqa: S310
+    except Exception:
+        pass
+
+    # Plan snapshot (if present)
+    for plan_path in [settings.output_dir / "plan.json", settings.cache_dir / "plan.json"]:
+        if not plan_path.exists():
+            continue
+        try:
+            plan_payload = jsonlib.loads(plan_path.read_text())
+            req = urllib.request.Request(
+                f"{url}/api/plan",
+                data=jsonlib.dumps(plan_payload).encode(),
+                headers=headers,
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=10).close()  # noqa: S310
+            break
+        except Exception:
+            continue
 
 
 async def _run_worker_once(settings: WorkerSettings) -> tuple[bool, str]:
@@ -89,6 +151,8 @@ async def _run_worker_once(settings: WorkerSettings) -> tuple[bool, str]:
             container_image=settings.container_image,
             container_preset=settings.container_preset,
         )
+        if settings.control_plane_url:
+            await asyncio.to_thread(_push_to_control_plane, settings)
         return True, "worker ran"
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)

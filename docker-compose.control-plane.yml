@@ -1,0 +1,86 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: refinery
+      POSTGRES_PASSWORD: refinery
+      POSTGRES_DB: refinery
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command: >
+      redpanda start --overprovisioned --smp 1 --memory 1G --reserve-memory 0M
+      --node-id 0 --check=false --pandaproxy-addr 0.0.0.0:8082
+      --advertise-pandaproxy-addr redpanda:8082 --kafka-addr 0.0.0.0:9092
+      --advertise-kafka-addr redpanda:9092
+    ports:
+      - "9092:9092"
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: containers/go-control-plane/Dockerfile
+    depends_on:
+      - postgres
+      - redis
+      - redpanda
+    environment:
+      HTTP_ADDR: ":8080"
+      POSTGRES_DSN: postgres://refinery:refinery@postgres:5432/refinery?sslmode=disable
+      QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: redpanda:9092
+      WORKER_WEBHOOK_URL: http://worker:9000/trigger
+      WORKER_TOKEN: ${WORKER_TOKEN:-}
+    ports:
+      - "8080:8080"
+
+  ui:
+    build:
+      context: .
+      dockerfile: containers/ui/Dockerfile
+      args:
+        VITE_API_BASE: http://control-plane:8080
+    environment:
+      NODE_ENV: production
+    ports:
+      - "3000:80"
+    depends_on:
+      - control-plane
+
+  worker:
+    build:
+      context: .
+      dockerfile: containers/web/Dockerfile
+    command: ["uvicorn", "s390x_wheel_refinery.worker_service:app", "--host", "0.0.0.0", "--port", "9000"]
+    environment:
+      HISTORY_DB: /cache/history.db
+      WORKER_INPUT_DIR: /input
+      WORKER_OUTPUT_DIR: /output
+      WORKER_CACHE_DIR: /cache
+      WORKER_PYTHON: "3.11"
+      WORKER_PLATFORM_TAG: "manylinux2014_s390x"
+      WORKER_TOKEN: ${WORKER_TOKEN:-}
+      CONTROL_PLANE_URL: http://control-plane:8080
+      CONTROL_PLANE_TOKEN: ${WORKER_TOKEN:-}
+    volumes:
+      - ./input:/input:ro
+      - ./output:/output
+      - ./cache:/cache
+    depends_on:
+      - control-plane
+
+volumes:
+  pgdata:
