@@ -81,8 +81,7 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	// Prometheus integration not yet wired; return explicit status to avoid 404.
-	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "metrics not enabled"})
+	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "metrics not enabled", "hint": "prometheus wiring deferred"})
 }
 
 func (h *Handler) sessionToken(w http.ResponseWriter, r *http.Request) {

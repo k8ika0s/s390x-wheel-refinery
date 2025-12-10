@@ -31,6 +31,11 @@ func (s *Service) routes() {
 	if err != nil {
 		log.Printf("warning: failed to open postgres: %v", err)
 	}
+	if db != nil && !s.cfg.SkipMigrate {
+		if err := store.RunMigrations(context.Background(), db); err != nil {
+			log.Printf("warning: migration failed: %v", err)
+		}
+	}
 	var st store.Store = store.NewPostgres(db)
 	var q queue.Backend
 	switch s.cfg.QueueBackend {

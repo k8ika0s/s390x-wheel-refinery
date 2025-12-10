@@ -17,6 +17,7 @@ type Config struct {
 	WorkerWebhookURL string
 	WorkerToken      string
 	WorkerLocalCmd   string
+	SkipMigrate      bool
 }
 
 // FromEnv loads configuration with sensible defaults.
@@ -33,6 +34,7 @@ func FromEnv() Config {
 		WorkerWebhookURL: getenv("WORKER_WEBHOOK_URL", ""),
 		WorkerToken:      getenv("WORKER_TOKEN", ""),
 		WorkerLocalCmd:   getenv("WORKER_LOCAL_CMD", ""),
+		SkipMigrate:      getenv("CP_SKIP_MIGRATE", "") != "",
 	}
 	return cfg
 }

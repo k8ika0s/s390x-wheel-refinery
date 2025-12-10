@@ -12,8 +12,9 @@ This draft captures the intended endpoints for the Go control plane, matching th
 
 **Health/Config/Metrics**
 - `GET /health` → `{status:"ok"}`
+- `GET /ready` → readiness (DB/queue reachable).
 - `GET /config` → current strategy, target python/platform, index settings, queue backend, db info (sanitized).
-- `GET /metrics` → Prometheus if enabled; otherwise 501 (explicitly stubbed until metrics wiring is added).
+- `GET /metrics` → Prometheus if enabled; otherwise 501 (explicitly stubbed until metrics wiring is added; returns hint text).
 
 **Summary/History**
 - `GET /summary` → status counts (recent window), recent failures list.

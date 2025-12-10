@@ -18,6 +18,14 @@ paths:
                 properties:
                   status:
                     type: string
+  /ready:
+    get:
+      summary: Readiness (DB/queue reachable)
+      responses:
+        "200":
+          description: ready
+        "503":
+          description: not ready
   /config:
     get:
       summary: Current config/state
@@ -490,7 +498,7 @@ paths:
         "200":
           description: Metrics output
         "501":
-          description: Metrics disabled
+          description: Metrics disabled (stub; Prometheus wiring deferred)
 components:
   schemas:
     Event:
