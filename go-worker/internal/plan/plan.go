@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -33,4 +34,15 @@ func Load(path string) (Snapshot, error) {
 		return snap, fmt.Errorf("unmarshal plan: %w", err)
 	}
 	return snap, nil
+}
+
+// GenerateViaPython shells out to the Python CLI to build a plan when plan.json is missing.
+func GenerateViaPython(inputDir, cacheDir, pythonVersion, platformTag string) (Snapshot, error) {
+	cmd := exec.Command("refinery", "--input", inputDir, "--output", cacheDir, "--cache", cacheDir, "--python", pythonVersion, "--platform-tag", platformTag, "--skip-known-failures", "--no-system-recipes")
+	cmd.Env = append(os.Environ(), "REFINERY_PLAN_ONLY=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("python plan failed: %w output=%s", err, string(out))
+	}
+	return Load(filepath.Join(cacheDir, "plan.json"))
 }

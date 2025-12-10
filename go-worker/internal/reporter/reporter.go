@@ -43,5 +43,6 @@ func (c *Client) post(path string, payload any) error {
 }
 
 func (c *Client) PostManifest(entries any) error { return c.post("/api/manifest", entries) }
-func (c *Client) PostPlan(plan any) error       { return c.post("/api/plan", plan) }
-func (c *Client) PostLog(log any) error         { return c.post("/api/logs", log) }
+func (c *Client) PostPlan(plan any) error        { return c.post("/api/plan", plan) }
+func (c *Client) PostLog(log any) error          { return c.post("/api/logs", log) }
+func (c *Client) PostEvent(evt any) error        { return c.post("/api/history", evt) }

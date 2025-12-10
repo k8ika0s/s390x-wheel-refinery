@@ -9,9 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/reporter"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
 	"golang.org/x/sync/errgroup"
@@ -36,7 +37,11 @@ func (w *Worker) LoadPlan() error {
 		path = filepath.Join(w.Cfg.CacheDir, "plan.json")
 		snap, err = plan.Load(path)
 		if err != nil {
-			return err
+			// as a last resort, try Python CLI to generate plan
+			snap, err = plan.GenerateViaPython(w.Cfg.InputDir, w.Cfg.CacheDir, w.Cfg.PythonVersion, w.Cfg.PlatformTag)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	w.mu.Lock()
@@ -50,7 +55,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	if err := w.LoadPlan(); err != nil {
 		return fmt.Errorf("load plan: %w", err)
 	}
-	reqs, err := w.Queue.Pop(ctx, 100)
+	reqs, err := w.Queue.Pop(ctx, w.Cfg.BatchSize)
 	if err != nil {
 		return err
 	}
@@ -74,6 +79,15 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"name": job.Name, "version": job.Version, "status": "built", "python_tag": job.PythonTag, "platform_tag": job.PlatformTag,
 				"metadata": map[string]any{"duration_ms": dur.Milliseconds()},
 			}})
+			_ = w.Reporter.PostEvent(map[string]any{
+				"name":         job.Name,
+				"version":      job.Version,
+				"python_tag":   job.PythonTag,
+				"platform_tag": job.PlatformTag,
+				"status":       "built",
+				"timestamp":    time.Now().Unix(),
+				"metadata":     map[string]any{"duration_ms": dur.Milliseconds()},
+			})
 			return nil
 		})
 	}
