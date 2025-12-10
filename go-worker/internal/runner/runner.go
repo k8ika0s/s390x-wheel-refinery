@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -54,10 +55,18 @@ func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string,
 	}
 	execCmd := exec.CommandContext(runCtx, bin, args...)
 	output, err := execCmd.CombinedOutput()
+	elapsed := time.Since(start)
+	trimmed := strings.TrimSpace(string(output))
 	if err != nil {
-		return time.Since(start), string(output), fmt.Errorf("podman run failed: %w", err)
+		reason := "error"
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			reason = "timeout"
+		}
+		logContent := fmt.Sprintf("%s\nstatus=error reason=%s elapsed_ms=%d", trimmed, reason, elapsed.Milliseconds())
+		return elapsed, logContent, fmt.Errorf("podman run failed (%s): %w", reason, err)
 	}
-	return time.Since(start), string(output), nil
+	logContent := fmt.Sprintf("%s\nstatus=ok elapsed_ms=%d", trimmed, elapsed.Milliseconds())
+	return elapsed, logContent, nil
 }
 
 func (p *PodmanRunner) defaultImage() string {

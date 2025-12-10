@@ -70,20 +70,31 @@ func (w *Worker) Drain(ctx context.Context) error {
 		job := job
 		g.Go(func() error {
 			dur, logContent, err := w.Runner.Run(ctx, job)
+			status := "built"
+			logPayload := map[string]any{
+				"name":        job.Name,
+				"version":     job.Version,
+				"status":      status,
+				"duration_ms": dur.Milliseconds(),
+				"content":     logContent,
+			}
+			if err != nil {
+				status = "failed"
+				logPayload["status"] = status
+				logPayload["error"] = err.Error()
+			}
 			if w.Reporter != nil {
-				_ = w.Reporter.PostLog(map[string]any{"name": job.Name, "version": job.Version, "content": logContent})
+				_ = w.Reporter.PostLog(logPayload)
 			}
 			if err != nil {
 				return err
 			}
-			_ = w.Reporter.PostManifest([]map[string]any{{
-				"name": job.Name, "version": job.Version, "status": "built", "python_tag": job.PythonTag, "platform_tag": job.PlatformTag,
-				"metadata": map[string]any{"duration_ms": dur.Milliseconds()},
-			}})
-			manifestCh <- map[string]any{
+			manifestEntry := map[string]any{
 				"name": job.Name, "version": job.Version, "status": "built", "python_tag": job.PythonTag, "platform_tag": job.PlatformTag,
 				"metadata": map[string]any{"duration_ms": dur.Milliseconds()},
 			}
+			_ = w.Reporter.PostManifest([]map[string]any{manifestEntry})
+			manifestCh <- manifestEntry
 			_ = w.Reporter.PostEvent(map[string]any{
 				"name":         job.Name,
 				"version":      job.Version,
