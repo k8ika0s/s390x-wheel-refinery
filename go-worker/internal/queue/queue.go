@@ -10,6 +10,7 @@ type Request struct {
 	PlatformTag string
 	Recipes     []string
 	EnqueuedAt  int64
+	Attempts    int
 }
 
 // Backend defines operations for the queue.
