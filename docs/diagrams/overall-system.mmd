@@ -6,7 +6,7 @@ flowchart LR
     SR[Scanner/Resolver<br/>classify & plan]
     PLAN[Build Plan<br/>reuse vs rebuild]
     Q[Retry Queue<br/>file/Redis/Kafka]
-    B[Go Worker (Podman)<br/>refinery-build per job]
+    B["Go worker using Podman<br/>refinery-build per job"]
     C[Cache /cache<br/>reused/built wheels]
     O[Output /output<br/>s390x wheels]
     H[History DB<br/>events, variants, hints]
