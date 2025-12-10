@@ -50,7 +50,7 @@ refinery \
 - Builder bases: `containers/rocky/Dockerfile`, `containers/fedora/Dockerfile`, `containers/ubuntu/Dockerfile`
 - Go control-plane: `containers/go-control-plane/Dockerfile` (Postgres/Redis/Kafka ready)
 - React SPA UI: `containers/ui/Dockerfile`
-- Make targets: `make build-rocky|build-fedora|build-ubuntu|build-web TAG=latest REGISTRY=local` (or build UI with `docker build -f containers/ui/Dockerfile .`)
+- Make targets: `make build-rocky|build-fedora|build-ubuntu|build-web TAG=latest REGISTRY=local` (defaults to `podman`; you can set `ENGINE=docker` if preferred). Or build UI directly with `podman build -f containers/ui/Dockerfile .` (or `docker build` if you must).
 
 ## Web UI / API
 - Start Go control-plane: build with `containers/go-control-plane/Dockerfile`, run with Postgres/Redis/Kafka (see compose below), API at `:8080`.
@@ -62,8 +62,8 @@ refinery \
 - Queue CLI: `refinery queue --cache /cache` prints queue length; `--queue-path` overrides the default.
 - Token cookie helper: `POST /api/session/token?token=<WORKER_TOKEN>` sets a `worker_token` cookie for the browser, avoiding query/header injection in the UI.
 
-## Docker compose
-- Go control-plane stack (Postgres/Redis/Kafka + control-plane + Go worker + UI): `docker-compose -f docker-compose.control-plane.yml up` (API: :8080, UI: :3000). Queue backend selectable via `QUEUE_BACKEND=file|redis|kafka` (compose defaults to redis). Kafka does not support queue clear; use file/redis for dev resets. Worker posts plan/manifest/logs to the Go control-plane when `CONTROL_PLANE_URL`/`CONTROL_PLANE_TOKEN` are set (compose wires these).
+## Compose
+- Go control-plane stack (Postgres/Redis/Kafka + control-plane + Go worker + UI): `podman compose -f docker-compose.control-plane.yml up` (API: :8080, UI: :3000). `docker compose` also works if you prefer Docker. Queue backend selectable via `QUEUE_BACKEND=file|redis|kafka` (compose defaults to redis). Kafka does not support queue clear; use file/redis for dev resets. Worker posts plan/manifest/logs to the Go control-plane when `CONTROL_PLANE_URL`/`CONTROL_PLANE_TOKEN` are set (compose wires these).
 - Podman is expected inside the worker container host; leave `PODMAN_BIN` empty to stub for local smoke, set `PODMAN_BIN=podman` (or similar) for real builds. Override the build entrypoint with `WORKER_RUN_CMD` when needed.
 
 ## Manifest & history
