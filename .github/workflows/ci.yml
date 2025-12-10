@@ -97,7 +97,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate docker-compose files
         run: |
-          docker compose config
           docker compose -f docker-compose.control-plane.yml config
 
   s390x-build:
