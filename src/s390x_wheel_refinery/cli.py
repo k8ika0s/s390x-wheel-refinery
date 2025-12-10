@@ -16,7 +16,7 @@ from .config import build_config
 from .history import BuildHistory
 from .index import IndexClient
 from .manifest import write_manifest
-from .models import Manifest, ManifestEntry
+from .models import Manifest, ManifestEntry, BuildJob
 from .plan_snapshot import write_plan_snapshot
 from .resolver import build_plan
 from .scanner import scan_wheels

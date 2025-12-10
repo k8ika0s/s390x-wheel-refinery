@@ -1,5 +1,5 @@
 flowchart TD
-    Q[Retry queue\n(file/Redis/Kafka)] -->|Pop batch| MATCH[Match plan.json\n(jobs + tags)]
+    Q["Retry queue<br/>file / Redis / Kafka"] -->|Pop batch| MATCH["Match plan.json<br/>(jobs + tags)"]
     MATCH --> PODMAN[Runner (Podman)\nmount /input /output /cache\npass JOB_* envs]
     PODMAN --> CMD[Run WORKER_RUN_CMD\n(default refinery-build\n-> refinery --only $JOB==$VER)]
     CMD --> LOGS[Structured log\nstatus=ok|error\nelapsed_ms, reason]

@@ -1,7 +1,7 @@
 import argparse
 
-from src.s390x_wheel_refinery import cli
-from src.s390x_wheel_refinery.models import BuildJob
+from s390x_wheel_refinery import cli
+from s390x_wheel_refinery.models import BuildJob
 
 
 def test_filter_jobs_for_only_by_name():
