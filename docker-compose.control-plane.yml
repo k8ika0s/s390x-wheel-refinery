@@ -75,6 +75,8 @@ services:
       CONTROL_PLANE_TOKEN: ${WORKER_TOKEN:-}
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379
+      PODMAN_BIN: podman
+      WORKER_RUN_CMD: refinery --input /input --output /output --cache /cache --python ${PYTHON_TAG:-3.11} --platform-tag ${PLATFORM_TAG:-manylinux2014_s390x} --only ${JOB_NAME:-}${JOB_VERSION:+==${JOB_VERSION:-}} --jobs 1
     volumes:
       - ./input:/input:ro
       - ./output:/output

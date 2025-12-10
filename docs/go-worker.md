@@ -19,7 +19,7 @@ A fast, container-isolated worker that drains the retry/build queue and rebuilds
 1) Pop batch from queue (file/redis/kafka).
 2) Load plan: prefer `/output/plan.json`; if absent, rescan+build plan via existing Python CLI as bridge (later reimplement resolver in Go).
 3) Match retry requests to plan, apply recipes/overrides.
-4) For each job: run build in podman container with mounts; honor timeouts/backoff; capture duration/logs.
+4) For each job: run build in podman container with mounts; honor timeouts/backoff; capture duration/logs. Default command is the Python `refinery --only` invocation; override with `WORKER_RUN_CMD` for custom build drivers.
 5) Write manifest to `/output/manifest.json`; post manifest/logs/plan/events to control-plane if configured.
 6) Expose `/trigger` to drain once; optional autorun interval.
 

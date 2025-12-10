@@ -83,6 +83,7 @@ refinery \
 - Queue backends: file/JSON, Redis, Kafka (configure via `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`).
 - Worker endpoints: `/health`, `/ready`, and `POST /trigger` (optionally gated by `WORKER_TOKEN`). Control-plane can call the worker webhook; the UI “Run worker now” button calls the control-plane which forwards to the worker.
 - Useful for follow-up retries after triage without re-running the full pipeline; the queue is drained in batches.
+- Podman expectations: set `PODMAN_BIN=podman` (or a stub for local dry-runs). Override the container-side build command with `WORKER_RUN_CMD` when needed; default is `refinery --input /input --output /output --cache /cache --python $PYTHON_TAG --platform-tag $PLATFORM_TAG --only $JOB_NAME==$JOB_VERSION --jobs 1`.
 
 ## Scheduling & resources
 - Shortest-first uses recorded avg durations; FIFO available.
