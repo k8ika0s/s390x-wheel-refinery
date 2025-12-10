@@ -65,3 +65,16 @@ func TestPodmanRunnerStub(t *testing.T) {
 		t.Fatalf("duration should be >0")
 	}
 }
+
+func TestPodmanRunnerFailure(t *testing.T) {
+	// Use /bin/false (or "false") to force non-zero exit and ensure we propagate errors and output.
+	bin := "false"
+	r := &PodmanRunner{Bin: bin, InputDir: "/in", OutputDir: "/out", CacheDir: "/cache"}
+	_, logContent, err := r.Run(context.Background(), Job{Name: "pkg", Version: "1.0.0"})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if logContent == "" {
+		t.Logf("no output returned (expected with %s)", bin)
+	}
+}
