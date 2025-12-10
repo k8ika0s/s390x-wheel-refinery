@@ -28,6 +28,14 @@ type Worker struct {
 	planSnap plan.Snapshot
 }
 
+type result struct {
+	job      runner.Job
+	duration time.Duration
+	log      string
+	err      error
+	attempt  int
+}
+
 // LoadPlan reads plan.json if present.
 func (w *Worker) LoadPlan() error {
 	path := filepath.Join(w.Cfg.OutputDir, "plan.json")
@@ -63,60 +71,97 @@ func (w *Worker) Drain(ctx context.Context) error {
 		return nil
 	}
 
+	reqAttempts := make(map[string]int)
+	for _, r := range reqs {
+		key := queueKey(r.Package, r.Version)
+		if r.Attempts > reqAttempts[key] {
+			reqAttempts[key] = r.Attempts
+		}
+	}
+
 	jobs := w.match(reqs)
+	results := make([]result, len(jobs))
 	g, ctx := errgroup.WithContext(ctx)
-	manifestCh := make(chan map[string]any, len(jobs))
-	for _, job := range jobs {
-		job := job
+	for i, job := range jobs {
+		i, job := i, job
 		g.Go(func() error {
 			dur, logContent, err := w.Runner.Run(ctx, job)
-			status := "built"
-			logPayload := map[string]any{
-				"name":        job.Name,
-				"version":     job.Version,
-				"status":      status,
-				"duration_ms": dur.Milliseconds(),
-				"content":     logContent,
+			results[i] = result{
+				job:      job,
+				duration: dur,
+				log:      logContent,
+				err:      err,
+				attempt:  reqAttempts[queueKey(job.Name, job.Version)],
 			}
-			if err != nil {
-				status = "failed"
-				logPayload["status"] = status
-				logPayload["error"] = err.Error()
-			}
-			if w.Reporter != nil {
-				_ = w.Reporter.PostLog(logPayload)
-			}
-			if err != nil {
-				return err
-			}
-			manifestEntry := map[string]any{
-				"name": job.Name, "version": job.Version, "status": "built", "python_tag": job.PythonTag, "platform_tag": job.PlatformTag,
-				"metadata": map[string]any{"duration_ms": dur.Milliseconds()},
-			}
-			_ = w.Reporter.PostManifest([]map[string]any{manifestEntry})
-			manifestCh <- manifestEntry
-			_ = w.Reporter.PostEvent(map[string]any{
-				"name":         job.Name,
-				"version":      job.Version,
-				"python_tag":   job.PythonTag,
-				"platform_tag": job.PlatformTag,
-				"status":       "built",
-				"timestamp":    time.Now().Unix(),
-				"metadata":     map[string]any{"duration_ms": dur.Milliseconds()},
-			})
 			return nil
 		})
 	}
-	err = g.Wait()
-	close(manifestCh)
-	if len(manifestCh) > 0 {
-		var entries []map[string]any
-		for m := range manifestCh {
-			entries = append(entries, m)
+	_ = g.Wait()
+
+	var manifestEntries []map[string]any
+	var firstErr error
+	for _, res := range results {
+		status := "built"
+		meta := map[string]any{"duration_ms": res.duration.Milliseconds()}
+		if res.err != nil {
+			status = "failed"
+			meta["error"] = res.err.Error()
+			if firstErr == nil {
+				firstErr = res.err
+			}
 		}
-		writeManifest(w.Cfg.OutputDir, entries)
+
+		entry := map[string]any{
+			"name":         res.job.Name,
+			"version":      res.job.Version,
+			"status":       status,
+			"python_tag":   res.job.PythonTag,
+			"platform_tag": res.job.PlatformTag,
+			"metadata":     meta,
+		}
+		manifestEntries = append(manifestEntries, entry)
+
+		logPayload := map[string]any{
+			"name":        res.job.Name,
+			"version":     res.job.Version,
+			"status":      status,
+			"duration_ms": res.duration.Milliseconds(),
+			"content":     res.log,
+		}
+		if res.err != nil {
+			logPayload["error"] = res.err.Error()
+		}
+		if w.Reporter != nil {
+			_ = w.Reporter.PostLog(logPayload)
+			_ = w.Reporter.PostManifest([]map[string]any{entry})
+			_ = w.Reporter.PostEvent(map[string]any{
+				"name":         res.job.Name,
+				"version":      res.job.Version,
+				"python_tag":   res.job.PythonTag,
+				"platform_tag": res.job.PlatformTag,
+				"status":       status,
+				"timestamp":    time.Now().Unix(),
+				"metadata":     meta,
+			})
+		}
+
+		if res.err != nil && w.shouldRequeue(reqAttempts, res.job) {
+			_ = w.Queue.Enqueue(ctx, queue.Request{
+				Package:     res.job.Name,
+				Version:     res.job.Version,
+				PythonTag:   res.job.PythonTag,
+				PlatformTag: res.job.PlatformTag,
+				Recipes:     res.job.Recipes,
+				Attempts:    res.attempt + 1,
+				EnqueuedAt:  time.Now().Unix(),
+			})
+		}
 	}
-	return err
+
+	if len(manifestEntries) > 0 {
+		writeManifest(w.Cfg.OutputDir, manifestEntries)
+	}
+	return firstErr
 }
 
 func (w *Worker) match(reqs []queue.Request) []runner.Job {
@@ -179,6 +224,22 @@ func BuildWorker(cfg Config) (*Worker, error) {
 	}
 	rep := &reporter.Client{BaseURL: strings.TrimRight(cfg.ControlPlaneURL, "/"), Token: cfg.ControlPlaneToken}
 	return &Worker{Queue: q, Runner: r, Reporter: rep, Cfg: cfg}, nil
+}
+
+func queueKey(name, version string) string {
+	return strings.ToLower(name) + "::" + strings.ToLower(version)
+}
+
+func (w *Worker) shouldRequeue(reqAttempts map[string]int, job runner.Job) bool {
+	if !w.Cfg.RequeueOnFailure {
+		return false
+	}
+	key := queueKey(job.Name, job.Version)
+	attempt := reqAttempts[key]
+	if attempt >= w.Cfg.MaxRequeueAttempts {
+		return false
+	}
+	return true
 }
 
 // writeManifest writes manifest.json locally (best effort).
