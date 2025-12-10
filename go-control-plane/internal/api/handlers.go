@@ -363,6 +363,24 @@ func (h *Handler) planCompute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
+	// Persist plan snapshot if provided
+	var nodes []store.PlanNode
+	if planArr, ok := snap["plan"].([]any); ok {
+		for _, raw := range planArr {
+			if m, ok := raw.(map[string]any); ok {
+				nodes = append(nodes, store.PlanNode{
+					Name:        toString(m["name"]),
+					Version:     toString(m["version"]),
+					PythonTag:   toString(m["python_tag"]),
+					PlatformTag: toString(m["platform_tag"]),
+					Action:      toString(m["action"]),
+				})
+			}
+		}
+	}
+	if len(nodes) > 0 {
+		_ = h.Store.SavePlan(ctx, toString(snap["run_id"]), nodes)
+	}
 	writeJSON(w, http.StatusOK, snap)
 }
 
@@ -741,4 +759,19 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func toString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case fmt.Stringer:
+		return val.String()
+	default:
+		b, _ := json.Marshal(val)
+		return string(b)
+	}
 }
