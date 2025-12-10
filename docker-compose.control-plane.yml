@@ -43,6 +43,7 @@ services:
       REDIS_URL: redis://redis:6379
       KAFKA_BROKERS: redpanda:9092
       WORKER_WEBHOOK_URL: http://worker:9000/trigger
+      WORKER_PLAN_URL: http://worker:9000/plan
       WORKER_TOKEN: ${WORKER_TOKEN:-}
     ports:
       - "8080:8080"

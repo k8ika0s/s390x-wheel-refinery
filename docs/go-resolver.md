@@ -29,5 +29,6 @@ Today the Go worker still shells out to the Python CLI to generate `plan.json` w
 - Define plan JSON schema matching the Python `plan_snapshot`.
 - Wire control-plane endpoint for “compute plan” and store it to cache/output.
 - Update worker to call the Go resolver (drop Python fallback).
-- Add parity tests vs recorded Python plans for sample fixtures; add unit tests for scanner, planner, and upgrade strategy.
+- Add parity tests vs recorded Python plans for sample fixtures; add unit tests for scanner, planner, and upgrade strategy. ✅ Fixture-based regression added.
 - Add integration fixture under `go-worker/internal/plan/testdata/` with representative wheel names and expected plan.json for regression testing. ✅ Added.
+- Wire control-plane `/api/plan/compute` to proxy plan generation to the worker (`WORKER_PLAN_URL` / `/plan`), so UI/API can trigger plan generation.
