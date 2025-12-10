@@ -45,8 +45,8 @@ func (w *Worker) LoadPlan() error {
 		path = filepath.Join(w.Cfg.CacheDir, "plan.json")
 		snap, err = plan.Load(path)
 		if err != nil {
-			// as a last resort, try Python CLI to generate plan
-			snap, err = plan.GenerateViaPython(w.Cfg.InputDir, w.Cfg.CacheDir, w.Cfg.PythonVersion, w.Cfg.PlatformTag)
+			// as a last resort, generate plan in Go
+			snap, err = plan.Generate(w.Cfg.InputDir, w.Cfg.CacheDir, w.Cfg.PythonVersion, w.Cfg.PlatformTag)
 			if err != nil {
 				return err
 			}
