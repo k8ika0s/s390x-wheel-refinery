@@ -30,7 +30,7 @@ func (p *PostgresStore) Ping(ctx context.Context) error {
 }
 
 func (p *PostgresStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]Event, error) {
-	q := `SELECT run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,extract(epoch from timestamp)::bigint
+	q := `SELECT run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,extract(epoch from timestamp)::bigint,duration_ms
 	      FROM events WHERE 1=1`
 	args := []any{}
 	if pkg != "" {
@@ -57,7 +57,7 @@ func (p *PostgresStore) Recent(ctx context.Context, limit, offset int, pkg, stat
 		var e Event
 		var metaRaw json.RawMessage
 		var matched pq.StringArray
-		if err := rows.Scan(&e.RunID, &e.Name, &e.Version, &e.PythonTag, &e.PlatformTag, &e.Status, &e.Detail, &metaRaw, &matched, &e.Timestamp); err != nil {
+		if err := rows.Scan(&e.RunID, &e.Name, &e.Version, &e.PythonTag, &e.PlatformTag, &e.Status, &e.Detail, &metaRaw, &matched, &e.Timestamp, &e.DurationMS); err != nil {
 			return nil, err
 		}
 		if len(metaRaw) > 0 {
@@ -70,7 +70,7 @@ func (p *PostgresStore) Recent(ctx context.Context, limit, offset int, pkg, stat
 }
 
 func (p *PostgresStore) History(ctx context.Context, filter HistoryFilter) ([]Event, error) {
-	q := `SELECT run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,extract(epoch from timestamp)::bigint
+	q := `SELECT run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,extract(epoch from timestamp)::bigint,duration_ms
 	      FROM events WHERE 1=1`
 	args := []any{}
 	if filter.Package != "" {
@@ -115,7 +115,7 @@ func (p *PostgresStore) History(ctx context.Context, filter HistoryFilter) ([]Ev
 		var e Event
 		var metaRaw json.RawMessage
 		var matched pq.StringArray
-		if err := rows.Scan(&e.RunID, &e.Name, &e.Version, &e.PythonTag, &e.PlatformTag, &e.Status, &e.Detail, &metaRaw, &matched, &e.Timestamp); err != nil {
+		if err := rows.Scan(&e.RunID, &e.Name, &e.Version, &e.PythonTag, &e.PlatformTag, &e.Status, &e.Detail, &metaRaw, &matched, &e.Timestamp, &e.DurationMS); err != nil {
 			return nil, err
 		}
 		if len(metaRaw) > 0 {

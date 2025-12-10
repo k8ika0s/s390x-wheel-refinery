@@ -25,6 +25,7 @@ type Handler struct {
 
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", h.health)
+	mux.HandleFunc("/api/ready", h.ready)
 	mux.HandleFunc("/api/metrics", h.metrics)
 	mux.HandleFunc("/api/config", h.config)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
@@ -63,6 +64,16 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 		status["detail"] = err.Error()
 	}
 	writeJSON(w, http.StatusOK, status)
+}
+
+func (h *Handler) ready(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
+	defer cancel()
+	if err := h.ping(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unready", "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
@@ -354,6 +365,10 @@ func (h *Handler) logsIngest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if r.ContentLength > 1_000_000 {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "log too large"})
+		return
+	}
 	var le store.LogEntry
 	if err := json.NewDecoder(r.Body).Decode(&le); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -442,27 +457,13 @@ func (h *Handler) workerTrigger(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	detail := []string{}
 	if h.Config.WorkerWebhookURL != "" {
-		payload := map[string]string{"action": "drain"}
-		buf, _ := json.Marshal(payload)
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.Config.WorkerWebhookURL, bytes.NewReader(buf))
-		req.Header.Set("Content-Type", "application/json")
-		if h.Config.WorkerToken != "" {
-			req.Header.Set("X-Worker-Token", h.Config.WorkerToken)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
+		if err := h.callWorkerWebhook(ctx, &detail); err != nil {
 			detail = append(detail, "webhook error: "+err.Error())
-		} else {
-			detail = append(detail, "webhook status "+resp.Status)
-			_ = resp.Body.Close()
 		}
 	}
 	if h.Config.WorkerLocalCmd != "" {
-		cmd := exec.CommandContext(ctx, h.Config.WorkerLocalCmd, "drain")
-		if err := cmd.Run(); err != nil {
+		if err := h.callWorkerLocal(ctx, &detail); err != nil {
 			detail = append(detail, "local worker error: "+err.Error())
-		} else {
-			detail = append(detail, "local worker triggered")
 		}
 	}
 	stats, _ := h.Queue.Stats(ctx)
@@ -659,6 +660,35 @@ func (h *Handler) ping(ctx context.Context) error {
 	if _, err := h.Queue.Stats(ctx); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (h *Handler) callWorkerWebhook(ctx context.Context, detail *[]string) error {
+	payload := map[string]string{"action": "drain"}
+	buf, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, h.Config.WorkerWebhookURL, bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	if h.Config.WorkerToken != "" {
+		req.Header.Set("X-Worker-Token", h.Config.WorkerToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	*detail = append(*detail, "webhook status "+resp.Status)
+	return nil
+}
+
+func (h *Handler) callWorkerLocal(ctx context.Context, detail *[]string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, h.Config.WorkerLocalCmd, "drain")
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	*detail = append(*detail, "local worker triggered")
 	return nil
 }
 

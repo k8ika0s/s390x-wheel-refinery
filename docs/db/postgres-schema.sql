@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS events (
     detail        TEXT,
     metadata      JSONB,
     matched_hint_ids TEXT[],
+    duration_ms   BIGINT,
     timestamp     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_events_name ON events(name);

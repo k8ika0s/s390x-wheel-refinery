@@ -16,6 +16,7 @@ type Event struct {
 	Metadata       map[string]any
 	Timestamp      int64
 	MatchedHintIDs []string
+	DurationMS     int64
 }
 
 // Hint represents a hint catalog entry.
