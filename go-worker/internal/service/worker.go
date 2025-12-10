@@ -65,6 +65,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 
 	jobs := w.match(reqs)
 	g, ctx := errgroup.WithContext(ctx)
+	manifestCh := make(chan map[string]any, len(jobs))
 	for _, job := range jobs {
 		job := job
 		g.Go(func() error {
@@ -79,6 +80,10 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"name": job.Name, "version": job.Version, "status": "built", "python_tag": job.PythonTag, "platform_tag": job.PlatformTag,
 				"metadata": map[string]any{"duration_ms": dur.Milliseconds()},
 			}})
+			manifestCh <- map[string]any{
+				"name": job.Name, "version": job.Version, "status": "built", "python_tag": job.PythonTag, "platform_tag": job.PlatformTag,
+				"metadata": map[string]any{"duration_ms": dur.Milliseconds()},
+			}
 			_ = w.Reporter.PostEvent(map[string]any{
 				"name":         job.Name,
 				"version":      job.Version,
@@ -91,7 +96,16 @@ func (w *Worker) Drain(ctx context.Context) error {
 			return nil
 		})
 	}
-	return g.Wait()
+	err = g.Wait()
+	close(manifestCh)
+	if len(manifestCh) > 0 {
+		var entries []map[string]any
+		for m := range manifestCh {
+			entries = append(entries, m)
+		}
+		writeManifest(w.Cfg.OutputDir, entries)
+	}
+	return err
 }
 
 func (w *Worker) match(reqs []queue.Request) []runner.Job {
@@ -141,7 +155,7 @@ func BuildWorker(cfg Config) (*Worker, error) {
 	if q == nil {
 		return nil, errors.New("queue backend not configured")
 	}
-	r := &runner.PodmanRunner{Image: cfg.ContainerImage, InputDir: cfg.InputDir, OutputDir: cfg.OutputDir, CacheDir: cfg.CacheDir, PythonTag: cfg.PythonVersion, PlatformTag: cfg.PlatformTag, Bin: cfg.PodmanBin}
+	r := &runner.PodmanRunner{Image: cfg.ContainerImage, InputDir: cfg.InputDir, OutputDir: cfg.OutputDir, CacheDir: cfg.CacheDir, PythonTag: cfg.PythonVersion, PlatformTag: cfg.PlatformTag, Bin: cfg.PodmanBin, RunCmd: cfg.RunCmd}
 	rep := &reporter.Client{BaseURL: strings.TrimRight(cfg.ControlPlaneURL, "/"), Token: cfg.ControlPlaneToken}
 	return &Worker{Queue: q, Runner: r, Reporter: rep, Cfg: cfg}, nil
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds worker settings.
@@ -27,6 +28,7 @@ type Config struct {
 	PodmanBin         string
 	AutorunInterval   int
 	BatchSize         int
+	RunCmd            []string
 }
 
 func fromEnv() Config {
@@ -50,6 +52,7 @@ func fromEnv() Config {
 		ControlPlaneToken: getenv("CONTROL_PLANE_TOKEN", ""),
 		PodmanBin:         getenv("PODMAN_BIN", ""), // empty = stub podman; set to podman binary to execute
 		BatchSize:         getenvInt("BATCH_SIZE", 50),
+		RunCmd:            parseCmd(getenv("WORKER_RUN_CMD", "")),
 	}
 	return cfg
 }
@@ -68,4 +71,11 @@ func getenvInt(k string, def int) int {
 		}
 	}
 	return def
+}
+
+func parseCmd(cmd string) []string {
+	if cmd == "" {
+		return nil
+	}
+	return strings.Fields(cmd)
 }
