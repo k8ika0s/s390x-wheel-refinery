@@ -37,6 +37,7 @@ type Options struct {
 	UpgradeStrategy  string // pinned (default) or eager
 	MaxDeps          int    // safety cap for dependency expansion
 	PackageOverrides map[string]string
+	RequirementsPath string
 }
 
 // Write writes a snapshot to the given path.
@@ -87,6 +88,7 @@ func Generate(inputDir, cacheDir, pythonVersion, platformTag string, indexURL, e
 		UpgradeStrategy:  strategy,
 		MaxDeps:          maxDeps,
 		PackageOverrides: loadOverridesFromEnv(),
+		RequirementsPath: filepath.Join(inputDir, "requirements.txt"),
 	}
 	snap, err := computeWithResolver(inputDir, pythonVersion, platformTag, opts, &IndexClient{BaseURL: indexURL, ExtraIndexURL: extraIndexURL})
 	if err != nil {
@@ -104,6 +106,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 	if opts.MaxDeps <= 0 {
 		opts.MaxDeps = 1000
 	}
+	reqs := loadRequirements(inputDir, opts.RequirementsPath)
 	files, err := os.ReadDir(inputDir)
 	if err != nil {
 		return Snapshot{}, err
@@ -113,8 +116,51 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 	depSeen := make(map[string]depSpec)
 	var wheelCount int
 	var depTruncated bool
+	hasInput := len(reqs) > 0
 
 	seen := make(map[string]bool)
+	// Seed from requirements.txt
+	for _, r := range reqs {
+		name := normalizeName(r.Name)
+		if name == "" {
+			continue
+		}
+		if len(depSeen) >= opts.MaxDeps {
+			depTruncated = true
+			break
+		}
+		if existing, ok := depSeen[name]; ok && existing.Version != "" {
+			continue
+		}
+		version := r.Version
+		if ov, ok := opts.PackageOverrides[name]; ok && ov != "" {
+			version = strings.TrimPrefix(strings.TrimSpace(ov), "==")
+		}
+		if (version == "" || strings.HasPrefix(version, ">=") || strings.HasPrefix(version, "~=")) && resolver != nil {
+			if ver, err := resolver.ResolveLatest(name); err == nil {
+				version = ver
+			} else {
+				log.Printf("warn: resolve latest for %s failed: %v", name, err)
+			}
+		}
+		if version == "" {
+			version = "latest"
+		}
+		depSeen[name] = depSpec{Name: name, Version: version}
+		key := name + "::" + version
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		nodes = append(nodes, Node{
+			Name:        name,
+			Version:     version,
+			PythonTag:   pyTag,
+			PlatformTag: platformTag,
+			Action:      "build",
+		})
+	}
+
 	for _, f := range files {
 		if f.IsDir() || !strings.HasSuffix(f.Name(), ".whl") {
 			continue
@@ -123,6 +169,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		if err != nil {
 			continue
 		}
+		hasInput = true
 		wheelCount++
 		requires, _ := readRequiresDist(filepath.Join(inputDir, f.Name()))
 		for _, dep := range requires {
@@ -190,10 +237,6 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		if dep == "" {
 			continue
 		}
-		key := dep + "::"
-		if seen[key] {
-			continue
-		}
 		version := spec.Version
 		if ov, ok := opts.PackageOverrides[normalizeName(dep)]; ok && ov != "" {
 			version = strings.TrimPrefix(strings.TrimSpace(ov), "==")
@@ -217,6 +260,11 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				log.Printf("warn: eager resolve latest for %s failed: %v", dep, err)
 			}
 		}
+		key := dep + "::" + version
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		nodes = append(nodes, Node{
 			Name:        dep,
 			Version:     version,
@@ -225,8 +273,8 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			Action:      "build",
 		})
 	}
-	if wheelCount == 0 {
-		return Snapshot{}, fmt.Errorf("no wheels found in input directory %s", inputDir)
+	if !hasInput {
+		return Snapshot{}, fmt.Errorf("no wheels or requirements found in input directory %s", inputDir)
 	}
 	if depTruncated {
 		return Snapshot{}, fmt.Errorf("dependency expansion exceeded MaxDeps (%d); increase MAX_DEPS or trim input", opts.MaxDeps)
@@ -363,6 +411,49 @@ func loadMaxDepsFromEnv() int {
 		return 0
 	}
 	return n
+}
+
+func loadRequirements(inputDir, path string) []depSpec {
+	var reqPath string
+	if path != "" {
+		reqPath = path
+	} else {
+		reqPath = filepath.Join(inputDir, "requirements.txt")
+	}
+	data, err := os.ReadFile(filepath.Clean(reqPath))
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(data), "\n")
+	var out []depSpec
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// strip inline comments
+		if idx := strings.Index(line, " #"); idx != -1 {
+			line = strings.TrimSpace(line[:idx])
+		}
+		name := line
+		version := ""
+		for _, op := range []string{"==", ">=", "~="} {
+			if idx := strings.Index(line, op); idx > 0 {
+				name = strings.TrimSpace(line[:idx])
+				version = line[idx:]
+				if op == "==" {
+					version = strings.TrimPrefix(version, "==")
+				}
+				break
+			}
+		}
+		name = normalizeName(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, depSpec{Name: name, Version: version})
+	}
+	return out
 }
 
 func parseRequiresDist(meta string) []depSpec {
