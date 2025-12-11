@@ -36,4 +36,4 @@ Today the Go worker still shells out to the Python CLI to generate `plan.json` w
 - Wire control-plane `/api/plan/compute` to proxy plan generation to the worker (`WORKER_PLAN_URL` / `/plan`), so UI/API can trigger plan generation. ✅ Added.
 
 ## Gaps / TODO
-No blocking gaps for current scope; future niceties: richer error reporting and benchmarking vs the legacy Python path.
+No blocking gaps for current scope. Added richer error reporting (empty input, capped deps) and a basic benchmark (compute on fixture). Future niceties: more detailed index failure surfacing and timing comparisons vs the legacy Python path on larger corpora.

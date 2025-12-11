@@ -2,8 +2,8 @@ package plan
 
 import (
 	"archive/zip"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,6 +205,17 @@ func TestJSONShapeMatchesPythonSnapshot(t *testing.T) {
 	}
 }
 
+func BenchmarkComputeFixture(b *testing.B) {
+	fixtureDir := filepath.Join("testdata")
+	wheelDir := filepath.Join(fixtureDir, "wheels")
+	for i := 0; i < b.N; i++ {
+		_, err := computeWithResolver(wheelDir, "3.11", "manylinux2014_s390x", Options{UpgradeStrategy: "pinned"}, nil)
+		if err != nil {
+			b.Fatalf("compute failed: %v", err)
+		}
+	}
+}
+
 type mockResolver struct {
 	versions map[string]string
 }
@@ -313,19 +324,9 @@ func TestMaxDepsLimit(t *testing.T) {
 	writeWheelWithMeta(t, dir, "demo-0.1.0-py3-none-any.whl", meta)
 
 	opts := Options{UpgradeStrategy: "pinned", MaxDeps: 10}
-	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", opts, &mockResolver{})
-	if err != nil {
-		t.Fatalf("compute failed: %v", err)
-	}
-	countDeps := 0
-	for _, n := range snap.Plan {
-		if n.Name == "demo" {
-			continue
-		}
-		countDeps++
-	}
-	if countDeps != 10 {
-		t.Fatalf("expected 10 deps due to cap, got %d", countDeps)
+	_, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", opts, &mockResolver{})
+	if err == nil || !strings.Contains(err.Error(), "MaxDeps") {
+		t.Fatalf("expected MaxDeps error, got %v", err)
 	}
 }
 

@@ -105,6 +105,8 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 	pyTag := normalizePyTag(pythonVersion)
 	var nodes []Node
 	depSeen := make(map[string]depSpec)
+	var wheelCount int
+	var depTruncated bool
 
 	seen := make(map[string]bool)
 	for _, f := range files {
@@ -115,12 +117,14 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		if err != nil {
 			continue
 		}
+		wheelCount++
 		requires, _ := readRequiresDist(filepath.Join(inputDir, f.Name()))
 		for _, dep := range requires {
 			if dep.Name == "" {
 				continue
 			}
 			if len(depSeen) >= opts.MaxDeps {
+				depTruncated = true
 				break
 			}
 			if existing, ok := depSeen[dep.Name]; ok && existing.Version != "" {
@@ -208,6 +212,12 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			PlatformTag: platformTag,
 			Action:      "build",
 		})
+	}
+	if wheelCount == 0 {
+		return Snapshot{}, fmt.Errorf("no wheels found in input directory %s", inputDir)
+	}
+	if depTruncated {
+		return Snapshot{}, fmt.Errorf("dependency expansion exceeded MaxDeps (%d); increase MAX_DEPS or trim input", opts.MaxDeps)
 	}
 	return Snapshot{RunID: newRunID(), Plan: nodes}, nil
 }
