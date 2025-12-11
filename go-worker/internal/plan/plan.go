@@ -86,6 +86,7 @@ func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
 	pyTag := normalizePyTag(pythonVersion)
 	var nodes []Node
 	depSeen := make(map[string]depSpec)
+	index := &IndexClient{}
 
 	seen := make(map[string]bool)
 	for _, f := range files {
@@ -109,6 +110,12 @@ func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
 			}
 			if existing, ok := depSeen[dep.Name]; ok && existing.Version != "" {
 				continue
+			}
+			// try to resolve latest if no version
+			if dep.Version == "" {
+				if ver, err := index.ResolveLatest(dep.Name); err == nil {
+					dep.Version = ver
+				}
 			}
 			depSeen[dep.Name] = dep
 		}

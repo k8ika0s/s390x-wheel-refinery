@@ -25,7 +25,7 @@ Today the Go worker still shells out to the Python CLI to generate `plan.json` w
 ## Work plan (proposed)
 - Implement wheel scanner + metadata parser in Go (filename tags + METADATA parsing for requires_dist). ✅ METADATA Requires-Dist parsed to add dependency nodes (default version “latest”).
 - Implement plan builder (reuse vs rebuild, pinned strategy, optional dependency expansion with limits).
-- Implement index client in Go (respect index/extra index and trusted hosts); support source lookups for dependency expansion.
+- Implement index client in Go (respect index/extra index and trusted hosts); support source lookups for dependency expansion. ✅ Minimal client added (PyPI JSON latest) used to fill missing versions.
 - Define plan JSON schema matching the Python `plan_snapshot`.
 - Wire control-plane endpoint for “compute plan” and store it to cache/output.
 - Update worker to call the Go resolver (drop Python fallback).
