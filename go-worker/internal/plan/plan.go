@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -75,11 +77,15 @@ func GenerateViaPython(inputDir, cacheDir, pythonVersion, platformTag string) (S
 
 // Generate builds a plan using the Go resolver and writes it to cacheDir/plan.json.
 func Generate(inputDir, cacheDir, pythonVersion, platformTag string, indexURL, extraIndexURL, strategy string) (Snapshot, error) {
+	maxDeps := loadMaxDepsFromEnv()
+	if maxDeps <= 0 {
+		maxDeps = 1000
+	}
 	opts := Options{
 		IndexURL:         indexURL,
 		ExtraIndexURL:    extraIndexURL,
 		UpgradeStrategy:  strategy,
-		MaxDeps:          1000,
+		MaxDeps:          maxDeps,
 		PackageOverrides: loadOverridesFromEnv(),
 	}
 	snap, err := computeWithResolver(inputDir, pythonVersion, platformTag, opts, &IndexClient{BaseURL: indexURL, ExtraIndexURL: extraIndexURL})
@@ -134,6 +140,8 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			if resolver != nil && dep.Version == "" {
 				if ver, err := resolver.ResolveLatest(dep.Name); err == nil {
 					dep.Version = ver
+				} else {
+					log.Printf("warn: resolve latest for %s failed: %v", dep.Name, err)
 				}
 			}
 			depSeen[dep.Name] = dep
@@ -194,6 +202,8 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			if resolver != nil {
 				if ver, err := resolver.ResolveLatest(dep); err == nil {
 					version = ver
+				} else {
+					log.Printf("warn: resolve latest for %s failed: %v", dep, err)
 				}
 			}
 			if version == "" {
@@ -203,6 +213,8 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		if opts.UpgradeStrategy == "eager" && resolver != nil {
 			if ver, err := resolver.ResolveLatest(dep); err == nil && ver != "" {
 				version = ver
+			} else if err != nil {
+				log.Printf("warn: eager resolve latest for %s failed: %v", dep, err)
 			}
 		}
 		nodes = append(nodes, Node{
@@ -339,6 +351,18 @@ func loadOverridesFromEnv() map[string]string {
 		}
 	}
 	return out
+}
+
+func loadMaxDepsFromEnv() int {
+	raw := os.Getenv("MAX_DEPS")
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 func parseRequiresDist(meta string) []depSpec {

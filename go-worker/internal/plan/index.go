@@ -20,13 +20,19 @@ type IndexClient struct {
 // ResolveLatest returns a best-effort latest version string for the package.
 func (c *IndexClient) ResolveLatest(name string) (string, error) {
 	client := c.http()
+	var errs []string
 	for _, base := range c.indexes() {
-		ver, _ := c.fetchLatest(client, base, name)
+		ver, err := c.fetchLatest(client, base, name)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", base, err))
+			continue
+		}
 		if ver != "" {
 			return ver, nil
 		}
+		errs = append(errs, fmt.Sprintf("%s: empty response", base))
 	}
-	return "", fmt.Errorf("version not found for %s", name)
+	return "", fmt.Errorf("version not found for %s (%s)", name, strings.Join(errs, "; "))
 }
 
 func (c *IndexClient) indexes() []string {
@@ -60,9 +66,12 @@ func (c *IndexClient) fetchLatest(client *http.Client, base, name string) (strin
 		api := fmt.Sprintf("%s/pypi/%s/json", strings.TrimRight(base, "/"), name)
 		resp, err := client.Get(api)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("get %s: %w", api, err)
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("get %s: status %d", api, resp.StatusCode)
+		}
 		var payload struct {
 			Info struct {
 				Version string `json:"version"`
