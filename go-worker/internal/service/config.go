@@ -32,6 +32,9 @@ type Config struct {
 	AutorunInterval    int
 	BatchSize          int
 	RunCmd             []string
+	IndexURL           string
+	ExtraIndexURL      string
+	UpgradeStrategy    string
 }
 
 func fromEnv() Config {
@@ -59,6 +62,9 @@ func fromEnv() Config {
 		MaxRequeueAttempts: getenvInt("MAX_REQUEUE_ATTEMPTS", 3),
 		BatchSize:          getenvInt("BATCH_SIZE", 50),
 		RunCmd:             parseCmd(getenv("WORKER_RUN_CMD", "")),
+		IndexURL:           getenv("INDEX_URL", ""),
+		ExtraIndexURL:      getenv("EXTRA_INDEX_URL", ""),
+		UpgradeStrategy:    getenv("UPGRADE_STRATEGY", "pinned"),
 	}
 	return cfg
 }

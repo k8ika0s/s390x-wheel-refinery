@@ -1,0 +1,26 @@
+{
+  "run_id": "fixture",
+  "plan": [
+    {
+      "name": "purepkg",
+      "version": "1.0.0",
+      "python_tag": "cp311",
+      "platform_tag": "manylinux2014_s390x",
+      "action": "reuse"
+    },
+    {
+      "name": "s390pkg",
+      "version": "3.1.4",
+      "python_tag": "cp311",
+      "platform_tag": "manylinux2014_s390x",
+      "action": "reuse"
+    },
+    {
+      "name": "nativepkg",
+      "version": "2.0.0",
+      "python_tag": "cp311",
+      "platform_tag": "manylinux2014_s390x",
+      "action": "build"
+    }
+  ]
+}

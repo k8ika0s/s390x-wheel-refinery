@@ -15,6 +15,7 @@ type Config struct {
 	KafkaBrokers     string
 	KafkaTopic       string
 	WorkerWebhookURL string
+	WorkerPlanURL    string
 	WorkerToken      string
 	WorkerLocalCmd   string
 	SkipMigrate      bool
@@ -32,6 +33,7 @@ func FromEnv() Config {
 		KafkaBrokers:     getenv("KAFKA_BROKERS", ""),
 		KafkaTopic:       getenv("KAFKA_TOPIC", "refinery.queue"),
 		WorkerWebhookURL: getenv("WORKER_WEBHOOK_URL", ""),
+		WorkerPlanURL:    getenv("WORKER_PLAN_URL", ""),
 		WorkerToken:      getenv("WORKER_TOKEN", ""),
 		WorkerLocalCmd:   getenv("WORKER_LOCAL_CMD", ""),
 		SkipMigrate:      getenv("CP_SKIP_MIGRATE", "") != "",

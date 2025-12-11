@@ -39,6 +39,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/top-failures", h.topFailures)
 	mux.HandleFunc("/api/top-slowest", h.topSlowest)
 	mux.HandleFunc("/api/plan", h.plan)
+	mux.HandleFunc("/api/plan/compute", h.planCompute)
 	mux.HandleFunc("/api/manifest", h.manifest)
 	mux.HandleFunc("/api/artifacts", h.artifacts)
 	mux.HandleFunc("/api/queue", h.queueList)
@@ -343,6 +344,44 @@ func (h *Handler) manifest(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+// planCompute proxies a plan computation to the worker (if configured).
+func (h *Handler) planCompute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	snap, err := h.callWorkerPlan(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	// Persist plan snapshot if provided
+	var nodes []store.PlanNode
+	if planArr, ok := snap["plan"].([]any); ok {
+		for _, raw := range planArr {
+			if m, ok := raw.(map[string]any); ok {
+				nodes = append(nodes, store.PlanNode{
+					Name:        toString(m["name"]),
+					Version:     toString(m["version"]),
+					PythonTag:   toString(m["python_tag"]),
+					PlatformTag: toString(m["platform_tag"]),
+					Action:      toString(m["action"]),
+				})
+			}
+		}
+	}
+	if len(nodes) > 0 {
+		_ = h.Store.SavePlan(ctx, toString(snap["run_id"]), nodes)
+	}
+	writeJSON(w, http.StatusOK, snap)
 }
 
 func (h *Handler) artifacts(w http.ResponseWriter, r *http.Request) {
@@ -691,8 +730,48 @@ func (h *Handler) callWorkerLocal(ctx context.Context, detail *[]string) error {
 	return nil
 }
 
+func (h *Handler) callWorkerPlan(ctx context.Context) (map[string]any, error) {
+	url := h.Config.WorkerPlanURL
+	if url == "" && h.Config.WorkerWebhookURL != "" {
+		url = strings.Replace(h.Config.WorkerWebhookURL, "/trigger", "/plan", 1)
+	}
+	if url == "" {
+		return nil, fmt.Errorf("worker plan URL not configured")
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if h.Config.WorkerToken != "" {
+		req.Header.Set("X-Worker-Token", h.Config.WorkerToken)
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var snap map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return nil, err
+	}
+	return snap, nil
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func toString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case fmt.Stringer:
+		return val.String()
+	default:
+		b, _ := json.Marshal(val)
+		return string(b)
+	}
 }
