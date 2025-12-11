@@ -1,6 +1,8 @@
 package plan
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -83,6 +85,7 @@ func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
 	}
 	pyTag := normalizePyTag(pythonVersion)
 	var nodes []Node
+	depSeen := make(map[string]bool)
 
 	seen := make(map[string]bool)
 	for _, f := range files {
@@ -98,6 +101,11 @@ func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
 			continue
 		}
 		seen[key] = true
+
+		requires, _ := readRequiresDist(filepath.Join(inputDir, f.Name()))
+		for _, dep := range requires {
+			depSeen[dep] = true
+		}
 
 		if isCompatible(info, pyTag, platformTag) {
 			nodes = append(nodes, Node{
@@ -116,6 +124,22 @@ func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
 				Action:      "build",
 			})
 		}
+	}
+	for dep := range depSeen {
+		if dep == "" {
+			continue
+		}
+		key := dep + "::"
+		if seen[key] {
+			continue
+		}
+		nodes = append(nodes, Node{
+			Name:        dep,
+			Version:     "latest",
+			PythonTag:   pyTag,
+			PlatformTag: platformTag,
+			Action:      "build",
+		})
 	}
 	return Snapshot{RunID: newRunID(), Plan: nodes}, nil
 }
@@ -175,4 +199,56 @@ func newRunID() string {
 		b[i] = letters[rand.Intn(len(letters))]
 	}
 	return string(b)
+}
+
+// readRequiresDist extracts Requires-Dist entries from METADATA inside a wheel.
+func readRequiresDist(wheelPath string) ([]string, error) {
+	zr, err := zip.OpenReader(wheelPath)
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	var meta []byte
+	for _, f := range zr.File {
+		if strings.HasSuffix(f.Name, "METADATA") {
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			buf := new(bytes.Buffer)
+			_, _ = buf.ReadFrom(rc)
+			rc.Close()
+			meta = buf.Bytes()
+			break
+		}
+	}
+	if len(meta) == 0 {
+		return nil, nil
+	}
+	return parseRequiresDist(string(meta)), nil
+}
+
+func parseRequiresDist(meta string) []string {
+	lines := strings.Split(meta, "\n")
+	var out []string
+	for _, line := range lines {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "requires-dist:") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			val := strings.TrimSpace(parts[1])
+			// take first token as package name
+			if idx := strings.IndexAny(val, " ("); idx != -1 {
+				val = val[:idx]
+			}
+			val = strings.TrimSpace(val)
+			val = strings.ToLower(val)
+			val = strings.ReplaceAll(val, "_", "-")
+			if val != "" {
+				out = append(out, val)
+			}
+		}
+	}
+	return out
 }

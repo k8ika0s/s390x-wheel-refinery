@@ -93,6 +93,14 @@ func TestIsCompatible(t *testing.T) {
 	}
 }
 
+func TestParseRequiresDist(t *testing.T) {
+	meta := "Metadata-Version: 2.1\nName: demo\nRequires-Dist: depA (>=1.0)\nRequires-Dist: depB\n"
+	reqs := parseRequiresDist(meta)
+	if len(reqs) != 2 || reqs[0] != "depa" || reqs[1] != "depb" {
+		t.Fatalf("unexpected requires-dist parse: %+v", reqs)
+	}
+}
+
 func TestGenerateWritesPlan(t *testing.T) {
 	dir := t.TempDir()
 	planDir := filepath.Join(dir, "cache")
