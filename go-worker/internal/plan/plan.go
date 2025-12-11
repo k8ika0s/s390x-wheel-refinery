@@ -65,8 +65,9 @@ func GenerateViaPython(inputDir, cacheDir, pythonVersion, platformTag string) (S
 }
 
 // Generate builds a plan using the Go resolver and writes it to cacheDir/plan.json.
-func Generate(inputDir, cacheDir, pythonVersion, platformTag string, indexURL, extraIndexURL string) (Snapshot, error) {
-	snap, err := compute(inputDir, pythonVersion, platformTag, indexURL, extraIndexURL)
+func Generate(inputDir, cacheDir, pythonVersion, platformTag, indexURL, extraIndexURL, strategy string) (Snapshot, error) {
+	resolver := &IndexClient{BaseURL: indexURL, ExtraIndexURL: extraIndexURL}
+	snap, err := computeWithResolver(inputDir, pythonVersion, platformTag, strategy, resolver)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -77,8 +78,8 @@ func Generate(inputDir, cacheDir, pythonVersion, platformTag string, indexURL, e
 	return snap, nil
 }
 
-// compute walks input wheels and decides reuse vs build for the target tags.
-func compute(inputDir, pythonVersion, platformTag, indexURL, extraIndexURL string) (Snapshot, error) {
+// computeWithResolver walks input wheels and decides reuse vs build for the target tags.
+func computeWithResolver(inputDir, pythonVersion, platformTag, strategy string, resolver versionResolver) (Snapshot, error) {
 	files, err := os.ReadDir(inputDir)
 	if err != nil {
 		return Snapshot{}, err
@@ -86,7 +87,6 @@ func compute(inputDir, pythonVersion, platformTag, indexURL, extraIndexURL strin
 	pyTag := normalizePyTag(pythonVersion)
 	var nodes []Node
 	depSeen := make(map[string]depSpec)
-	index := &IndexClient{BaseURL: indexURL, ExtraIndexURL: extraIndexURL}
 
 	seen := make(map[string]bool)
 	for _, f := range files {
@@ -111,10 +111,21 @@ func compute(inputDir, pythonVersion, platformTag, indexURL, extraIndexURL strin
 			if existing, ok := depSeen[dep.Name]; ok && existing.Version != "" {
 				continue
 			}
-			// try to resolve latest if no version
-			if dep.Version == "" {
-				if ver, err := index.ResolveLatest(dep.Name); err == nil {
-					dep.Version = ver
+			// resolve per strategy
+			if resolver != nil {
+				switch strategy {
+				case "eager":
+					if dep.Version == "" {
+						if ver, err := resolver.ResolveLatest(dep.Name); err == nil {
+							dep.Version = ver
+						}
+					}
+				default: // pinned
+					if dep.Version == "" {
+						if ver, err := resolver.ResolveLatest(dep.Name); err == nil {
+							dep.Version = ver
+						}
+					}
 				}
 			}
 			depSeen[dep.Name] = dep
@@ -248,6 +259,10 @@ func readRequiresDist(wheelPath string) ([]depSpec, error) {
 type depSpec struct {
 	Name    string
 	Version string
+}
+
+type versionResolver interface {
+	ResolveLatest(name string) (string, error)
 }
 
 func parseRequiresDist(meta string) []depSpec {

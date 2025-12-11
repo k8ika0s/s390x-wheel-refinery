@@ -36,7 +36,7 @@ func TestPlanEndpointGeneratesPlan(t *testing.T) {
 	mux.HandleFunc("/plan", func(wr http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
-			snap, err := plan.Generate(cfg.InputDir, cfg.CacheDir, cfg.PythonVersion, cfg.PlatformTag, cfg.IndexURL, cfg.ExtraIndexURL)
+			snap, err := plan.Generate(cfg.InputDir, cfg.CacheDir, cfg.PythonVersion, cfg.PlatformTag, cfg.IndexURL, cfg.ExtraIndexURL, cfg.UpgradeStrategy)
 			if err != nil {
 				wr.WriteHeader(http.StatusInternalServerError)
 				return

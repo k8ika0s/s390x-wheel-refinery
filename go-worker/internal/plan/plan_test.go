@@ -46,7 +46,7 @@ func TestComputePlanReuseVsBuild(t *testing.T) {
 	// platform-specific incompatible
 	os.WriteFile(filepath.Join(dir, "nativepkg-2.0.0-cp311-cp311-manylinux_x86_64.whl"), []byte{}, 0o644)
 
-	snap, err := compute(dir, "3.11", "manylinux2014_s390x", "", "")
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", "pinned", nil)
 	if err != nil {
 		t.Fatalf("compute failed: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestGenerateWritesPlan(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	os.WriteFile(filepath.Join(dir, "pkg-0.1.0-py3-none-any.whl"), []byte{}, 0o644)
-	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "")
+	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned")
 	if err != nil {
 		t.Fatalf("generate failed: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestGenerateWritesPlan(t *testing.T) {
 func TestComputeFixtureMatchesExpected(t *testing.T) {
 	fixtureDir := filepath.Join("testdata")
 	wheelDir := filepath.Join(fixtureDir, "wheels")
-	snap, err := compute(wheelDir, "3.11", "manylinux2014_s390x", "", "")
+	snap, err := computeWithResolver(wheelDir, "3.11", "manylinux2014_s390x", "pinned", nil)
 	if err != nil {
 		t.Fatalf("compute failed: %v", err)
 	}
