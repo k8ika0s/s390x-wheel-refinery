@@ -1,9 +1,9 @@
 # s390x Wheel Refinery
 
-Refine arbitrary Python wheels into a coherent, reproducible set of s390x wheels. Drop wheels from any platform into `/input`, get rebuilt s390x wheels plus a manifest, live logs, and a history database out of `/output`.
+Refine arbitrary Python wheels into a coherent, reproducible set of s390x wheels. Drop wheels from any platform into `/input` **or just a `requirements.txt`**, get rebuilt s390x wheels plus a manifest, live logs, and a history database out of `/output`.
 
 ## What it does
-- **Scan & plan**: Parse input wheels, reuse pure/compatible ones, and plan rebuilds for the rest (pinned, eager, or fallback-latest).
+- **Scan & plan**: Parse input wheels **or a `requirements.txt`** (unpinned specs resolved via index), reuse pure/compatible ones, and plan rebuilds for the rest (pinned, eager, or fallback-latest).
 - **Resilient builds**: Adaptive build variants (ordered by past success), timeouts, exponential backoff, per-attempt logs, and hint-derived recipe retries.
 - **Dynamic recovery**: Catalog-driven hints (dnf/apt) for missing libs/headers (AI/ML-friendly), auto-apply suggestions, and bounded dependency expansion to auto-build missing Python deps.
 - **Isolation & control**: Run in containers (Rocky/Fedora/Ubuntu presets or custom images) with CPU/mem limits; cache/output bind-mounted to keep the host clean.
@@ -13,6 +13,7 @@ Refine arbitrary Python wheels into a coherent, reproducible set of s390x wheels
 ## Quick start
 ```bash
 pip install -e .
+# Option 1: wheels in /input
 refinery \
   --input /input \
   --output /output \
@@ -22,6 +23,14 @@ refinery \
   --container-preset rocky \
   --jobs 2 \
   --auto-apply-suggestions
+
+# Option 2: requirements.txt in /input (will resolve pins and plan builds)
+cat > /input/requirements.txt <<'REQ'
+numpy==1.26.4
+pandas>=2.2
+pyarrow
+REQ
+refinery --input /input --output /output --cache /cache --python 3.11 --container-preset rocky
 ```
 - Exit code is non-zero if any requirements are missing or builds fail.
 - To reprocess failed packages queued from the web UI: `refinery worker --input /input --output /output --cache /cache --python 3.11`
@@ -38,6 +47,7 @@ refinery \
 - Containers: `--container-image`, `--container-preset {rocky,fedora,ubuntu}`, `--container-engine`, `--container-cpu`, `--container-memory`
 - Resilience: `--skip-known-failures`
 - Targeted builds: `--only name` or `--only name==version` to limit which jobs run (repeatable)
+- Requirements seed: place `requirements.txt` in `/input` or set `REQUIREMENTS_PATH`; unpinned specs (`>=`, `~=`) are resolved via `INDEX_URL`/`EXTRA_INDEX_URL`. Cap expansion with `MAX_DEPS` (default 1000). Package overrides via `PLAN_OVERRIDES_JSON`.
 - Logging: `--verbose`
 
 ## Pipeline
