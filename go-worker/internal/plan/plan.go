@@ -65,8 +65,8 @@ func GenerateViaPython(inputDir, cacheDir, pythonVersion, platformTag string) (S
 }
 
 // Generate builds a plan using the Go resolver and writes it to cacheDir/plan.json.
-func Generate(inputDir, cacheDir, pythonVersion, platformTag string) (Snapshot, error) {
-	snap, err := compute(inputDir, pythonVersion, platformTag)
+func Generate(inputDir, cacheDir, pythonVersion, platformTag string, indexURL, extraIndexURL string) (Snapshot, error) {
+	snap, err := compute(inputDir, pythonVersion, platformTag, indexURL, extraIndexURL)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -78,7 +78,7 @@ func Generate(inputDir, cacheDir, pythonVersion, platformTag string) (Snapshot, 
 }
 
 // compute walks input wheels and decides reuse vs build for the target tags.
-func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
+func compute(inputDir, pythonVersion, platformTag, indexURL, extraIndexURL string) (Snapshot, error) {
 	files, err := os.ReadDir(inputDir)
 	if err != nil {
 		return Snapshot{}, err
@@ -86,7 +86,7 @@ func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
 	pyTag := normalizePyTag(pythonVersion)
 	var nodes []Node
 	depSeen := make(map[string]depSpec)
-	index := &IndexClient{}
+	index := &IndexClient{BaseURL: indexURL, ExtraIndexURL: extraIndexURL}
 
 	seen := make(map[string]bool)
 	for _, f := range files {
