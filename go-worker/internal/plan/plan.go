@@ -85,7 +85,7 @@ func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
 	}
 	pyTag := normalizePyTag(pythonVersion)
 	var nodes []Node
-	depSeen := make(map[string]bool)
+	depSeen := make(map[string]depSpec)
 
 	seen := make(map[string]bool)
 	for _, f := range files {
@@ -104,7 +104,13 @@ func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
 
 		requires, _ := readRequiresDist(filepath.Join(inputDir, f.Name()))
 		for _, dep := range requires {
-			depSeen[dep] = true
+			if dep.Name == "" {
+				continue
+			}
+			if existing, ok := depSeen[dep.Name]; ok && existing.Version != "" {
+				continue
+			}
+			depSeen[dep.Name] = dep
 		}
 
 		if isCompatible(info, pyTag, platformTag) {
@@ -125,7 +131,7 @@ func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
 			})
 		}
 	}
-	for dep := range depSeen {
+	for dep, spec := range depSeen {
 		if dep == "" {
 			continue
 		}
@@ -133,9 +139,13 @@ func compute(inputDir, pythonVersion, platformTag string) (Snapshot, error) {
 		if seen[key] {
 			continue
 		}
+		version := spec.Version
+		if version == "" {
+			version = "latest"
+		}
 		nodes = append(nodes, Node{
 			Name:        dep,
-			Version:     "latest",
+			Version:     version,
 			PythonTag:   pyTag,
 			PlatformTag: platformTag,
 			Action:      "build",
@@ -202,7 +212,7 @@ func newRunID() string {
 }
 
 // readRequiresDist extracts Requires-Dist entries from METADATA inside a wheel.
-func readRequiresDist(wheelPath string) ([]string, error) {
+func readRequiresDist(wheelPath string) ([]depSpec, error) {
 	zr, err := zip.OpenReader(wheelPath)
 	if err != nil {
 		return nil, err
@@ -228,9 +238,14 @@ func readRequiresDist(wheelPath string) ([]string, error) {
 	return parseRequiresDist(string(meta)), nil
 }
 
-func parseRequiresDist(meta string) []string {
+type depSpec struct {
+	Name    string
+	Version string
+}
+
+func parseRequiresDist(meta string) []depSpec {
 	lines := strings.Split(meta, "\n")
-	var out []string
+	var out []depSpec
 	for _, line := range lines {
 		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "requires-dist:") {
 			parts := strings.SplitN(line, ":", 2)
@@ -238,15 +253,22 @@ func parseRequiresDist(meta string) []string {
 				continue
 			}
 			val := strings.TrimSpace(parts[1])
-			// take first token as package name
-			if idx := strings.IndexAny(val, " ("); idx != -1 {
-				val = val[:idx]
+			name := val
+			version := ""
+			if idx := strings.Index(val, " "); idx != -1 {
+				name = val[:idx]
+				rest := strings.TrimSpace(val[idx:])
+				if strings.HasPrefix(rest, "(") && strings.HasSuffix(rest, ")") {
+					rest = strings.TrimSuffix(strings.TrimPrefix(rest, "("), ")")
+					if strings.HasPrefix(rest, "==") {
+						version = strings.TrimPrefix(rest, "==")
+					}
+				}
 			}
-			val = strings.TrimSpace(val)
-			val = strings.ToLower(val)
-			val = strings.ReplaceAll(val, "_", "-")
-			if val != "" {
-				out = append(out, val)
+			name = strings.TrimSpace(name)
+			name = strings.ToLower(strings.ReplaceAll(name, "_", "-"))
+			if name != "" {
+				out = append(out, depSpec{Name: name, Version: version})
 			}
 		}
 	}

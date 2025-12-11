@@ -94,9 +94,9 @@ func TestIsCompatible(t *testing.T) {
 }
 
 func TestParseRequiresDist(t *testing.T) {
-	meta := "Metadata-Version: 2.1\nName: demo\nRequires-Dist: depA (>=1.0)\nRequires-Dist: depB\n"
+	meta := "Metadata-Version: 2.1\nName: demo\nRequires-Dist: depA (>=1.0)\nRequires-Dist: depB\nRequires-Dist: depC (==2.3.4)\n"
 	reqs := parseRequiresDist(meta)
-	if len(reqs) != 2 || reqs[0] != "depa" || reqs[1] != "depb" {
+	if len(reqs) != 3 || reqs[0].Name != "depa" || reqs[1].Name != "depb" || reqs[2].Version != "2.3.4" {
 		t.Fatalf("unexpected requires-dist parse: %+v", reqs)
 	}
 }
