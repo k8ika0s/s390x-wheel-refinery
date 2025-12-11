@@ -78,7 +78,7 @@ func Run() error {
 					return
 				}
 			}
-			snap, err := plan.Generate(cfg.InputDir, cfg.CacheDir, cfg.PythonVersion, cfg.PlatformTag)
+			snap, err := plan.Generate(cfg.InputDir, cfg.CacheDir, cfg.PythonVersion, cfg.PlatformTag, cfg.IndexURL, cfg.ExtraIndexURL, cfg.UpgradeStrategy)
 			if err != nil {
 				wr.WriteHeader(http.StatusInternalServerError)
 				_, _ = wr.Write([]byte(err.Error()))

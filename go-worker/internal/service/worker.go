@@ -46,7 +46,7 @@ func (w *Worker) LoadPlan() error {
 		snap, err = plan.Load(path)
 		if err != nil {
 			// as a last resort, generate plan in Go
-			snap, err = plan.Generate(w.Cfg.InputDir, w.Cfg.CacheDir, w.Cfg.PythonVersion, w.Cfg.PlatformTag)
+			snap, err = plan.Generate(w.Cfg.InputDir, w.Cfg.CacheDir, w.Cfg.PythonVersion, w.Cfg.PlatformTag, w.Cfg.IndexURL, w.Cfg.ExtraIndexURL, w.Cfg.UpgradeStrategy)
 			if err != nil {
 				return err
 			}

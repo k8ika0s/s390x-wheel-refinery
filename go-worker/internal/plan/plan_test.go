@@ -1,8 +1,12 @@
 package plan
 
 import (
+	"archive/zip"
+	"fmt"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,7 +50,7 @@ func TestComputePlanReuseVsBuild(t *testing.T) {
 	// platform-specific incompatible
 	os.WriteFile(filepath.Join(dir, "nativepkg-2.0.0-cp311-cp311-manylinux_x86_64.whl"), []byte{}, 0o644)
 
-	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", "pinned", nil)
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", Options{UpgradeStrategy: "pinned"}, nil)
 	if err != nil {
 		t.Fatalf("compute failed: %v", err)
 	}
@@ -96,8 +100,22 @@ func TestIsCompatible(t *testing.T) {
 func TestParseRequiresDist(t *testing.T) {
 	meta := "Metadata-Version: 2.1\nName: demo\nRequires-Dist: depA (>=1.0)\nRequires-Dist: depB\nRequires-Dist: depC (==2.3.4)\n"
 	reqs := parseRequiresDist(meta)
-	if len(reqs) != 3 || reqs[0].Name != "depa" || reqs[1].Name != "depb" || reqs[2].Version != "2.3.4" {
+	if len(reqs) != 3 || reqs[0].Name != "depa" || reqs[1].Name != "depb" || reqs[2].Version != "==2.3.4" {
 		t.Fatalf("unexpected requires-dist parse: %+v", reqs)
+	}
+}
+
+func TestParseRequiresDistExtrasAndMarkers(t *testing.T) {
+	meta := "Requires-Dist: Fancy_Pkg[extra] (>=2.0); python_version >= \"3.8\"\nRequires-Dist: otherpkg~=1.4"
+	reqs := parseRequiresDist(meta)
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 deps, got %d", len(reqs))
+	}
+	if reqs[0].Name != "fancy-pkg" || reqs[0].Version != ">=2.0" {
+		t.Fatalf("unexpected first dep: %+v", reqs[0])
+	}
+	if reqs[1].Name != "otherpkg" || reqs[1].Version != "~=1.4" {
+		t.Fatalf("unexpected second dep: %+v", reqs[1])
 	}
 }
 
@@ -120,7 +138,7 @@ func TestGenerateWritesPlan(t *testing.T) {
 func TestComputeFixtureMatchesExpected(t *testing.T) {
 	fixtureDir := filepath.Join("testdata")
 	wheelDir := filepath.Join(fixtureDir, "wheels")
-	snap, err := computeWithResolver(wheelDir, "3.11", "manylinux2014_s390x", "pinned", nil)
+	snap, err := computeWithResolver(wheelDir, "3.11", "manylinux2014_s390x", Options{UpgradeStrategy: "pinned"}, nil)
 	if err != nil {
 		t.Fatalf("compute failed: %v", err)
 	}
@@ -143,5 +161,200 @@ func TestComputeFixtureMatchesExpected(t *testing.T) {
 		if !found {
 			t.Fatalf("expected node not found: %+v", exp)
 		}
+	}
+}
+
+func TestJSONShapeMatchesPythonSnapshot(t *testing.T) {
+	snap := Snapshot{
+		RunID: "abc",
+		Plan: []Node{
+			{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"},
+		},
+	}
+	data, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := decoded["run_id"]; !ok {
+		t.Fatalf("run_id missing")
+	}
+	planVal, ok := decoded["plan"]
+	if !ok {
+		t.Fatalf("plan missing")
+	}
+	arr, ok := planVal.([]any)
+	if !ok || len(arr) != 1 {
+		t.Fatalf("plan array wrong: %#v", planVal)
+	}
+	node, ok := arr[0].(map[string]any)
+	if !ok {
+		t.Fatalf("node not object: %#v", arr[0])
+	}
+	required := []string{"name", "version", "python_tag", "platform_tag", "action"}
+	for _, k := range required {
+		if _, ok := node[k]; !ok {
+			t.Fatalf("missing field %s", k)
+		}
+	}
+	if len(node) != len(required) {
+		t.Fatalf("unexpected extra fields in node: %#v", node)
+	}
+}
+
+type mockResolver struct {
+	versions map[string]string
+}
+
+func (m *mockResolver) ResolveLatest(name string) (string, error) {
+	if v, ok := m.versions[name]; ok {
+		return v, nil
+	}
+	return "", fmt.Errorf("not found")
+}
+
+func writeWheelWithMeta(t *testing.T, dir, name, meta string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	zf, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create wheel: %v", err)
+	}
+	zipw := zip.NewWriter(zf)
+	metaFile, err := zipw.Create("demo-0.1.0.dist-info/METADATA")
+	if err != nil {
+		t.Fatalf("create meta: %v", err)
+	}
+	if _, err := metaFile.Write([]byte(meta)); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+	if err := zipw.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+	if err := zf.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+	return path
+}
+
+func TestUpgradeStrategyEagerOverridesPins(t *testing.T) {
+	dir := t.TempDir()
+	meta := "Metadata-Version: 2.1\nName: demo\nRequires-Dist: depA (==1.0.0)\nRequires-Dist: depB\n"
+	writeWheelWithMeta(t, dir, "demo-0.1.0-py3-none-any.whl", meta)
+
+	resolver := &mockResolver{versions: map[string]string{"depa": "9.9.9", "depb": "2.0.0"}}
+
+	pinnedSnap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", Options{UpgradeStrategy: "pinned"}, resolver)
+	if err != nil {
+		t.Fatalf("pinned compute: %v", err)
+	}
+	eagerSnap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", Options{UpgradeStrategy: "eager"}, resolver)
+	if err != nil {
+		t.Fatalf("eager compute: %v", err)
+	}
+
+	find := func(plan Snapshot, name string) Node {
+		for _, n := range plan.Plan {
+			if n.Name == name {
+				return n
+			}
+		}
+		return Node{}
+	}
+
+	if find(pinnedSnap, "depa").Version != "==1.0.0" {
+		t.Fatalf("pinned should keep depA pin, got %s", find(pinnedSnap, "depa").Version)
+	}
+	if find(pinnedSnap, "depb").Version != "2.0.0" {
+		t.Fatalf("pinned should resolve depB latest, got %s", find(pinnedSnap, "depb").Version)
+	}
+	if find(eagerSnap, "depa").Version != "9.9.9" {
+		t.Fatalf("eager should upgrade depA, got %s", find(eagerSnap, "depa").Version)
+	}
+	if find(eagerSnap, "depb").Version != "2.0.0" {
+		t.Fatalf("eager should use latest for depB, got %s", find(eagerSnap, "depb").Version)
+	}
+}
+
+func TestMissingVersionFallsBackToLatestOnResolverFailure(t *testing.T) {
+	dir := t.TempDir()
+	meta := "Requires-Dist: missingdep"
+	writeWheelWithMeta(t, dir, "demo-0.1.0-py3-none-any.whl", meta)
+
+	resolver := &mockResolver{versions: map[string]string{}}
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", Options{UpgradeStrategy: "pinned"}, resolver)
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	found := false
+	for _, n := range snap.Plan {
+		if n.Name == "missingdep" {
+			found = true
+			if n.Version != "latest" {
+				t.Fatalf("expected fallback latest, got %s", n.Version)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missingdep not planned")
+	}
+}
+
+func TestMaxDepsLimit(t *testing.T) {
+	dir := t.TempDir()
+	var metaLines []string
+	for i := 0; i < 50; i++ {
+		metaLines = append(metaLines, fmt.Sprintf("Requires-Dist: dep%d", i))
+	}
+	meta := strings.Join(metaLines, "\n")
+	writeWheelWithMeta(t, dir, "demo-0.1.0-py3-none-any.whl", meta)
+
+	opts := Options{UpgradeStrategy: "pinned", MaxDeps: 10}
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", opts, &mockResolver{})
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	countDeps := 0
+	for _, n := range snap.Plan {
+		if n.Name == "demo" {
+			continue
+		}
+		countDeps++
+	}
+	if countDeps != 10 {
+		t.Fatalf("expected 10 deps due to cap, got %d", countDeps)
+	}
+}
+
+func TestPackageOverridesApplyToTopLevelAndDeps(t *testing.T) {
+	dir := t.TempDir()
+	meta := "Requires-Dist: depA\n"
+	writeWheelWithMeta(t, dir, "demo-0.1.0-py3-none-any.whl", meta)
+
+	overrides := map[string]string{
+		"demo": "9.9.9",
+		"depa": "8.8.8",
+	}
+	opts := Options{UpgradeStrategy: "pinned", PackageOverrides: overrides}
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", opts, &mockResolver{})
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	find := func(name string) (Node, bool) {
+		for _, n := range snap.Plan {
+			if n.Name == name {
+				return n, true
+			}
+		}
+		return Node{}, false
+	}
+	if n, ok := find("demo"); !ok || n.Version != "9.9.9" || n.Action != "build" {
+		t.Fatalf("override for demo not applied: %+v", n)
+	}
+	if n, ok := find("depa"); !ok || n.Version != "8.8.8" {
+		t.Fatalf("override for depA not applied: %+v", n)
 	}
 }

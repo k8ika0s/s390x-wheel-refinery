@@ -28,6 +28,15 @@ type Snapshot struct {
 	Plan  []Node `json:"plan"`
 }
 
+// Options control resolver behavior.
+type Options struct {
+	IndexURL         string
+	ExtraIndexURL    string
+	UpgradeStrategy  string // pinned (default) or eager
+	MaxDeps          int    // safety cap for dependency expansion
+	PackageOverrides map[string]string
+}
+
 // Write writes a snapshot to the given path.
 func Write(path string, snap Snapshot) error {
 	data, err := json.MarshalIndent(snap, "", "  ")
@@ -65,9 +74,15 @@ func GenerateViaPython(inputDir, cacheDir, pythonVersion, platformTag string) (S
 }
 
 // Generate builds a plan using the Go resolver and writes it to cacheDir/plan.json.
-func Generate(inputDir, cacheDir, pythonVersion, platformTag, indexURL, extraIndexURL, strategy string) (Snapshot, error) {
-	resolver := &IndexClient{BaseURL: indexURL, ExtraIndexURL: extraIndexURL}
-	snap, err := computeWithResolver(inputDir, pythonVersion, platformTag, strategy, resolver)
+func Generate(inputDir, cacheDir, pythonVersion, platformTag string, indexURL, extraIndexURL, strategy string) (Snapshot, error) {
+	opts := Options{
+		IndexURL:         indexURL,
+		ExtraIndexURL:    extraIndexURL,
+		UpgradeStrategy:  strategy,
+		MaxDeps:          1000,
+		PackageOverrides: loadOverridesFromEnv(),
+	}
+	snap, err := computeWithResolver(inputDir, pythonVersion, platformTag, opts, &IndexClient{BaseURL: indexURL, ExtraIndexURL: extraIndexURL})
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -79,7 +94,10 @@ func Generate(inputDir, cacheDir, pythonVersion, platformTag, indexURL, extraInd
 }
 
 // computeWithResolver walks input wheels and decides reuse vs build for the target tags.
-func computeWithResolver(inputDir, pythonVersion, platformTag, strategy string, resolver versionResolver) (Snapshot, error) {
+func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Options, resolver versionResolver) (Snapshot, error) {
+	if opts.MaxDeps <= 0 {
+		opts.MaxDeps = 1000
+	}
 	files, err := os.ReadDir(inputDir)
 	if err != nil {
 		return Snapshot{}, err
@@ -97,39 +115,46 @@ func computeWithResolver(inputDir, pythonVersion, platformTag, strategy string, 
 		if err != nil {
 			continue
 		}
-		key := info.Name + "::" + info.Version
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-
 		requires, _ := readRequiresDist(filepath.Join(inputDir, f.Name()))
 		for _, dep := range requires {
 			if dep.Name == "" {
 				continue
 			}
+			if len(depSeen) >= opts.MaxDeps {
+				break
+			}
 			if existing, ok := depSeen[dep.Name]; ok && existing.Version != "" {
 				continue
 			}
 			// resolve per strategy
-			if resolver != nil {
-				switch strategy {
-				case "eager":
-					if dep.Version == "" {
-						if ver, err := resolver.ResolveLatest(dep.Name); err == nil {
-							dep.Version = ver
-						}
-					}
-				default: // pinned
-					if dep.Version == "" {
-						if ver, err := resolver.ResolveLatest(dep.Name); err == nil {
-							dep.Version = ver
-						}
-					}
+			if resolver != nil && dep.Version == "" {
+				if ver, err := resolver.ResolveLatest(dep.Name); err == nil {
+					dep.Version = ver
 				}
 			}
 			depSeen[dep.Name] = dep
 		}
+
+		if overrideVer, ok := opts.PackageOverrides[normalizeName(info.Name)]; ok && overrideVer != "" {
+			ver := strings.TrimPrefix(strings.TrimSpace(overrideVer), "==")
+			key := info.Name + "::" + ver
+			if !seen[key] {
+				seen[key] = true
+				nodes = append(nodes, Node{
+					Name:        info.Name,
+					Version:     ver,
+					PythonTag:   pyTag,
+					PlatformTag: platformTag,
+					Action:      "build",
+				})
+			}
+			continue
+		}
+		key := info.Name + "::" + info.Version
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 
 		if isCompatible(info, pyTag, platformTag) {
 			nodes = append(nodes, Node{
@@ -158,8 +183,23 @@ func computeWithResolver(inputDir, pythonVersion, platformTag, strategy string, 
 			continue
 		}
 		version := spec.Version
+		if ov, ok := opts.PackageOverrides[normalizeName(dep)]; ok && ov != "" {
+			version = strings.TrimPrefix(strings.TrimSpace(ov), "==")
+		}
 		if version == "" {
-			version = "latest"
+			if resolver != nil {
+				if ver, err := resolver.ResolveLatest(dep); err == nil {
+					version = ver
+				}
+			}
+			if version == "" {
+				version = "latest"
+			}
+		}
+		if opts.UpgradeStrategy == "eager" && resolver != nil {
+			if ver, err := resolver.ResolveLatest(dep); err == nil && ver != "" {
+				version = ver
+			}
 		}
 		nodes = append(nodes, Node{
 			Name:        dep,
@@ -265,6 +305,32 @@ type versionResolver interface {
 	ResolveLatest(name string) (string, error)
 }
 
+func normalizeName(name string) string {
+	if name == "" {
+		return ""
+	}
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "_", "-"))
+}
+
+func loadOverridesFromEnv() map[string]string {
+	raw := os.Getenv("PLAN_OVERRIDES_JSON")
+	if raw == "" {
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		n := normalizeName(k)
+		if n != "" {
+			out[n] = strings.TrimSpace(v)
+		}
+	}
+	return out
+}
+
 func parseRequiresDist(meta string) []depSpec {
 	lines := strings.Split(meta, "\n")
 	var out []depSpec
@@ -275,17 +341,46 @@ func parseRequiresDist(meta string) []depSpec {
 				continue
 			}
 			val := strings.TrimSpace(parts[1])
+			// Drop environment markers after ';'
+			if semi := strings.Index(val, ";"); semi != -1 {
+				val = strings.TrimSpace(val[:semi])
+			}
+			raw := val
 			name := val
 			version := ""
-			if idx := strings.Index(val, " "); idx != -1 {
-				name = val[:idx]
-				rest := strings.TrimSpace(val[idx:])
-				if strings.HasPrefix(rest, "(") && strings.HasSuffix(rest, ")") {
-					rest = strings.TrimSuffix(strings.TrimPrefix(rest, "("), ")")
-					if strings.HasPrefix(rest, "==") {
-						version = strings.TrimPrefix(rest, "==")
+			// Pull out spec in parentheses, e.g., (==1.2.3) or (>=1.0)
+			if idx := strings.Index(raw, "("); idx != -1 {
+				name = strings.TrimSpace(raw[:idx])
+				spec := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(raw[idx:]), "("), ")")
+				spec = strings.TrimSpace(spec)
+				if strings.HasPrefix(spec, "==") || strings.HasPrefix(spec, ">=") || strings.HasPrefix(spec, "~=") {
+					version = spec
+				}
+			}
+			// Handle simple whitespace-separated version like "pkg ==1.2.3"
+			if version == "" {
+				fields := strings.Fields(raw)
+				if len(fields) >= 2 {
+					name = fields[0]
+					spec := strings.TrimSpace(fields[1])
+					if strings.HasPrefix(spec, "==") || strings.HasPrefix(spec, ">=") || strings.HasPrefix(spec, "~=") {
+						version = spec
 					}
 				}
+			}
+			// Handle inline operator without whitespace, e.g., otherpkg~=1.4
+			if version == "" {
+				for _, op := range []string{"==", ">=", "~="} {
+					if idx := strings.Index(raw, op); idx > 0 {
+						name = strings.TrimSpace(raw[:idx])
+						version = raw[idx:]
+						break
+					}
+				}
+			}
+			// Strip extras [extra] from the name after spec parsing
+			if br := strings.Index(name, "["); br != -1 {
+				name = strings.TrimSpace(name[:br])
 			}
 			name = strings.TrimSpace(name)
 			name = strings.ToLower(strings.ReplaceAll(name, "_", "-"))
