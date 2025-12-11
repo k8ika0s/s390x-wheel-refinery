@@ -34,10 +34,13 @@ type Snapshot struct {
 type Options struct {
 	IndexURL         string
 	ExtraIndexURL    string
+	IndexUsername    string
+	IndexPassword    string
 	UpgradeStrategy  string // pinned (default) or eager
 	MaxDeps          int    // safety cap for dependency expansion
 	PackageOverrides map[string]string
 	RequirementsPath string
+	ConstraintsPath  string
 }
 
 // Write writes a snapshot to the given path.
@@ -85,12 +88,20 @@ func Generate(inputDir, cacheDir, pythonVersion, platformTag string, indexURL, e
 	opts := Options{
 		IndexURL:         indexURL,
 		ExtraIndexURL:    extraIndexURL,
+		IndexUsername:    os.Getenv("INDEX_USERNAME"),
+		IndexPassword:    os.Getenv("INDEX_PASSWORD"),
 		UpgradeStrategy:  strategy,
 		MaxDeps:          maxDeps,
 		PackageOverrides: loadOverridesFromEnv(),
 		RequirementsPath: filepath.Join(inputDir, "requirements.txt"),
+		ConstraintsPath:  filepath.Join(inputDir, "constraints.txt"),
 	}
-	snap, err := computeWithResolver(inputDir, pythonVersion, platformTag, opts, &IndexClient{BaseURL: indexURL, ExtraIndexURL: extraIndexURL})
+	snap, err := computeWithResolver(inputDir, pythonVersion, platformTag, opts, &IndexClient{
+		BaseURL:       indexURL,
+		ExtraIndexURL: extraIndexURL,
+		Username:      opts.IndexUsername,
+		Password:      opts.IndexPassword,
+	})
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -107,6 +118,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		opts.MaxDeps = 1000
 	}
 	reqs := loadRequirements(inputDir, opts.RequirementsPath)
+	constraints := loadConstraints(opts.ConstraintsPath)
 	files, err := os.ReadDir(inputDir)
 	if err != nil {
 		return Snapshot{}, err
@@ -133,6 +145,9 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			continue
 		}
 		version := r.Version
+		if cv, ok := constraints[name]; ok && cv != "" {
+			version = cv
+		}
 		if ov, ok := opts.PackageOverrides[name]; ok && ov != "" {
 			version = strings.TrimPrefix(strings.TrimSpace(ov), "==")
 		}
@@ -240,6 +255,9 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		version := spec.Version
 		if ov, ok := opts.PackageOverrides[normalizeName(dep)]; ok && ov != "" {
 			version = strings.TrimPrefix(strings.TrimSpace(ov), "==")
+		}
+		if cv, ok := constraints[normalizeName(dep)]; ok && cv != "" {
+			version = cv
 		}
 		if version == "" {
 			if resolver != nil {
@@ -420,6 +438,9 @@ func loadRequirements(inputDir, path string) []depSpec {
 	} else {
 		reqPath = filepath.Join(inputDir, "requirements.txt")
 	}
+	if _, err := os.Stat(reqPath); err != nil {
+		return nil
+	}
 	data, err := os.ReadFile(filepath.Clean(reqPath))
 	if err != nil {
 		return nil
@@ -429,6 +450,9 @@ func loadRequirements(inputDir, path string) []depSpec {
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "-c ") || strings.HasPrefix(line, "--constraint") {
 			continue
 		}
 		// strip inline comments
@@ -452,6 +476,39 @@ func loadRequirements(inputDir, path string) []depSpec {
 			continue
 		}
 		out = append(out, depSpec{Name: name, Version: version})
+	}
+	return out
+}
+
+func loadConstraints(path string) map[string]string {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(data), "\n")
+	out := make(map[string]string)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name := line
+		version := ""
+		for _, op := range []string{"==", ">=", "~="} {
+			if idx := strings.Index(line, op); idx > 0 {
+				name = strings.TrimSpace(line[:idx])
+				version = strings.TrimPrefix(line[idx:], "==")
+				break
+			}
+		}
+		name = normalizeName(name)
+		if name == "" {
+			continue
+		}
+		out[name] = version
 	}
 	return out
 }

@@ -42,7 +42,7 @@ Then run the React dashboard pointing at that API. From `ui/`, run `npm install 
 - `--skip-known-failures`: Don’t retry packages that already failed.
 - `--attempt-timeout`, `--max-attempts`, `--attempt-backoff-base/max`: Control how long/ how many times to try and how long to wait between tries.
 - `--schedule shortest-first`: Build shorter packages first using past timing data.
-- **requirements.txt support**: Put `requirements.txt` in `/input` (or set `REQUIREMENTS_PATH`) to seed the plan. Unpinned specs (`>=`, `~=`) will be resolved via your index; hard pins are honored. Limit dependency expansion with `MAX_DEPS` (default 1000). Per-package overrides via `PLAN_OVERRIDES_JSON`.
+- **requirements.txt support**: Put `requirements.txt` in `/input` (or set `REQUIREMENTS_PATH`) to seed the plan. Optional `CONSTRAINTS_PATH` to force pins. Unpinned specs (`>=`, `~=`) are resolved via your index (`INDEX_URL`/`EXTRA_INDEX_URL`, with `INDEX_USERNAME/PASSWORD` for private repos). Limit dependency expansion with `MAX_DEPS` (default 1000). Per-package overrides via `PLAN_OVERRIDES_JSON`.
 
 ## Where things go
 - New s390x wheels: `/output`

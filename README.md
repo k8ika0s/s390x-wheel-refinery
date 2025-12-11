@@ -47,7 +47,7 @@ refinery --input /input --output /output --cache /cache --python 3.11 --containe
 - Containers: `--container-image`, `--container-preset {rocky,fedora,ubuntu}`, `--container-engine`, `--container-cpu`, `--container-memory`
 - Resilience: `--skip-known-failures`
 - Targeted builds: `--only name` or `--only name==version` to limit which jobs run (repeatable)
-- Requirements seed: place `requirements.txt` in `/input` or set `REQUIREMENTS_PATH`; unpinned specs (`>=`, `~=`) are resolved via `INDEX_URL`/`EXTRA_INDEX_URL`. Cap expansion with `MAX_DEPS` (default 1000). Package overrides via `PLAN_OVERRIDES_JSON`.
+- Requirements seed: place `requirements.txt` in `/input` or set `REQUIREMENTS_PATH`; optional `CONSTRAINTS_PATH` honors pins. Unpinned specs (`>=`, `~=`) are resolved via `INDEX_URL`/`EXTRA_INDEX_URL` (supports `INDEX_USERNAME/PASSWORD`). Cap expansion with `MAX_DEPS` (default 1000). Package overrides via `PLAN_OVERRIDES_JSON`.
 - Logging: `--verbose`
 
 ## Pipeline
