@@ -1,6 +1,6 @@
 flowchart TD
     subgraph Compose
-        API[api service\nFastAPI + worker trigger]
+        API[api service\nGo control-plane + worker trigger]
         WORKER[worker service\noptional webhook]
         UI[ui service\nReact SPA]
         VOL_IN[/input/]
