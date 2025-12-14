@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 	"os"
 	"path/filepath"
@@ -212,6 +213,67 @@ func TestRepairNodesFollowWheels(t *testing.T) {
 		if !found {
 			t.Fatalf("repair node input not a wheel: %+v", r.Inputs[0])
 		}
+	}
+}
+
+func TestCASOverridesActionsToReuse(t *testing.T) {
+	dir := t.TempDir()
+	reqPath := filepath.Join(dir, "requirements.txt")
+	if err := os.WriteFile(reqPath, []byte("demo==1.0.0"), 0o644); err != nil {
+		t.Fatalf("write requirements: %v", err)
+	}
+	cat := &pack.Catalog{
+		Packs: map[string]pack.PackDef{
+			"openssl": {Name: "openssl", Version: "3.0"},
+		},
+		Rules: []pack.Rule{{PackagePattern: "demo", Packs: []string{"openssl"}}},
+	}
+	rtKey := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: "3.11"}
+	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: rtKey.Digest()}
+	packKey := artifact.PackKey{Arch: "s390x", PolicyBaseDigest: "", Name: "openssl", Version: "3.0"}
+	packID := artifact.ID{Type: artifact.PackType, Digest: packKey.Digest()}
+	wk := artifact.WheelKey{
+		SourceDigest:  sourceDigest("demo", "1.0.0"),
+		PyTag:         "cp311",
+		PlatformTag:   "manylinux2014_s390x",
+		RuntimeDigest: rtID.Digest,
+		PackDigests:   []string{packID.Digest},
+	}
+	wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+	repairKey := artifact.RepairKey{InputWheelDigest: wID.Digest}
+	repairID := artifact.ID{Type: artifact.RepairType, Digest: repairKey.Digest()}
+
+	store := cas.NewMemoryStore()
+	store.Add(rtID)
+	store.Add(packID)
+	store.Add(wID)
+	store.Add(repairID)
+
+	opts := Options{UpgradeStrategy: "pinned", RequirementsPath: reqPath, PackCatalog: cat, ArtifactStore: store}
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", opts, nil)
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+
+	find := func(id artifact.ID) (DAGNode, bool) {
+		for _, n := range snap.DAG {
+			if n.ID == id {
+				return n, true
+			}
+		}
+		return DAGNode{}, false
+	}
+	if n, ok := find(rtID); !ok || n.Action != "reuse" {
+		t.Fatalf("runtime not marked reuse: %+v", n)
+	}
+	if n, ok := find(packID); !ok || n.Action != "reuse" {
+		t.Fatalf("pack not marked reuse: %+v", n)
+	}
+	if n, ok := find(wID); !ok || n.Action != "reuse" {
+		t.Fatalf("wheel not marked reuse: %+v", n)
+	}
+	if n, ok := find(repairID); !ok || n.Action != "reuse" {
+		t.Fatalf("repair not marked reuse: %+v", n)
 	}
 }
 

@@ -3,11 +3,13 @@ package plan
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 	"log"
 	"math/rand"
@@ -49,6 +51,7 @@ type Options struct {
 	RequirementsPath string
 	ConstraintsPath  string
 	PackCatalog      *pack.Catalog
+	ArtifactStore    cas.Store
 }
 
 // Write writes a snapshot to the given path.
@@ -141,6 +144,11 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 	if opts.MaxDeps <= 0 {
 		opts.MaxDeps = 1000
 	}
+	store := opts.ArtifactStore
+	if store == nil {
+		store = cas.NullStore{}
+	}
+	ctx := context.TODO()
 	reqs := loadRequirements(inputDir, opts.RequirementsPath)
 	constraints := loadConstraints(opts.ConstraintsPath)
 	files, err := os.ReadDir(inputDir)
@@ -157,21 +165,29 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			PolicyRulesDigest: "",
 		}
 		repairID := artifact.ID{Type: artifact.RepairType, Digest: repairKey.Digest()}
+		action := "build"
+		if ok, _ := store.Has(ctx, repairID); ok {
+			action = "reuse"
+		}
 		dagNodes = append(dagNodes, DAGNode{
 			ID:       repairID,
 			Type:     NodeRepair,
 			Inputs:   []artifact.ID{wheelID},
 			Metadata: meta,
-			Action:   "build",
+			Action:   action,
 		})
 	}
 	// Runtime node (shallow DAG for now)
 	rtKey := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: pythonVersion}
 	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: rtKey.Digest()}
+	rtAction := "build"
+	if ok, _ := store.Has(ctx, rtID); ok {
+		rtAction = "reuse"
+	}
 	dagNodes = append(dagNodes, DAGNode{
 		ID:     rtID,
 		Type:   NodeRuntime,
-		Action: "reuse",
+		Action: rtAction,
 		Metadata: map[string]any{
 			"python_version": pythonVersion,
 			"python_tag":     pyTag,
@@ -196,6 +212,10 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			id := artifact.ID{Type: artifact.PackType, Digest: key.Digest()}
 			if _, ok := packSeen[id.Digest]; !ok {
 				packSeen[id.Digest] = def
+				action := "build"
+				if ok, _ := store.Has(ctx, id); ok {
+					action = "reuse"
+				}
 				meta := map[string]any{
 					"name": def.Name,
 				}
@@ -212,7 +232,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 					ID:       id,
 					Type:     NodePack,
 					Metadata: meta,
-					Action:   "build", // resolver assumes packs are built unless CAS lookup says otherwise
+					Action:   action,
 				})
 			}
 			ids = append(ids, id)
@@ -279,6 +299,10 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			PackDigests:   packDigests,
 		}
 		wheelID := artifact.ID{Type: artifact.WheelType, Digest: wheelKey.Digest()}
+		wheelAction := "build"
+		if ok, _ := store.Has(ctx, wheelID); ok {
+			wheelAction = "reuse"
+		}
 		dagNodes = append(dagNodes, DAGNode{
 			ID:     wheelID,
 			Type:   NodeWheel,
@@ -290,7 +314,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				"python_tag":     pyTag,
 				"platform_tag":   platformTag,
 			},
-			Action: "build",
+			Action: wheelAction,
 		})
 		addRepair(wheelID, map[string]any{"wheel_name": name, "wheel_version": version})
 	}
@@ -350,6 +374,10 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 					PackDigests:   packDigests,
 				}
 				wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+				wheelAction := "build"
+				if ok, _ := store.Has(ctx, wID); ok {
+					wheelAction = "reuse"
+				}
 				dagNodes = append(dagNodes, DAGNode{
 					ID:     wID,
 					Type:   NodeWheel,
@@ -361,7 +389,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 						"python_tag":     pyTag,
 						"platform_tag":   platformTag,
 					},
-					Action: "build",
+					Action: wheelAction,
 				})
 				addRepair(wID, map[string]any{"wheel_name": info.Name, "wheel_version": ver})
 			}
@@ -385,6 +413,10 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			})
 			wk := artifact.WheelKey{SourceDigest: sourceDigest(info.Name, info.Version), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
 			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+			wheelAction := "reuse"
+			if ok, _ := store.Has(ctx, wID); ok {
+				wheelAction = "reuse"
+			}
 			dagNodes = append(dagNodes, DAGNode{
 				ID:     wID,
 				Type:   NodeWheel,
@@ -396,7 +428,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 					"python_tag":     pyTag,
 					"platform_tag":   platformTag,
 				},
-				Action: "reuse",
+				Action: wheelAction,
 			})
 			addRepair(wID, map[string]any{"wheel_name": info.Name, "wheel_version": info.Version})
 		} else {
@@ -410,6 +442,10 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			})
 			wk := artifact.WheelKey{SourceDigest: sourceDigest(info.Name, info.Version), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
 			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+			wheelAction := "build"
+			if ok, _ := store.Has(ctx, wID); ok {
+				wheelAction = "reuse"
+			}
 			dagNodes = append(dagNodes, DAGNode{
 				ID:     wID,
 				Type:   NodeWheel,
@@ -421,7 +457,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 					"python_tag":     pyTag,
 					"platform_tag":   platformTag,
 				},
-				Action: "build",
+				Action: wheelAction,
 			})
 			addRepair(wID, map[string]any{"wheel_name": info.Name, "wheel_version": info.Version})
 		}
@@ -472,6 +508,10 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		})
 		wk := artifact.WheelKey{SourceDigest: sourceDigest(dep, version), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
 		wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+		wheelAction := "build"
+		if ok, _ := store.Has(ctx, wID); ok {
+			wheelAction = "reuse"
+		}
 		dagNodes = append(dagNodes, DAGNode{
 			ID:     wID,
 			Type:   NodeWheel,
@@ -483,7 +523,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				"python_tag":     pyTag,
 				"platform_tag":   platformTag,
 			},
-			Action: "build",
+			Action: wheelAction,
 		})
 		addRepair(wID, map[string]any{"wheel_name": dep, "wheel_version": version})
 	}
