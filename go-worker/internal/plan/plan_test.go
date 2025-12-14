@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,6 +114,64 @@ func TestComputePlanIncludesDAG(t *testing.T) {
 	}
 	if !wheelFound {
 		t.Fatalf("wheel node missing from DAG")
+	}
+}
+
+func TestPackCatalogAddsPackNodesToDAG(t *testing.T) {
+	dir := t.TempDir()
+	reqPath := filepath.Join(dir, "requirements.txt")
+	if err := os.WriteFile(reqPath, []byte("demo==1.0.0"), 0o644); err != nil {
+		t.Fatalf("write requirements: %v", err)
+	}
+	cat := &pack.Catalog{
+		Packs: map[string]pack.PackDef{
+			"openssl": {Name: "openssl", Version: "3.0", RecipeDigest: "sha256:abc"},
+		},
+		Rules: []pack.Rule{
+			{PackagePattern: "demo", Packs: []string{"openssl"}},
+		},
+	}
+	opts := Options{UpgradeStrategy: "pinned", RequirementsPath: reqPath, PackCatalog: cat}
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", opts, nil)
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	packKey := artifact.PackKey{Arch: "s390x", PolicyBaseDigest: "", Name: "openssl", Version: "3.0", RecipeDigest: "sha256:abc"}
+	packID := artifact.ID{Type: artifact.PackType, Digest: packKey.Digest()}
+	rtKey := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: "3.11"}
+	rtDigest := rtKey.Digest()
+	wk := artifact.WheelKey{
+		SourceDigest:  sourceDigest("demo", "1.0.0"),
+		PyTag:         "cp311",
+		PlatformTag:   "manylinux2014_s390x",
+		RuntimeDigest: rtDigest,
+		PackDigests:   []string{packID.Digest},
+	}
+	wantWheel := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+
+	var sawPack, sawWheel bool
+	for _, n := range snap.DAG {
+		if n.ID == packID {
+			sawPack = true
+		}
+		if n.ID == wantWheel {
+			sawWheel = true
+			var foundPack bool
+			for _, inp := range n.Inputs {
+				if inp == packID {
+					foundPack = true
+				}
+			}
+			if !foundPack {
+				t.Fatalf("wheel node missing pack input: %+v", n.Inputs)
+			}
+		}
+	}
+	if !sawPack {
+		t.Fatalf("pack node not present in DAG")
+	}
+	if !sawWheel {
+		t.Fatalf("wheel node with pack input not present")
 	}
 }
 
