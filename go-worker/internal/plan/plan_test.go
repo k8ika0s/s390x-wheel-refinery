@@ -73,7 +73,7 @@ func TestComputePlanReuseVsBuild(t *testing.T) {
 func TestLoadWriteRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plan.json")
-	snap := Snapshot{RunID: "abc", Plan: []Node{{Name: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}}}
+	snap := Snapshot{RunID: "abc", Plan: []FlatNode{{Name: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}}}
 	if err := Write(path, snap); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestComputeFixtureMatchesExpected(t *testing.T) {
 func TestJSONShapeMatchesPythonSnapshot(t *testing.T) {
 	snap := Snapshot{
 		RunID: "abc",
-		Plan: []Node{
+		Plan: []FlatNode{
 			{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PythonVersion: "3.11", PlatformTag: "manylinux2014_s390x", Action: "build"},
 		},
 	}
@@ -267,13 +267,13 @@ func TestUpgradeStrategyEagerOverridesPins(t *testing.T) {
 		t.Fatalf("eager compute: %v", err)
 	}
 
-	find := func(plan Snapshot, name string) Node {
+	find := func(plan Snapshot, name string) FlatNode {
 		for _, n := range plan.Plan {
 			if n.Name == name {
 				return n
 			}
 		}
-		return Node{}
+		return FlatNode{}
 	}
 
 	if find(pinnedSnap, "depa").Version != "==1.0.0" {
@@ -344,13 +344,13 @@ func TestPackageOverridesApplyToTopLevelAndDeps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compute failed: %v", err)
 	}
-	find := func(name string) (Node, bool) {
+	find := func(name string) (FlatNode, bool) {
 		for _, n := range snap.Plan {
 			if n.Name == name {
 				return n, true
 			}
 		}
-		return Node{}, false
+		return FlatNode{}, false
 	}
 	if n, ok := find("demo"); !ok || n.Version != "9.9.9" || n.Action != "build" {
 		t.Fatalf("override for demo not applied: %+v", n)

@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-// Node represents a plan entry.
-type Node struct {
+// FlatNode represents a legacy plan entry.
+type FlatNode struct {
 	Name          string `json:"name"`
 	Version       string `json:"version"`
 	PythonVersion string `json:"python_version,omitempty"`
@@ -27,8 +27,10 @@ type Node struct {
 
 // Snapshot is the structure stored in plan.json.
 type Snapshot struct {
-	RunID string `json:"run_id"`
-	Plan  []Node `json:"plan"`
+	RunID string     `json:"run_id"`
+	Plan  []FlatNode `json:"plan"`
+	// DAG will carry richer artifact nodes when populated by the planner (optional for now).
+	DAG []DAGNode `json:"dag,omitempty"`
 }
 
 // Options control resolver behavior.
@@ -141,7 +143,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		return Snapshot{}, err
 	}
 	pyTag := normalizePyTag(pythonVersion)
-	var nodes []Node
+	var nodes []FlatNode
 	depSeen := make(map[string]depSpec)
 	var wheelCount int
 	var depTruncated bool
@@ -184,7 +186,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			continue
 		}
 		seen[key] = true
-		nodes = append(nodes, Node{
+		nodes = append(nodes, FlatNode{
 			Name:          name,
 			Version:       version,
 			PythonVersion: pythonVersion,
@@ -232,7 +234,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			key := info.Name + "::" + ver
 			if !seen[key] {
 				seen[key] = true
-				nodes = append(nodes, Node{
+				nodes = append(nodes, FlatNode{
 					Name:          info.Name,
 					Version:       ver,
 					PythonVersion: pythonVersion,
@@ -250,7 +252,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		seen[key] = true
 
 		if isCompatible(info, pyTag, platformTag) {
-			nodes = append(nodes, Node{
+			nodes = append(nodes, FlatNode{
 				Name:          info.Name,
 				Version:       info.Version,
 				PythonVersion: pythonVersion,
@@ -259,7 +261,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				Action:        "reuse",
 			})
 		} else {
-			nodes = append(nodes, Node{
+			nodes = append(nodes, FlatNode{
 				Name:          info.Name,
 				Version:       info.Version,
 				PythonVersion: pythonVersion,
@@ -304,7 +306,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			continue
 		}
 		seen[key] = true
-		nodes = append(nodes, Node{
+		nodes = append(nodes, FlatNode{
 			Name:          dep,
 			Version:       version,
 			PythonVersion: pythonVersion,

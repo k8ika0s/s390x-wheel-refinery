@@ -16,7 +16,7 @@ import (
 func TestWorkerDrainMatchesJobs(t *testing.T) {
 	dir := t.TempDir()
 	planPath := filepath.Join(dir, "plan.json")
-	snap := plan.Snapshot{RunID: "r1", Plan: []plan.Node{{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}}}
+	snap := plan.Snapshot{RunID: "r1", Plan: []plan.FlatNode{{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}}}
 	data, _ := json.Marshal(snap)
 	if err := os.WriteFile(planPath, data, 0o644); err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestWorkerDrainMatchesJobs(t *testing.T) {
 func TestWorkerRunsPlanWhenQueueEmpty(t *testing.T) {
 	dir := t.TempDir()
 	planPath := filepath.Join(dir, "plan.json")
-	snap := plan.Snapshot{RunID: "r1", Plan: []plan.Node{
+	snap := plan.Snapshot{RunID: "r1", Plan: []plan.FlatNode{
 		{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"},
 		{Name: "reuse", Version: "2.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "reuse"},
 	}}
