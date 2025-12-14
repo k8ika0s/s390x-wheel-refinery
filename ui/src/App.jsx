@@ -292,7 +292,7 @@ function PackageDetail({ token, pushToast }) {
   if (!data) return null;
 
   const { summary, variants, failures, events, hints = [] } = data;
-  const logDownloadHref = selectedEvent ? `${API_BASE}/logs/${selectedEvent.name}/${selectedEvent.version}` : null;
+  const logDownloadHref = selectedEvent ? `${API_BASE}/api/logs/${selectedEvent.name}/${selectedEvent.version}` : null;
 
   const variantsPaged = paged(variants, variantPage);
   const failuresPaged = paged(failures, failurePage);
