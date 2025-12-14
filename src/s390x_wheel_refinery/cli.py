@@ -30,8 +30,6 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     argv = list(argv) if argv is not None else sys.argv[1:]
     if argv and argv[0] == "history":
         return _parse_history_args(argv[1:])
-    if argv and argv[0] == "serve":
-        return _parse_serve_args(argv[1:])
     if argv and argv[0] == "worker":
         return _parse_worker_args(argv[1:])
     if argv and argv[0] == "queue":
@@ -132,15 +130,6 @@ def _parse_history_args(argv: List[str]) -> argparse.Namespace:
     return parser.parse_args(argv, namespace=argparse.Namespace(command="history"))
 
 
-def _parse_serve_args(argv: List[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Serve history web UI.")
-    parser.add_argument("--history-db", "--db", dest="history_db", type=Path, default=Path("history.db"), help="Path to history database.")
-    parser.add_argument("--host", default="0.0.0.0", help="Host to bind.")
-    parser.add_argument("--port", type=int, default=8000, help="Port to bind.")
-    parser.add_argument("--reload", action="store_true", help="Enable autoreload (dev).")
-    return parser.parse_args(argv, namespace=argparse.Namespace(command="serve"))
-
-
 def _parse_worker_args(argv: List[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Process retry queue and rebuild requested packages.")
     parser.add_argument("--input", required=True, type=Path, help="Directory containing foreign wheels.")
@@ -182,8 +171,6 @@ def main(argv: List[str] | None = None) -> int:
     args = parse_args(argv)
     if getattr(args, "command", "run") == "history":
         return _run_history(args)
-    if getattr(args, "command", "run") == "serve":
-        return _run_server(args)
     if getattr(args, "command", "run") == "worker":
         return _run_worker(args)
     if getattr(args, "command", "run") == "queue":
@@ -519,16 +506,6 @@ def _run_history(args: argparse.Namespace) -> int:
             print(f"Latest: {summary.latest.status} {summary.latest.version} at {summary.latest.timestamp}")
     if args.export_csv:
         print(f"\nExported CSV to {args.export_csv}")
-    return 0
-
-
-def _run_server(args: argparse.Namespace) -> int:
-    import uvicorn
-    from .web import create_app
-
-    history = BuildHistory(args.history_db)
-    app = create_app(history)
-    uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
     return 0
 
 
