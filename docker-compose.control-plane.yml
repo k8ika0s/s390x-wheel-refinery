@@ -28,6 +28,36 @@ services:
     ports:
       - "9092:9092"
 
+  zot:
+    image: ghcr.io/project-zot/zot-minimal-linux-amd64:latest
+    container_name: zot
+    ports:
+      - "5000:5000"
+    volumes:
+      - zotdata:/var/lib/registry
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5000/v2/_catalog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   control-plane:
     build:
       context: .
@@ -36,6 +66,8 @@ services:
       - postgres
       - redis
       - redpanda
+      - zot
+      - minio
     environment:
       HTTP_ADDR: ":8080"
       POSTGRES_DSN: postgres://refinery:refinery@postgres:5432/refinery?sslmode=disable
@@ -45,6 +77,12 @@ services:
       WORKER_WEBHOOK_URL: http://worker:9000/trigger
       WORKER_PLAN_URL: http://worker:9000/plan
       WORKER_TOKEN: ${WORKER_TOKEN:-}
+      CAS_REGISTRY_URL: http://zot:5000
+      CAS_REGISTRY_REPO: artifacts
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+      OBJECT_STORE_BUCKET: wheelhouse
+      OBJECT_STORE_ACCESS_KEY: minio
+      OBJECT_STORE_SECRET_KEY: minio123
     ports:
       - "8080:8080"
 
@@ -78,6 +116,12 @@ services:
       REDIS_URL: redis://redis:6379
       PODMAN_BIN: podman
       WORKER_RUN_CMD: refinery-build
+      CAS_REGISTRY_URL: http://zot:5000
+      CAS_REGISTRY_REPO: artifacts
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+      OBJECT_STORE_BUCKET: wheelhouse
+      OBJECT_STORE_ACCESS_KEY: minio
+      OBJECT_STORE_SECRET_KEY: minio123
     volumes:
       - ./input:/input:ro
       - ./output:/output
@@ -87,3 +131,5 @@ services:
 
 volumes:
   pgdata:
+  zotdata:
+  miniodata:

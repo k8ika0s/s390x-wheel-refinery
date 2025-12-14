@@ -20,6 +20,9 @@
 - **Zot (OCI/ORAS):** runtimes, packs, repairs, optionally wheels.
 - **MinIO (optional):** wheel/object mirror.
 
+### Local dev (compose)
+- `docker-compose.control-plane.yml` now brings up Zot on `http://localhost:5000` (repo default: `artifacts`) and MinIO on `http://localhost:9000` (console `:9001`) with credentials `minio/minio123`.
+
 ## Planner / DAG
 - **BuildRequest schema:** targets (sources, python_versions, policy, constraints, allowed packs), strategy, overrides.
 - **Node types:** runtime, pack, wheel, repair with deps and digests; planner marks cache hits (lookup in Zot) vs builds.
