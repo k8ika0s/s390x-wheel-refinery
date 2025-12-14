@@ -163,13 +163,14 @@ func (w *Worker) Drain(ctx context.Context) error {
 
 		if res.err != nil && w.shouldRequeue(reqAttempts, res.job) {
 			_ = w.Queue.Enqueue(ctx, queue.Request{
-				Package:     res.job.Name,
-				Version:     res.job.Version,
-				PythonTag:   res.job.PythonTag,
-				PlatformTag: res.job.PlatformTag,
-				Recipes:     res.job.Recipes,
-				Attempts:    res.attempt + 1,
-				EnqueuedAt:  time.Now().Unix(),
+				Package:       res.job.Name,
+				Version:       res.job.Version,
+				PythonVersion: res.job.PythonVersion,
+				PythonTag:     res.job.PythonTag,
+				PlatformTag:   res.job.PlatformTag,
+				Recipes:       res.job.Recipes,
+				Attempts:      res.attempt + 1,
+				EnqueuedAt:    time.Now().Unix(),
 			})
 		}
 	}
@@ -198,11 +199,12 @@ func (w *Worker) match(reqs []queue.Request) []runner.Job {
 				continue
 			}
 			jobs = append(jobs, runner.Job{
-				Name:        node.Name,
-				Version:     node.Version,
-				PythonTag:   node.PythonTag,
-				PlatformTag: node.PlatformTag,
-				Recipes:     req.Recipes,
+				Name:          node.Name,
+				Version:       node.Version,
+				PythonVersion: firstNonEmpty(req.PythonVersion, node.PythonVersion),
+				PythonTag:     firstNonEmpty(node.PythonTag, pyTagFromVersion(firstNonEmpty(req.PythonVersion, node.PythonVersion))),
+				PlatformTag:   node.PlatformTag,
+				Recipes:       req.Recipes,
 			})
 		}
 	}
@@ -228,15 +230,39 @@ func (w *Worker) requestsFromPlan() []queue.Request {
 			continue
 		}
 		reqs = append(reqs, queue.Request{
-			Package:     node.Name,
-			Version:     node.Version,
-			PythonTag:   node.PythonTag,
-			PlatformTag: node.PlatformTag,
-			Attempts:    0,
-			EnqueuedAt:  now,
+			Package:       node.Name,
+			Version:       node.Version,
+			PythonVersion: node.PythonVersion,
+			PythonTag:     node.PythonTag,
+			PlatformTag:   node.PlatformTag,
+			Attempts:      0,
+			EnqueuedAt:    now,
 		})
 	}
 	return reqs
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func pyTagFromVersion(ver string) string {
+	if ver == "" {
+		return ""
+	}
+	trimmed := strings.ReplaceAll(ver, ".", "")
+	if strings.HasPrefix(trimmed, "cp") {
+		return trimmed
+	}
+	if strings.HasPrefix(trimmed, "3") {
+		return "cp" + trimmed
+	}
+	return trimmed
 }
 
 // BuildWorker constructs a worker from config.

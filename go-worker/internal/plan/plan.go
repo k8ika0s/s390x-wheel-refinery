@@ -17,11 +17,12 @@ import (
 
 // Node represents a plan entry.
 type Node struct {
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	PythonTag   string `json:"python_tag"`
-	PlatformTag string `json:"platform_tag"`
-	Action      string `json:"action"`
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	PythonVersion string `json:"python_version,omitempty"`
+	PythonTag     string `json:"python_tag"`
+	PlatformTag   string `json:"platform_tag"`
+	Action        string `json:"action"`
 }
 
 // Snapshot is the structure stored in plan.json.
@@ -184,11 +185,12 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		}
 		seen[key] = true
 		nodes = append(nodes, Node{
-			Name:        name,
-			Version:     version,
-			PythonTag:   pyTag,
-			PlatformTag: platformTag,
-			Action:      "build",
+			Name:          name,
+			Version:       version,
+			PythonVersion: pythonVersion,
+			PythonTag:     pyTag,
+			PlatformTag:   platformTag,
+			Action:        "build",
 		})
 	}
 
@@ -231,11 +233,12 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			if !seen[key] {
 				seen[key] = true
 				nodes = append(nodes, Node{
-					Name:        info.Name,
-					Version:     ver,
-					PythonTag:   pyTag,
-					PlatformTag: platformTag,
-					Action:      "build",
+					Name:          info.Name,
+					Version:       ver,
+					PythonVersion: pythonVersion,
+					PythonTag:     pyTag,
+					PlatformTag:   platformTag,
+					Action:        "build",
 				})
 			}
 			continue
@@ -248,19 +251,21 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 
 		if isCompatible(info, pyTag, platformTag) {
 			nodes = append(nodes, Node{
-				Name:        info.Name,
-				Version:     info.Version,
-				PythonTag:   pyTag,
-				PlatformTag: platformTag,
-				Action:      "reuse",
+				Name:          info.Name,
+				Version:       info.Version,
+				PythonVersion: pythonVersion,
+				PythonTag:     pyTag,
+				PlatformTag:   platformTag,
+				Action:        "reuse",
 			})
 		} else {
 			nodes = append(nodes, Node{
-				Name:        info.Name,
-				Version:     info.Version,
-				PythonTag:   pyTag,
-				PlatformTag: platformTag,
-				Action:      "build",
+				Name:          info.Name,
+				Version:       info.Version,
+				PythonVersion: pythonVersion,
+				PythonTag:     pyTag,
+				PlatformTag:   platformTag,
+				Action:        "build",
 			})
 		}
 	}
@@ -300,11 +305,12 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		}
 		seen[key] = true
 		nodes = append(nodes, Node{
-			Name:        dep,
-			Version:     version,
-			PythonTag:   pyTag,
-			PlatformTag: platformTag,
-			Action:      "build",
+			Name:          dep,
+			Version:       version,
+			PythonVersion: pythonVersion,
+			PythonTag:     pyTag,
+			PlatformTag:   platformTag,
+			Action:        "build",
 		})
 	}
 	if !hasInput {

@@ -11,11 +11,12 @@ import (
 
 // Job describes a build job the worker executes.
 type Job struct {
-	Name        string
-	Version     string
-	PythonTag   string
-	PlatformTag string
-	Recipes     []string
+	Name          string
+	Version       string
+	PythonVersion string
+	PythonTag     string
+	PlatformTag   string
+	Recipes       []string
 }
 
 // Runner executes build jobs.
@@ -36,14 +37,31 @@ type PodmanRunner struct {
 	RunCmd      []string
 }
 
+func pyTagFromVersion(ver string) string {
+	trimmed := strings.ReplaceAll(ver, ".", "")
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "cp") {
+		return trimmed
+	}
+	if strings.HasPrefix(trimmed, "3") {
+		return "cp" + trimmed
+	}
+	return trimmed
+}
+
 // Run executes a placeholder podman command. In a real implementation this would
 // invoke the build script inside the container. Here we simulate success for tests.
 func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string, error) {
 	start := time.Now()
 	bin := p.Bin
 	if bin == "" {
-		// Stubbed podman: simulate success.
-		return time.Since(start), "podman stub (PODMAN_BIN not set)", nil
+		if path, err := exec.LookPath("podman"); err == nil {
+			bin = path
+		} else {
+			return time.Since(start), "podman stub (podman not found)", nil
+		}
 	}
 	args := p.buildArgs(job)
 
@@ -96,6 +114,10 @@ func (p *PodmanRunner) buildCmd(job Job) []string {
 
 // buildArgs assembles the podman arguments with mounts, env, image, and command.
 func (p *PodmanRunner) buildArgs(job Job) []string {
+	tag := job.PythonTag
+	if tag == "" {
+		tag = pyTagFromVersion(job.PythonVersion)
+	}
 	args := []string{
 		"run", "--rm",
 		"-v", fmt.Sprintf("%s:/input:ro", p.InputDir),
@@ -103,9 +125,16 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 		"-v", fmt.Sprintf("%s:/cache", p.CacheDir),
 		"-e", fmt.Sprintf("JOB_NAME=%s", job.Name),
 		"-e", fmt.Sprintf("JOB_VERSION=%s", job.Version),
-		"-e", fmt.Sprintf("PYTHON_TAG=%s", job.PythonTag),
-		"-e", fmt.Sprintf("PLATFORM_TAG=%s", job.PlatformTag),
 	}
+	if job.PythonVersion != "" {
+		args = append(args, "-e", fmt.Sprintf("PYTHON_VERSION=%s", job.PythonVersion))
+	}
+	if tag != "" {
+		args = append(args, "-e", fmt.Sprintf("PYTHON_TAG=%s", tag))
+	} else if p.PythonTag != "" {
+		args = append(args, "-e", fmt.Sprintf("PYTHON_TAG=%s", p.PythonTag))
+	}
+	args = append(args, "-e", fmt.Sprintf("PLATFORM_TAG=%s", job.PlatformTag))
 	if len(job.Recipes) > 0 {
 		args = append(args, "-e", fmt.Sprintf("RECIPES=%s", strings.Join(job.Recipes, ",")))
 	}

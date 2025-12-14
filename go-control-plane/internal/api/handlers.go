@@ -388,11 +388,12 @@ func (h *Handler) planCompute(w http.ResponseWriter, r *http.Request) {
 		for _, raw := range planArr {
 			if m, ok := raw.(map[string]any); ok {
 				nodes = append(nodes, store.PlanNode{
-					Name:        toString(m["name"]),
-					Version:     toString(m["version"]),
-					PythonTag:   toString(m["python_tag"]),
-					PlatformTag: toString(m["platform_tag"]),
-					Action:      toString(m["action"]),
+					Name:          toString(m["name"]),
+					Version:       toString(m["version"]),
+					PythonVersion: toString(m["python_version"]),
+					PythonTag:     toString(m["python_tag"]),
+					PlatformTag:   toString(m["platform_tag"]),
+					Action:        toString(m["action"]),
 				})
 			}
 		}

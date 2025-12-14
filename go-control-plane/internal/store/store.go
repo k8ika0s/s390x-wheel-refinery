@@ -56,11 +56,12 @@ type Artifact struct {
 
 // PlanNode describes a unit in the build plan/graph.
 type PlanNode struct {
-	Name        string
-	Version     string
-	PythonTag   string
-	PlatformTag string
-	Action      string
+	Name          string
+	Version       string
+	PythonVersion string
+	PythonTag     string
+	PlatformTag   string
+	Action        string
 }
 
 // PackageSummary aggregates status for a package.

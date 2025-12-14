@@ -168,7 +168,7 @@ func TestJSONShapeMatchesPythonSnapshot(t *testing.T) {
 	snap := Snapshot{
 		RunID: "abc",
 		Plan: []Node{
-			{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"},
+			{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PythonVersion: "3.11", PlatformTag: "manylinux2014_s390x", Action: "build"},
 		},
 	}
 	data, err := json.Marshal(snap)
@@ -194,7 +194,7 @@ func TestJSONShapeMatchesPythonSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatalf("node not object: %#v", arr[0])
 	}
-	required := []string{"name", "version", "python_tag", "platform_tag", "action"}
+	required := []string{"name", "version", "python_tag", "python_version", "platform_tag", "action"}
 	for _, k := range required {
 		if _, ok := node[k]; !ok {
 			t.Fatalf("missing field %s", k)
