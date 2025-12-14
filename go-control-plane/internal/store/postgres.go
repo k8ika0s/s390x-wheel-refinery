@@ -194,6 +194,9 @@ func (p *PostgresStore) History(ctx context.Context, filter HistoryFilter) ([]Ev
 }
 
 func (p *PostgresStore) RecordEvent(ctx context.Context, evt Event) error {
+	if p.db == nil {
+		return fmt.Errorf("db not configured")
+	}
 	metaBytes, _ := json.Marshal(evt.Metadata)
 	_, err := p.db.ExecContext(ctx, `
 	    INSERT INTO events (run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,timestamp)

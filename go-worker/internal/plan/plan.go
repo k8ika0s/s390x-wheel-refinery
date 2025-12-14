@@ -80,10 +80,26 @@ func GenerateViaPython(inputDir, cacheDir, pythonVersion, platformTag string) (S
 }
 
 // Generate builds a plan using the Go resolver and writes it to cacheDir/plan.json.
-func Generate(inputDir, cacheDir, pythonVersion, platformTag string, indexURL, extraIndexURL, strategy string) (Snapshot, error) {
+func Generate(
+	inputDir,
+	cacheDir,
+	pythonVersion,
+	platformTag string,
+	indexURL,
+	extraIndexURL,
+	strategy,
+	requirementsPath,
+	constraintsPath string,
+) (Snapshot, error) {
 	maxDeps := loadMaxDepsFromEnv()
 	if maxDeps <= 0 {
 		maxDeps = 1000
+	}
+	if requirementsPath == "" {
+		requirementsPath = filepath.Join(inputDir, "requirements.txt")
+	}
+	if constraintsPath == "" {
+		constraintsPath = filepath.Join(inputDir, "constraints.txt")
 	}
 	opts := Options{
 		IndexURL:         indexURL,
@@ -93,8 +109,8 @@ func Generate(inputDir, cacheDir, pythonVersion, platformTag string, indexURL, e
 		UpgradeStrategy:  strategy,
 		MaxDeps:          maxDeps,
 		PackageOverrides: loadOverridesFromEnv(),
-		RequirementsPath: filepath.Join(inputDir, "requirements.txt"),
-		ConstraintsPath:  filepath.Join(inputDir, "constraints.txt"),
+		RequirementsPath: requirementsPath,
+		ConstraintsPath:  constraintsPath,
 	}
 	snap, err := computeWithResolver(inputDir, pythonVersion, platformTag, opts, &IndexClient{
 		BaseURL:       indexURL,

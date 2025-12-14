@@ -15,7 +15,8 @@ import (
 
 // fakeStore implements only what we need for plan tests.
 type fakeStore struct {
-	lastPlan []store.PlanNode
+	lastPlan  []store.PlanNode
+	lastEvent store.Event
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -46,6 +47,7 @@ func (f *fakeStore) TopSlowest(ctx context.Context, limit int) ([]store.Stat, er
 	return nil, nil
 }
 func (f *fakeStore) RecordEvent(ctx context.Context, evt store.Event) error {
+	f.lastEvent = evt
 	return nil
 }
 func (f *fakeStore) ListHints(ctx context.Context) ([]store.Hint, error) {
@@ -156,5 +158,31 @@ func TestPlanPostSavesPlan(t *testing.T) {
 	}
 	if len(fs.lastPlan) != 1 {
 		t.Fatalf("plan not saved")
+	}
+}
+
+func TestHistoryPostRecordsEvent(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{Store: fs, Queue: &fakeQueue{}, Config: config.Config{}}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	body := bytes.NewBufferString(`{"name":"pkg","version":"1.0","status":"built","python_tag":"cp311","platform_tag":"manylinux2014_s390x"}`)
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/history", body)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	if fs.lastEvent.Name != "pkg" || fs.lastEvent.Version != "1.0" || fs.lastEvent.Status != "built" {
+		t.Fatalf("event not recorded: %+v", fs.lastEvent)
+	}
+	if fs.lastEvent.Timestamp == 0 {
+		t.Fatalf("timestamp not set")
 	}
 }
