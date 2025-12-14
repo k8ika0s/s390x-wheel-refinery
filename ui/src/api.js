@@ -44,8 +44,13 @@ export function triggerWorker(token) {
 }
 
 export function enqueueRetry(name, version, token) {
-  const body = JSON.stringify({ version });
-  return request(`/package/${encodeURIComponent(name)}/retry`, { method: "POST", body }, token);
+  const body = JSON.stringify({
+    package: name,
+    version: version || "latest",
+    python_tag: "cp311",
+    platform_tag: "manylinux2014_s390x",
+  });
+  return request("/api/queue/enqueue", { method: "POST", body }, token);
 }
 
 export function clearQueue(token) {
@@ -66,7 +71,7 @@ export function fetchPackageDetail(name, token, limit = 50) {
 }
 
 export function fetchLog(name, version, token) {
-  return request(`/logs/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, {}, token);
+  return request(`/api/logs/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, {}, token);
 }
 
 export function fetchRecent({ limit = 25, packageFilter, status }, token) {
