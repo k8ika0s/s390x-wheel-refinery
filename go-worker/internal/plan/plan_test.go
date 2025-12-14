@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,6 +68,51 @@ func TestComputePlanReuseVsBuild(t *testing.T) {
 	}
 	if reuse != 1 || build != 1 {
 		t.Fatalf("expected 1 reuse and 1 build, got reuse=%d build=%d", reuse, build)
+	}
+}
+
+func TestComputePlanIncludesDAG(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "demo-1.0.0-py3-none-any.whl"), []byte{}, 0o644)
+
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", Options{UpgradeStrategy: "pinned"}, nil)
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	if len(snap.DAG) == 0 {
+		t.Fatalf("expected DAG nodes")
+	}
+	rtKey := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: "3.11"}
+	rtDigest := rtKey.Digest()
+	wk := artifact.WheelKey{
+		SourceDigest:  sourceDigest("demo", "1.0.0"),
+		PyTag:         "cp311",
+		PlatformTag:   "manylinux2014_s390x",
+		RuntimeDigest: rtDigest,
+	}
+	wantWheelID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+
+	var runtimeFound, wheelFound bool
+	for _, n := range snap.DAG {
+		switch n.Type {
+		case NodeRuntime:
+			if n.ID.Digest == rtDigest {
+				runtimeFound = true
+			}
+		case NodeWheel:
+			if n.ID == wantWheelID {
+				wheelFound = true
+				if len(n.Inputs) != 1 || n.Inputs[0].Digest != rtDigest {
+					t.Fatalf("wheel node missing runtime input: %+v", n.Inputs)
+				}
+			}
+		}
+	}
+	if !runtimeFound {
+		t.Fatalf("runtime node missing from DAG")
+	}
+	if !wheelFound {
+		t.Fatalf("wheel node missing from DAG")
 	}
 }
 

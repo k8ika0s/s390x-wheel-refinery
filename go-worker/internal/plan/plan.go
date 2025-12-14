@@ -3,6 +3,8 @@ package plan
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
@@ -210,7 +212,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			Action:        "build",
 		})
 		wheelKey := artifact.WheelKey{
-			SourceDigest:  "",
+			SourceDigest:  sourceDigest(name, version),
 			PyTag:         pyTag,
 			PlatformTag:   platformTag,
 			RuntimeDigest: rtID.Digest,
@@ -295,7 +297,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				PlatformTag:   platformTag,
 				Action:        "reuse",
 			})
-			wk := artifact.WheelKey{SourceDigest: "", PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest}
+			wk := artifact.WheelKey{SourceDigest: sourceDigest(info.Name, info.Version), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest}
 			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
 			dagNodes = append(dagNodes, DAGNode{
 				ID:     wID,
@@ -319,7 +321,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				PlatformTag:   platformTag,
 				Action:        "build",
 			})
-			wk := artifact.WheelKey{SourceDigest: "", PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest}
+			wk := artifact.WheelKey{SourceDigest: sourceDigest(info.Name, info.Version), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest}
 			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
 			dagNodes = append(dagNodes, DAGNode{
 				ID:     wID,
@@ -379,7 +381,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			PlatformTag:   platformTag,
 			Action:        "build",
 		})
-		wk := artifact.WheelKey{SourceDigest: "", PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest}
+		wk := artifact.WheelKey{SourceDigest: sourceDigest(dep, version), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest}
 		wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
 		dagNodes = append(dagNodes, DAGNode{
 			ID:     wID,
@@ -401,7 +403,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 	if depTruncated {
 		return Snapshot{}, fmt.Errorf("dependency expansion exceeded MaxDeps (%d); increase MAX_DEPS or trim input", opts.MaxDeps)
 	}
-	return Snapshot{RunID: newRunID(), Plan: nodes}, nil
+	return Snapshot{RunID: newRunID(), Plan: nodes, DAG: dagNodes}, nil
 }
 
 type wheelInfo struct {
@@ -459,6 +461,11 @@ func newRunID() string {
 		b[i] = letters[rand.Intn(len(letters))]
 	}
 	return string(b)
+}
+
+func sourceDigest(name, version string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s==%s", normalizeName(name), strings.TrimSpace(version))))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // readRequiresDist extracts Requires-Dist entries from METADATA inside a wheel.
