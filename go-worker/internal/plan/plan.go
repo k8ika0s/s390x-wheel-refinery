@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
 	"log"
 	"math/rand"
 	"os"
@@ -144,6 +145,20 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 	}
 	pyTag := normalizePyTag(pythonVersion)
 	var nodes []FlatNode
+	var dagNodes []DAGNode
+	// Runtime node (shallow DAG for now)
+	rtKey := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: pythonVersion}
+	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: rtKey.Digest()}
+	dagNodes = append(dagNodes, DAGNode{
+		ID:     rtID,
+		Type:   NodeRuntime,
+		Action: "reuse",
+		Metadata: map[string]any{
+			"python_version": pythonVersion,
+			"python_tag":     pyTag,
+			"platform_tag":   platformTag,
+		},
+	})
 	depSeen := make(map[string]depSpec)
 	var wheelCount int
 	var depTruncated bool
@@ -193,6 +208,26 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			PythonTag:     pyTag,
 			PlatformTag:   platformTag,
 			Action:        "build",
+		})
+		wheelKey := artifact.WheelKey{
+			SourceDigest:  "",
+			PyTag:         pyTag,
+			PlatformTag:   platformTag,
+			RuntimeDigest: rtID.Digest,
+		}
+		wheelID := artifact.ID{Type: artifact.WheelType, Digest: wheelKey.Digest()}
+		dagNodes = append(dagNodes, DAGNode{
+			ID:     wheelID,
+			Type:   NodeWheel,
+			Inputs: []artifact.ID{rtID},
+			Metadata: map[string]any{
+				"name":           name,
+				"version":        version,
+				"python_version": pythonVersion,
+				"python_tag":     pyTag,
+				"platform_tag":   platformTag,
+			},
+			Action: "build",
 		})
 	}
 
@@ -260,6 +295,21 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				PlatformTag:   platformTag,
 				Action:        "reuse",
 			})
+			wk := artifact.WheelKey{SourceDigest: "", PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest}
+			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+			dagNodes = append(dagNodes, DAGNode{
+				ID:     wID,
+				Type:   NodeWheel,
+				Inputs: []artifact.ID{rtID},
+				Metadata: map[string]any{
+					"name":           info.Name,
+					"version":        info.Version,
+					"python_version": pythonVersion,
+					"python_tag":     pyTag,
+					"platform_tag":   platformTag,
+				},
+				Action: "reuse",
+			})
 		} else {
 			nodes = append(nodes, FlatNode{
 				Name:          info.Name,
@@ -268,6 +318,21 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				PythonTag:     pyTag,
 				PlatformTag:   platformTag,
 				Action:        "build",
+			})
+			wk := artifact.WheelKey{SourceDigest: "", PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest}
+			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+			dagNodes = append(dagNodes, DAGNode{
+				ID:     wID,
+				Type:   NodeWheel,
+				Inputs: []artifact.ID{rtID},
+				Metadata: map[string]any{
+					"name":           info.Name,
+					"version":        info.Version,
+					"python_version": pythonVersion,
+					"python_tag":     pyTag,
+					"platform_tag":   platformTag,
+				},
+				Action: "build",
 			})
 		}
 	}
@@ -313,6 +378,21 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			PythonTag:     pyTag,
 			PlatformTag:   platformTag,
 			Action:        "build",
+		})
+		wk := artifact.WheelKey{SourceDigest: "", PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest}
+		wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+		dagNodes = append(dagNodes, DAGNode{
+			ID:     wID,
+			Type:   NodeWheel,
+			Inputs: []artifact.ID{rtID},
+			Metadata: map[string]any{
+				"name":           dep,
+				"version":        version,
+				"python_version": pythonVersion,
+				"python_tag":     pyTag,
+				"platform_tag":   platformTag,
+			},
+			Action: "build",
 		})
 	}
 	if !hasInput {
