@@ -1,7 +1,7 @@
 flowchart TD
     subgraph Host s390x
         subgraph Compose Stack
-            API[api: FastAPI/worker trigger]
+            API[api: Go control-plane/worker trigger]
             UI[ui: React SPA]
             WORKER[worker: optional webhook runner]
             VOL_IN[/input/]

@@ -7,7 +7,7 @@
 - CI/tooling: ruff + pytest + smoke flows; branch merged to main; 19 tests passing locally.
 
 ## Completed
-- Retry queue + worker (local + webhook) and dedicated worker service (`worker_service.py`).
+- Retry queue + worker (local + webhook).
 - Web UI hooks: queue depth, worker trigger; auth guard via header/query/cookie; token cookie helper.
 - Docs updated (README/user guide) with compose example, token helper, queue/worker usage; CLI additions (`worker`, `queue`).
 - Container presets (Rocky/Fedora/Ubuntu), resource flags, history/serve commands, hint-based resilience.
