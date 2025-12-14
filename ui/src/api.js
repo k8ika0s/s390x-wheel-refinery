@@ -26,6 +26,9 @@ async function request(path, options = {}, token) {
   return resp.text();
 }
 
+const defaultPyTag = import.meta.env.VITE_DEFAULT_PYTHON_TAG || "cp311";
+const defaultPlatform = import.meta.env.VITE_DEFAULT_PLATFORM_TAG || "manylinux2014_s390x";
+
 export async function fetchDashboard(token) {
   const [summary, recent, failures, slowest, queue, hints] = await Promise.all([
     request("/api/summary", {}, token),
@@ -43,12 +46,12 @@ export function triggerWorker(token) {
   return request("/api/worker/trigger", { method: "POST" }, token);
 }
 
-export function enqueueRetry(name, version, token) {
+export function enqueueRetry(name, version, token, pythonTag = defaultPyTag, platformTag = defaultPlatform) {
   const body = JSON.stringify({
     package: name,
     version: version || "latest",
-    python_tag: "cp311",
-    platform_tag: "manylinux2014_s390x",
+    python_tag: pythonTag,
+    platform_tag: platformTag,
   });
   return request("/api/queue/enqueue", { method: "POST", body }, token);
 }
