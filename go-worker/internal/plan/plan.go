@@ -150,6 +150,21 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 	pyTag := normalizePyTag(pythonVersion)
 	var nodes []FlatNode
 	var dagNodes []DAGNode
+	addRepair := func(wheelID artifact.ID, meta map[string]any) {
+		repairKey := artifact.RepairKey{
+			InputWheelDigest:  wheelID.Digest,
+			RepairToolVersion: "",
+			PolicyRulesDigest: "",
+		}
+		repairID := artifact.ID{Type: artifact.RepairType, Digest: repairKey.Digest()}
+		dagNodes = append(dagNodes, DAGNode{
+			ID:       repairID,
+			Type:     NodeRepair,
+			Inputs:   []artifact.ID{wheelID},
+			Metadata: meta,
+			Action:   "build",
+		})
+	}
 	// Runtime node (shallow DAG for now)
 	rtKey := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: pythonVersion}
 	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: rtKey.Digest()}
@@ -277,6 +292,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			},
 			Action: "build",
 		})
+		addRepair(wheelID, map[string]any{"wheel_name": name, "wheel_version": version})
 	}
 
 	for _, f := range files {
@@ -347,6 +363,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 					},
 					Action: "build",
 				})
+				addRepair(wID, map[string]any{"wheel_name": info.Name, "wheel_version": ver})
 			}
 			continue
 		}
@@ -381,6 +398,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				},
 				Action: "reuse",
 			})
+			addRepair(wID, map[string]any{"wheel_name": info.Name, "wheel_version": info.Version})
 		} else {
 			nodes = append(nodes, FlatNode{
 				Name:          info.Name,
@@ -405,6 +423,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				},
 				Action: "build",
 			})
+			addRepair(wID, map[string]any{"wheel_name": info.Name, "wheel_version": info.Version})
 		}
 	}
 	for dep, spec := range depSeen {
@@ -466,6 +485,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			},
 			Action: "build",
 		})
+		addRepair(wID, map[string]any{"wheel_name": dep, "wheel_version": version})
 	}
 	if !hasInput {
 		return Snapshot{}, fmt.Errorf("no wheels or requirements found in input directory %s", inputDir)

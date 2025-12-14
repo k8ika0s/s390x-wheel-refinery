@@ -175,6 +175,46 @@ func TestPackCatalogAddsPackNodesToDAG(t *testing.T) {
 	}
 }
 
+func TestRepairNodesFollowWheels(t *testing.T) {
+	dir := t.TempDir()
+	reqPath := filepath.Join(dir, "requirements.txt")
+	if err := os.WriteFile(reqPath, []byte("demo==1.0.0"), 0o644); err != nil {
+		t.Fatalf("write requirements: %v", err)
+	}
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", Options{UpgradeStrategy: "pinned", RequirementsPath: reqPath}, nil)
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	var wheels []artifact.ID
+	var repairs []DAGNode
+	for _, n := range snap.DAG {
+		if n.Type == NodeWheel {
+			wheels = append(wheels, n.ID)
+		}
+		if n.Type == NodeRepair {
+			repairs = append(repairs, n)
+		}
+	}
+	if len(repairs) != len(wheels) {
+		t.Fatalf("expected %d repair nodes, got %d", len(wheels), len(repairs))
+	}
+	for _, r := range repairs {
+		if len(r.Inputs) != 1 {
+			t.Fatalf("repair node should have one input: %+v", r.Inputs)
+		}
+		found := false
+		for _, w := range wheels {
+			if r.Inputs[0] == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("repair node input not a wheel: %+v", r.Inputs[0])
+		}
+	}
+}
+
 func TestLoadWriteRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plan.json")
