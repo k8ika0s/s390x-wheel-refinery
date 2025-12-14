@@ -35,6 +35,8 @@ type Config struct {
 	IndexURL           string
 	ExtraIndexURL      string
 	UpgradeStrategy    string
+	RequirementsPath   string
+	ConstraintsPath    string
 }
 
 func fromEnv() Config {
@@ -65,6 +67,8 @@ func fromEnv() Config {
 		IndexURL:           getenv("INDEX_URL", ""),
 		ExtraIndexURL:      getenv("EXTRA_INDEX_URL", ""),
 		UpgradeStrategy:    getenv("UPGRADE_STRATEGY", "pinned"),
+		RequirementsPath:   getenv("REQUIREMENTS_PATH", ""),
+		ConstraintsPath:    getenv("CONSTRAINTS_PATH", ""),
 	}
 	return cfg
 }

@@ -126,7 +126,7 @@ func TestGenerateWritesPlan(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	os.WriteFile(filepath.Join(dir, "pkg-0.1.0-py3-none-any.whl"), []byte{}, 0o644)
-	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned")
+	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned", "", "")
 	if err != nil {
 		t.Fatalf("generate failed: %v", err)
 	}
@@ -357,5 +357,31 @@ func TestPackageOverridesApplyToTopLevelAndDeps(t *testing.T) {
 	}
 	if n, ok := find("depa"); !ok || n.Version != "8.8.8" {
 		t.Fatalf("override for depA not applied: %+v", n)
+	}
+}
+
+func TestRequirementsOnlyGeneratesPlan(t *testing.T) {
+	dir := t.TempDir()
+	req := "foo==1.2.3\nbar>=2.0\n# comment\nbaz"
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte(req), 0o644); err != nil {
+		t.Fatalf("write requirements: %v", err)
+	}
+	resolver := &mockResolver{versions: map[string]string{"bar": "2.1.0", "baz": "3.0.0"}}
+	opts := Options{UpgradeStrategy: "pinned", RequirementsPath: filepath.Join(dir, "requirements.txt")}
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", opts, resolver)
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	if len(snap.Plan) != 3 {
+		t.Fatalf("expected 3 plan nodes, got %d", len(snap.Plan))
+	}
+	want := map[string]string{"foo": "1.2.3", "bar": "2.1.0", "baz": "3.0.0"}
+	for _, n := range snap.Plan {
+		if n.Version != want[n.Name] {
+			t.Fatalf("unexpected version for %s: %s", n.Name, n.Version)
+		}
+		if n.Action != "build" {
+			t.Fatalf("expected build action for %s", n.Name)
+		}
 	}
 }

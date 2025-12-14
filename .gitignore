@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.codex-context
 *.swp
 build/
 dist/

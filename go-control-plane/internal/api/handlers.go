@@ -161,26 +161,45 @@ func (h *Handler) recent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		q := r.URL.Query()
+		filter := store.HistoryFilter{
+			Package: q.Get("package"),
+			Status:  q.Get("status"),
+			RunID:   q.Get("run_id"),
+			FromTs:  int64(parseIntDefault(q.Get("from"), 0, 0)),
+			ToTs:    int64(parseIntDefault(q.Get("to"), 0, 0)),
+			Limit:   parseIntDefault(q.Get("limit"), 50, 500),
+			Offset:  parseIntDefault(q.Get("offset"), 0, 10_000),
+		}
+		res, err := h.Store.History(r.Context(), filter)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	case http.MethodPost:
+		var evt store.Event
+		if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		if evt.Name == "" || evt.Version == "" || evt.Status == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name, version, and status are required"})
+			return
+		}
+		if evt.Timestamp == 0 {
+			evt.Timestamp = time.Now().Unix()
+		}
+		if err := h.Store.RecordEvent(r.Context(), evt); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"detail": "event recorded"})
+	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
 	}
-	q := r.URL.Query()
-	filter := store.HistoryFilter{
-		Package: q.Get("package"),
-		Status:  q.Get("status"),
-		RunID:   q.Get("run_id"),
-		FromTs:  int64(parseIntDefault(q.Get("from"), 0, 0)),
-		ToTs:    int64(parseIntDefault(q.Get("to"), 0, 0)),
-		Limit:   parseIntDefault(q.Get("limit"), 50, 500),
-		Offset:  parseIntDefault(q.Get("offset"), 0, 10_000),
-	}
-	res, err := h.Store.History(r.Context(), filter)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
 }
 
 func (h *Handler) packageSummary(w http.ResponseWriter, r *http.Request) {

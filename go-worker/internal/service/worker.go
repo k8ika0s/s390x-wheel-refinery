@@ -46,7 +46,17 @@ func (w *Worker) LoadPlan() error {
 		snap, err = plan.Load(path)
 		if err != nil {
 			// as a last resort, generate plan in Go
-			snap, err = plan.Generate(w.Cfg.InputDir, w.Cfg.CacheDir, w.Cfg.PythonVersion, w.Cfg.PlatformTag, w.Cfg.IndexURL, w.Cfg.ExtraIndexURL, w.Cfg.UpgradeStrategy)
+			snap, err = plan.Generate(
+				w.Cfg.InputDir,
+				w.Cfg.CacheDir,
+				w.Cfg.PythonVersion,
+				w.Cfg.PlatformTag,
+				w.Cfg.IndexURL,
+				w.Cfg.ExtraIndexURL,
+				w.Cfg.UpgradeStrategy,
+				w.Cfg.RequirementsPath,
+				w.Cfg.ConstraintsPath,
+			)
 			if err != nil {
 				return err
 			}
@@ -66,6 +76,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 	reqs, err := w.Queue.Pop(ctx, w.Cfg.BatchSize)
 	if err != nil {
 		return err
+	}
+	if len(reqs) == 0 {
+		reqs = w.requestsFromPlan()
+		if w.Cfg.BatchSize > 0 && len(reqs) > w.Cfg.BatchSize {
+			reqs = reqs[:w.Cfg.BatchSize]
+		}
 	}
 	if len(reqs) == 0 {
 		return nil
@@ -195,6 +211,32 @@ func (w *Worker) match(reqs []queue.Request) []runner.Job {
 
 func equalsIgnoreCase(a, b string) bool {
 	return strings.EqualFold(a, b)
+}
+
+// requestsFromPlan seeds work items directly from the current plan when the queue is empty.
+func (w *Worker) requestsFromPlan() []queue.Request {
+	w.mu.Lock()
+	snap := w.planSnap
+	w.mu.Unlock()
+	reqs := []queue.Request{}
+	now := time.Now().Unix()
+	for _, node := range snap.Plan {
+		if strings.ToLower(node.Action) != "build" {
+			continue
+		}
+		if node.Name == "" || node.Version == "" {
+			continue
+		}
+		reqs = append(reqs, queue.Request{
+			Package:     node.Name,
+			Version:     node.Version,
+			PythonTag:   node.PythonTag,
+			PlatformTag: node.PlatformTag,
+			Attempts:    0,
+			EnqueuedAt:  now,
+		})
+	}
+	return reqs
 }
 
 // BuildWorker constructs a worker from config.

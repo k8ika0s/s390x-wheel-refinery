@@ -9,7 +9,7 @@ A fast, container-isolated worker that drains the retry/build queue and rebuilds
 - Plan generation: loads `plan.json` from /output or /cache; if missing, uses the Go resolver to scan `/input` wheels and generate `plan.json` (no Python dependency). Resolver respects `INDEX_URL`, `EXTRA_INDEX_URL`, and `UPGRADE_STRATEGY` (`pinned` or `eager`).
 - Reporting: posts manifest/logs/plan and events to the Go control-plane when `CONTROL_PLANE_URL`/`CONTROL_PLANE_TOKEN` are set; always writes manifest locally.
 - Endpoints: `/health`, `/ready`, `POST /trigger` (optional `WORKER_TOKEN`), `/plan` (GET existing, POST to regenerate).
-- Config (env-driven): `QUEUE_BACKEND`, `QUEUE_FILE`, `REDIS_URL`, `REDIS_KEY`, `KAFKA_BROKERS`, `KAFKA_TOPIC`, `INPUT_DIR`, `OUTPUT_DIR`, `CACHE_DIR`, `PYTHON_VERSION`, `PLATFORM_TAG`, `INDEX_URL`, `EXTRA_INDEX_URL`, `UPGRADE_STRATEGY`, `PLAN_OVERRIDES_JSON`, `MAX_DEPS`, `CONTAINER_IMAGE`, `CONTAINER_PRESET`, `WORKER_TOKEN`, `CONTROL_PLANE_URL`, `CONTROL_PLANE_TOKEN`, `WORKER_AUTORUN_INTERVAL`, `PODMAN_BIN` (default `podman`), `WORKER_RUN_CMD`, `RUNNER_TIMEOUT_SEC`, `REQUEUE_ON_FAILURE`, `MAX_REQUEUE_ATTEMPTS`, `BATCH_SIZE`.
+- Config (env-driven): `QUEUE_BACKEND`, `QUEUE_FILE`, `REDIS_URL`, `REDIS_KEY`, `KAFKA_BROKERS`, `KAFKA_TOPIC`, `INPUT_DIR`, `OUTPUT_DIR`, `CACHE_DIR`, `PYTHON_VERSION`, `PLATFORM_TAG`, `INDEX_URL`, `EXTRA_INDEX_URL`, `UPGRADE_STRATEGY`, `PLAN_OVERRIDES_JSON`, `MAX_DEPS`, `REQUIREMENTS_PATH`, `CONTAINER_IMAGE`, `CONTAINER_PRESET`, `WORKER_TOKEN`, `CONTROL_PLANE_URL`, `CONTROL_PLANE_TOKEN`, `WORKER_AUTORUN_INTERVAL`, `PODMAN_BIN` (default `podman`), `WORKER_RUN_CMD`, `RUNNER_TIMEOUT_SEC`, `REQUEUE_ON_FAILURE`, `MAX_REQUEUE_ATTEMPTS`, `BATCH_SIZE`.
 - Metrics: defer Prometheus; keep health/ready.
 
 ## MVP flow

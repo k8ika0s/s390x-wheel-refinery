@@ -37,3 +37,6 @@ Today the Go worker still shells out to the Python CLI to generate `plan.json` w
 
 ## Gaps / TODO
 No blocking gaps for current scope. Recent improvements: richer error reporting (empty input, capped deps via `MAX_DEPS`), and a basic benchmark (compute on fixture). Remaining nice-to-haves: more detailed index failure surfacing in the UI/logs and timing comparisons vs the legacy Python path on larger corpora.
+
+## New capability: requirements.txt input
+The resolver now accepts a `requirements.txt` in `/input` (or `REQUIREMENTS_PATH`) as the seed. It resolves unpinned specs (`>=`, `~=`) via the configured index, applies overrides (`PLAN_OVERRIDES_JSON`), caps expansion via `MAX_DEPS`, and emits a plan even when no wheels are present.
