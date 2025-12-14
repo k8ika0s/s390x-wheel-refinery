@@ -42,8 +42,12 @@ func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string,
 	start := time.Now()
 	bin := p.Bin
 	if bin == "" {
-		// Stubbed podman: simulate success.
-		return time.Since(start), "podman stub (PODMAN_BIN not set)", nil
+		// Attempt to use podman from PATH when not explicitly set; if not found, stub success.
+		if path, err := exec.LookPath("podman"); err == nil {
+			bin = path
+		} else {
+			return time.Since(start), "podman stub (podman not found)", nil
+		}
 	}
 	args := p.buildArgs(job)
 
