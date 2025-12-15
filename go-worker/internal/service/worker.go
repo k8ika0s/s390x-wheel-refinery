@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -918,6 +919,7 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 	if len(ids) == 0 {
 		return nil
 	}
+	ids = sortPacksByPriority(ids, meta)
 	var paths []string
 	var depsBuilt []string
 	for _, id := range ids {
@@ -1070,4 +1072,34 @@ func depPrefixes(groups ...[]string) []string {
 		}
 	}
 	return out
+}
+
+func sortPacksByPriority(ids []artifact.ID, meta map[string]map[string]any) []artifact.ID {
+	order := map[string]int{
+		"pkgconf":  1,
+		"zlib":     2,
+		"xz":       3,
+		"bzip2":    4,
+		"zstd":     5,
+		"openssl":  6,
+		"libffi":   7,
+		"sqlite":   8,
+		"libxml2":  9,
+		"libxslt":  10,
+		"libpng":   11,
+		"jpeg":     12,
+		"freetype": 13,
+		"openblas": 14,
+		"rust":     15,
+		"cmake":    16,
+		"ninja":    17,
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		mi := meta[ids[i].Digest]
+		mj := meta[ids[j].Digest]
+		ni, _ := mi["name"].(string)
+		nj, _ := mj["name"].(string)
+		return order[ni] < order[nj]
+	})
+	return ids
 }
