@@ -52,6 +52,7 @@ type Config struct {
 	ObjectStoreSecret   string
 	ObjectStoreUseSSL   bool
 	LocalCASDir         string
+	CASPushEnabled      bool
 }
 
 func fromEnv() Config {
@@ -94,6 +95,7 @@ func fromEnv() Config {
 		ObjectStoreSecret:   getenv("OBJECT_STORE_SECRET_KEY", ""),
 		ObjectStoreUseSSL:   getenvBool("OBJECT_STORE_USE_SSL", false),
 		LocalCASDir:         getenv("LOCAL_CAS_DIR", "/cache/cas"),
+		CASPushEnabled:      getenvBool("CAS_PUSH_ENABLED", false),
 	}
 	return cfg
 }

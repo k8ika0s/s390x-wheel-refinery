@@ -29,6 +29,7 @@ type Worker struct {
 	Cfg      Config
 	Store    objectstore.Store
 	Fetcher  cas.Fetcher
+	Pusher   cas.Pusher
 	packPath map[string]string
 	mu       sync.Mutex
 	planSnap plan.Snapshot
@@ -447,6 +448,12 @@ func BuildWorker(cfg Config) (*Worker, error) {
 		Cfg:      cfg,
 		Store:    cfg.ObjectStore(),
 		Fetcher:  cfg.CASFetcher(),
+		Pusher: cas.Pusher{
+			BaseURL:  cfg.CASRegistryURL,
+			Repo:     cfg.CASRegistryRepo,
+			Username: cfg.CASRegistryUser,
+			Password: cfg.CASRegistryPass,
+		},
 		packPath: make(map[string]string),
 	}, nil
 }
@@ -508,6 +515,9 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		}
 		key := fmt.Sprintf("%s/%s/%s", strings.ToLower(job.Name), job.Version, e.Name())
 		_ = store.Put(ctx, key, data, "application/octet-stream")
+		if w.Cfg.CASPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
+			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, data, "application/octet-stream")
+		}
 	}
 }
 
