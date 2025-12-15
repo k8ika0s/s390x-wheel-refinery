@@ -1,7 +1,11 @@
 package service
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"os"
@@ -150,6 +154,7 @@ func TestObjectURLFallback(t *testing.T) {
 func TestFetchRuntime(t *testing.T) {
 	dir := t.TempDir()
 	fetched := false
+	tarBuf, rtDigest := sampleTarWithDigest()
 	w := &Worker{
 		Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")},
 		Fetcher: cas.Fetcher{
@@ -158,18 +163,22 @@ func TestFetchRuntime(t *testing.T) {
 			Client: &http.Client{
 				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 					fetched = true
-					resp := &http.Response{
+					var buf bytes.Buffer
+					tw := tar.NewWriter(&buf)
+					_ = tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len("stub"))})
+					_, _ = tw.Write([]byte("stub"))
+					_ = tw.Close()
+					return &http.Response{
 						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(strings.NewReader("data")),
+						Body:       io.NopCloser(bytes.NewReader(tarBuf.Bytes())),
 						Header:     make(http.Header),
-					}
-					return resp, nil
+					}, nil
 				}),
 			},
 		},
 		packPath: make(map[string]string),
 	}
-	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: "sha256:3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"}
+	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: rtDigest}
 	path := w.fetchRuntime(context.Background(), "3.11", rtID, "reuse", nil)
 	if path == "" {
 		t.Fatalf("expected runtime path")
@@ -187,7 +196,7 @@ func TestResolvePacksBuildsStub(t *testing.T) {
 	if len(paths) != 1 {
 		t.Fatalf("expected stub pack path")
 	}
-	if _, err := os.Stat(paths[0]); err != nil {
+	if fi, err := os.Stat(paths[0]); err != nil || !fi.IsDir() {
 		t.Fatalf("stub pack not written: %v", err)
 	}
 }
@@ -200,7 +209,17 @@ func TestFetchRuntimeBuildsStub(t *testing.T) {
 	if path == "" {
 		t.Fatalf("expected stub runtime path")
 	}
-	if _, err := os.Stat(path); err != nil {
+	if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
 		t.Fatalf("stub runtime not written: %v", err)
 	}
+}
+
+func sampleTarWithDigest() (bytes.Buffer, string) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len("stub"))})
+	_, _ = tw.Write([]byte("stub"))
+	_ = tw.Close()
+	d := sha256.Sum256(buf.Bytes())
+	return buf, "sha256:" + hex.EncodeToString(d[:])
 }

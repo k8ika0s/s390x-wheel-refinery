@@ -794,6 +794,53 @@ func writeTarWithManifest(path string, manifest map[string]any) error {
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
+func extractTar(src, dest string) error {
+	if err := os.RemoveAll(dest); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	tr := tar.NewReader(f)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dest, hdr.Name)
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			out, err := os.Create(target)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return err
+			}
+			out.Close()
+		default:
+			// skip other types for now
+		}
+	}
+	return nil
+}
+
 func verifyFileDigest(path, expected string) (bool, error) {
 	if expected == "" || !strings.HasPrefix(expected, "sha256:") {
 		return true, nil
@@ -888,6 +935,7 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 			continue
 		}
 		destPath := filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_")+".tar")
+		extractDir := filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_"))
 		fetched := false
 		if w.Fetcher.BaseURL != "" {
 			if err := w.Fetcher.Fetch(ctx, id, destPath); err == nil {
@@ -920,8 +968,11 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 			}
 		}
 		if fetched {
-			w.packPath[id.Digest] = destPath
-			paths = append(paths, destPath)
+			if err := extractTar(destPath, extractDir); err != nil {
+				continue
+			}
+			w.packPath[id.Digest] = extractDir
+			paths = append(paths, extractDir)
 		}
 	}
 	return paths
@@ -939,11 +990,14 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		return ""
 	}
 	destPath := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_")+".tar")
+	extractDir := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_"))
 	if w.Fetcher.BaseURL != "" {
 		if err := w.Fetcher.Fetch(ctx, rtID, destPath); err == nil {
 			if _, err := os.Stat(destPath); err == nil {
 				if ok, err := verifyFileDigest(destPath, rtID.Digest); err == nil && ok {
-					return destPath
+					if err := extractTar(destPath, extractDir); err == nil {
+						return extractDir
+					}
 				}
 			}
 		}
@@ -954,7 +1008,9 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 			cmd = w.Cfg.DefaultRuntimeCmd
 		}
 		if err := builder.BuildRuntime(destPath, builder.RuntimeBuildOpts{Digest: rtID.Digest, PythonVersion: pythonVersion, Meta: meta, Cmd: cmd}); err == nil {
-			return destPath
+			if err := extractTar(destPath, extractDir); err == nil {
+				return extractDir
+			}
 		}
 	}
 	return ""
