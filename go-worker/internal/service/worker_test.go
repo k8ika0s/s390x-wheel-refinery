@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
@@ -47,6 +51,41 @@ func TestUploadArtifactsFiltersWheels(t *testing.T) {
 	if fs.keys[0] != "demo/1.0.0/demo-1.0.0-py3-none-any.whl" {
 		t.Fatalf("unexpected key: %s", fs.keys[0])
 	}
+}
+
+func TestFetchArtifactUsesFetcher(t *testing.T) {
+	dir := t.TempDir()
+	fetched := false
+	w := &Worker{
+		Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")},
+		Fetcher: cas.Fetcher{
+			BaseURL: "http://example",
+			Repo:    "artifacts",
+			Client: &http.Client{
+				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					fetched = true
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader("data")),
+						Header:     make(http.Header),
+					}, nil
+				}),
+			},
+		},
+	}
+	job := runner.Job{WheelDigest: "sha256:abc", WheelAction: "reuse"}
+	if err := w.fetchArtifact(context.Background(), job); err != nil {
+		t.Fatalf("fetchArtifact: %v", err)
+	}
+	if !fetched {
+		t.Fatalf("fetcher not invoked")
+	}
+}
+
+type roundTripFunc func(req *http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestMatchCarriesWheelDigestAndAction(t *testing.T) {

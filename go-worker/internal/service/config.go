@@ -51,6 +51,7 @@ type Config struct {
 	ObjectStoreAccess   string
 	ObjectStoreSecret   string
 	ObjectStoreUseSSL   bool
+	LocalCASDir         string
 }
 
 func fromEnv() Config {
@@ -92,6 +93,7 @@ func fromEnv() Config {
 		ObjectStoreAccess:   getenv("OBJECT_STORE_ACCESS_KEY", ""),
 		ObjectStoreSecret:   getenv("OBJECT_STORE_SECRET_KEY", ""),
 		ObjectStoreUseSSL:   getenvBool("OBJECT_STORE_USE_SSL", false),
+		LocalCASDir:         getenv("LOCAL_CAS_DIR", "/cache/cas"),
 	}
 	return cfg
 }
@@ -141,6 +143,20 @@ func (c Config) CASStore() cas.Store {
 		repo = "artifacts"
 	}
 	return cas.ZotStore{
+		BaseURL:  c.CASRegistryURL,
+		Repo:     repo,
+		Username: c.CASRegistryUser,
+		Password: c.CASRegistryPass,
+	}
+}
+
+// CASFetcher returns a fetcher for pulling blobs locally.
+func (c Config) CASFetcher() cas.Fetcher {
+	repo := c.CASRegistryRepo
+	if repo == "" {
+		repo = "artifacts"
+	}
+	return cas.Fetcher{
 		BaseURL:  c.CASRegistryURL,
 		Repo:     repo,
 		Username: c.CASRegistryUser,

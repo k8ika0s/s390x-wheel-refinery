@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/objectstore"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/objectstore"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/reporter"
@@ -26,6 +28,7 @@ type Worker struct {
 	Reporter *reporter.Client
 	Cfg      Config
 	Store    objectstore.Store
+	Fetcher  cas.Fetcher
 	mu       sync.Mutex
 	planSnap plan.Snapshot
 }
@@ -107,6 +110,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 	for i, job := range jobs {
 		i, job := i, job
 		g.Go(func() error {
+			if job.WheelAction == "reuse" && job.WheelDigest != "" {
+				_ = w.fetchArtifact(ctx, job)
+			}
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			results[i] = result{
 				job:      job,
@@ -337,7 +343,14 @@ func BuildWorker(cfg Config) (*Worker, error) {
 		RunCmd:      cfg.RunCmd,
 	}
 	rep := &reporter.Client{BaseURL: strings.TrimRight(cfg.ControlPlaneURL, "/"), Token: cfg.ControlPlaneToken}
-	return &Worker{Queue: q, Runner: r, Reporter: rep, Cfg: cfg, Store: cfg.ObjectStore()}, nil
+	return &Worker{
+		Queue:    q,
+		Runner:   r,
+		Reporter: rep,
+		Cfg:      cfg,
+		Store:    cfg.ObjectStore(),
+		Fetcher:  cfg.CASFetcher(),
+	}, nil
 }
 
 func queueKey(name, version string) string {
@@ -398,4 +411,19 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		key := fmt.Sprintf("%s/%s/%s", strings.ToLower(job.Name), job.Version, e.Name())
 		_ = store.Put(ctx, key, data, "application/octet-stream")
 	}
+}
+
+func (w *Worker) fetchArtifact(ctx context.Context, job runner.Job) error {
+	if job.WheelDigest == "" || w.Fetcher.BaseURL == "" {
+		return nil
+	}
+	destDir := w.Cfg.LocalCASDir
+	if destDir == "" {
+		destDir = filepath.Join(w.Cfg.CacheDir, "cas")
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return err
+	}
+	destPath := filepath.Join(destDir, strings.ReplaceAll(job.WheelDigest, ":", "_")+".bin")
+	return w.Fetcher.Fetch(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, destPath)
 }
