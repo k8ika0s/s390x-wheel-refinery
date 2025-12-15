@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS manifests (
     name         TEXT NOT NULL,
     version      TEXT NOT NULL,
     wheel        TEXT NOT NULL,
+    wheel_url    TEXT,
+    runtime_url  TEXT,
+    pack_urls    TEXT[],
     python_tag   TEXT,
     platform_tag TEXT,
     status       TEXT,
@@ -69,6 +72,10 @@ CREATE TABLE IF NOT EXISTS manifests (
 );
 CREATE INDEX IF NOT EXISTS idx_manifests_name ON manifests(name);
 CREATE INDEX IF NOT EXISTS idx_manifests_version ON manifests(version);
+
+ALTER TABLE manifests ADD COLUMN IF NOT EXISTS wheel_url TEXT;
+ALTER TABLE manifests ADD COLUMN IF NOT EXISTS runtime_url TEXT;
+ALTER TABLE manifests ADD COLUMN IF NOT EXISTS pack_urls TEXT[];
 
 CREATE TABLE IF NOT EXISTS plans (
     id         BIGSERIAL PRIMARY KEY,
