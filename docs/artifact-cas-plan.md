@@ -22,6 +22,7 @@
 
 ### Local dev (compose)
 - `docker-compose.control-plane.yml` now brings up Zot on `http://localhost:5000` (repo default: `artifacts`) and MinIO on `http://localhost:9000` (console `:9001`) with credentials `minio/minio123`.
+- Plan snapshots now record CAS registry URL/repo for downstream workers/tools.
 
 ## Planner / DAG
 - **BuildRequest schema:** targets (sources, python_versions, policy, constraints, allowed packs), strategy, overrides.
