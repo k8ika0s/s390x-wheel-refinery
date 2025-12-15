@@ -4,6 +4,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 )
 
 // Config holds worker settings.
@@ -37,6 +40,11 @@ type Config struct {
 	UpgradeStrategy    string
 	RequirementsPath   string
 	ConstraintsPath    string
+	CASRegistryURL     string
+	CASRegistryRepo    string
+	CASRegistryUser    string
+	CASRegistryPass    string
+	PackCatalog        *pack.Catalog
 }
 
 func fromEnv() Config {
@@ -69,6 +77,10 @@ func fromEnv() Config {
 		UpgradeStrategy:    getenv("UPGRADE_STRATEGY", "pinned"),
 		RequirementsPath:   getenv("REQUIREMENTS_PATH", ""),
 		ConstraintsPath:    getenv("CONSTRAINTS_PATH", ""),
+		CASRegistryURL:     getenv("CAS_REGISTRY_URL", ""),
+		CASRegistryRepo:    getenv("CAS_REGISTRY_REPO", "artifacts"),
+		CASRegistryUser:    getenv("CAS_REGISTRY_USER", ""),
+		CASRegistryPass:    getenv("CAS_REGISTRY_PASSWORD", ""),
 	}
 	return cfg
 }
@@ -106,4 +118,21 @@ func parseCmd(cmd string) []string {
 		return nil
 	}
 	return strings.Fields(cmd)
+}
+
+// CASStore builds a CAS store client from config (Zot by default).
+func (c Config) CASStore() cas.Store {
+	if c.CASRegistryURL == "" {
+		return cas.NullStore{}
+	}
+	repo := c.CASRegistryRepo
+	if repo == "" {
+		repo = "artifacts"
+	}
+	return cas.ZotStore{
+		BaseURL:  c.CASRegistryURL,
+		Repo:     repo,
+		Username: c.CASRegistryUser,
+		Password: c.CASRegistryPass,
+	}
 }

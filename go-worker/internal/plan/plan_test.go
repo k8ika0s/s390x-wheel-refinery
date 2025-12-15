@@ -333,7 +333,7 @@ func TestGenerateWritesPlan(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	os.WriteFile(filepath.Join(dir, "pkg-0.1.0-py3-none-any.whl"), []byte{}, 0o644)
-	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned", "", "")
+	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned", "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("generate failed: %v", err)
 	}

@@ -101,6 +101,8 @@ func Generate(
 	strategy,
 	requirementsPath,
 	constraintsPath string,
+	catalog *pack.Catalog,
+	store cas.Store,
 ) (Snapshot, error) {
 	maxDeps := loadMaxDepsFromEnv()
 	if maxDeps <= 0 {
@@ -122,6 +124,8 @@ func Generate(
 		PackageOverrides: loadOverridesFromEnv(),
 		RequirementsPath: requirementsPath,
 		ConstraintsPath:  constraintsPath,
+		PackCatalog:      catalog,
+		ArtifactStore:    store,
 	}
 	snap, err := computeWithResolver(inputDir, pythonVersion, platformTag, opts, &IndexClient{
 		BaseURL:       indexURL,

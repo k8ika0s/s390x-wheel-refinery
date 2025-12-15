@@ -88,6 +88,8 @@ func Run() error {
 				cfg.UpgradeStrategy,
 				cfg.RequirementsPath,
 				cfg.ConstraintsPath,
+				cfg.PackCatalog,
+				cfg.CASStore(),
 			)
 			if err != nil {
 				wr.WriteHeader(http.StatusInternalServerError)

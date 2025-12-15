@@ -56,6 +56,8 @@ func (w *Worker) LoadPlan() error {
 				w.Cfg.UpgradeStrategy,
 				w.Cfg.RequirementsPath,
 				w.Cfg.ConstraintsPath,
+				w.Cfg.PackCatalog,
+				w.Cfg.CASStore(),
 			)
 			if err != nil {
 				return err
