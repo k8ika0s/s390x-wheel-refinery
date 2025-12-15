@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/builder"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/objectstore"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
@@ -871,7 +872,7 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 			}
 		}
 		if !fetched && actions[id.Digest] == "build" {
-			if err := w.writePackArtifact(destPath, id.Digest, meta[id.Digest]); err == nil {
+			if err := builder.BuildPack(destPath, builder.PackBuildOpts{Digest: id.Digest, Meta: meta[id.Digest]}); err == nil {
 				fetched = true
 			}
 		}
@@ -905,7 +906,7 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		}
 	}
 	if action == "build" {
-		if err := w.writeRuntimeArtifact(destPath, rtID.Digest, meta); err == nil {
+		if err := builder.BuildRuntime(destPath, builder.RuntimeBuildOpts{Digest: rtID.Digest, PythonVersion: pythonVersion, Meta: meta}); err == nil {
 			return destPath
 		}
 	}
