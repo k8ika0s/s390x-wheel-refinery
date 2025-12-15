@@ -11,11 +11,21 @@ import (
 
 // Job describes a build job the worker executes.
 type Job struct {
-	Name        string
-	Version     string
-	PythonTag   string
-	PlatformTag string
-	Recipes     []string
+	Name              string
+	Version           string
+	PythonVersion     string
+	PythonTag         string
+	PlatformTag       string
+	Recipes           []string
+	WheelDigest       string
+	WheelAction       string
+	RuntimePath       string
+	PackPaths         []string
+	RuntimeDigest     string
+	PackDigests       []string
+	WheelSourceDigest string
+	RepairToolVersion string
+	RepairPolicyHash  string
 }
 
 // Runner executes build jobs.
@@ -36,17 +46,30 @@ type PodmanRunner struct {
 	RunCmd      []string
 }
 
+func pyTagFromVersion(ver string) string {
+	trimmed := strings.ReplaceAll(ver, ".", "")
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "cp") {
+		return trimmed
+	}
+	if strings.HasPrefix(trimmed, "3") {
+		return "cp" + trimmed
+	}
+	return trimmed
+}
+
 // Run executes a placeholder podman command. In a real implementation this would
 // invoke the build script inside the container. Here we simulate success for tests.
 func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string, error) {
 	start := time.Now()
 	bin := p.Bin
 	if bin == "" {
-		// Attempt to use podman from PATH when not explicitly set; if not found, stub success.
 		if path, err := exec.LookPath("podman"); err == nil {
 			bin = path
 		} else {
-			return time.Since(start), "podman stub (podman not found)", nil
+			return time.Since(start), "", fmt.Errorf("podman binary not found; set PODMAN_BIN")
 		}
 	}
 	args := p.buildArgs(job)
@@ -100,6 +123,11 @@ func (p *PodmanRunner) buildCmd(job Job) []string {
 
 // buildArgs assembles the podman arguments with mounts, env, image, and command.
 func (p *PodmanRunner) buildArgs(job Job) []string {
+	tag := job.PythonTag
+	if tag == "" {
+		tag = pyTagFromVersion(job.PythonVersion)
+	}
+	var depPrefixes []string
 	args := []string{
 		"run", "--rm",
 		"-v", fmt.Sprintf("%s:/input:ro", p.InputDir),
@@ -107,11 +135,47 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 		"-v", fmt.Sprintf("%s:/cache", p.CacheDir),
 		"-e", fmt.Sprintf("JOB_NAME=%s", job.Name),
 		"-e", fmt.Sprintf("JOB_VERSION=%s", job.Version),
-		"-e", fmt.Sprintf("PYTHON_TAG=%s", job.PythonTag),
-		"-e", fmt.Sprintf("PLATFORM_TAG=%s", job.PlatformTag),
 	}
+	if job.PythonVersion != "" {
+		args = append(args, "-e", fmt.Sprintf("PYTHON_VERSION=%s", job.PythonVersion))
+	}
+	if tag != "" {
+		args = append(args, "-e", fmt.Sprintf("PYTHON_TAG=%s", tag))
+	} else if p.PythonTag != "" {
+		args = append(args, "-e", fmt.Sprintf("PYTHON_TAG=%s", p.PythonTag))
+	}
+	args = append(args, "-e", fmt.Sprintf("PLATFORM_TAG=%s", job.PlatformTag))
 	if len(job.Recipes) > 0 {
 		args = append(args, "-e", fmt.Sprintf("RECIPES=%s", strings.Join(job.Recipes, ",")))
+	}
+	if job.RuntimePath != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:/opt/runtime:ro", job.RuntimePath))
+		args = append(args, "-e", "RUNTIME_PATH=/opt/runtime")
+		args = append(args, "-e", "PYTHONHOME=/opt/runtime")
+		args = append(args, "-e", "PATH=/opt/runtime/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin")
+		args = append(args, "-e", "LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:/opt/packs/lib")
+	}
+	for i, pth := range job.PackPaths {
+		args = append(args, "-v", fmt.Sprintf("%s:/opt/packs/pack%d:ro", pth, i))
+		depPrefixes = append(depPrefixes, fmt.Sprintf("/opt/packs/pack%d/usr/local", i))
+	}
+	if job.RuntimeDigest != "" {
+		args = append(args, "-e", fmt.Sprintf("RUNTIME_DIGEST=%s", job.RuntimeDigest))
+	}
+	if len(job.PackDigests) > 0 {
+		args = append(args, "-e", fmt.Sprintf("PACK_DIGESTS=%s", strings.Join(job.PackDigests, ",")))
+	}
+	if len(depPrefixes) > 0 {
+		args = append(args, "-e", fmt.Sprintf("DEPS_PREFIXES=%s", strings.Join(depPrefixes, ":")))
+	}
+	if job.WheelSourceDigest != "" {
+		args = append(args, "-e", fmt.Sprintf("WHEEL_SOURCE_DIGEST=%s", job.WheelSourceDigest))
+	}
+	if job.RepairToolVersion != "" {
+		args = append(args, "-e", fmt.Sprintf("REPAIR_TOOL_VERSION=%s", job.RepairToolVersion))
+	}
+	if job.RepairPolicyHash != "" {
+		args = append(args, "-e", fmt.Sprintf("REPAIR_POLICY_HASH=%s", job.RepairPolicyHash))
 	}
 	image := p.defaultImage()
 	cmdArgs := p.buildCmd(job)

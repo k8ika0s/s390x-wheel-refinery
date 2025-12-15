@@ -1,31 +1,31 @@
 flowchart LR
     subgraph Inputs
-        W[Input wheels /input]
-        CFG[Config python version, indexes, strategy]
+        IN[Input wheels /input or requirements.txt]
+        CFG[Config: python versions, policy, strategy]
     end
-    SR[Scanner/Resolver<br/>classify & plan]
-    PLAN[Build Plan<br/>reuse vs rebuild]
-    Q[Retry Queue<br/>file/Redis/Kafka]
-    B["Go worker using Podman<br/>refinery-build per job"]
-    C[Cache /cache<br/>reused/built wheels]
-    O[Output /output<br/>s390x wheels]
-    H[History DB<br/>events, variants, hints]
-    M[Manifest<br/>run output summary]
-    API[Go Control Plane<br/>logs/metrics/queue/hints]
-    UI[Web UI React SPA]
 
-    W --> SR
-    CFG --> SR
-    SR --> PLAN
+    PLAN[Go planner<br/>DAG: runtime+packs+wheels+repair<br/>CAS reuse vs build]
+    Q[Queue backend<br/>file / Redis / Kafka]
+    subgraph CAS
+        ZOT["CAS registry: Zot"]
+        MINIO["Object store: MinIO (optional)"]
+    end
+    subgraph Builder
+        WKR[Go worker]
+        RUN[Podman runner<br/>builder image]
+        REC[Recipes pack/runtime/repair]
+    end
+    CP[Go control-plane API]
+    UI[React UI]
+
+    IN --> PLAN
+    CFG --> PLAN
     PLAN --> Q
-    Q --> B
-    B --> C
-    B --> O
-    B --> H
-    B --> M
-    C -. reuse .-> SR
-    H --> API
-    M --> API
-    Q --> API
-    API <--> UI
-    API --> B
+    PLAN -. cache check .-> ZOT
+    Q --> WKR
+    WKR -->|fetch wheels/packs/runtime| ZOT
+    WKR --> RUN
+    RUN -->|build+repair| ZOT
+    RUN -->|wheel uploads| MINIO
+    RUN -->|logs/manifest/events| CP
+    CP <--> UI

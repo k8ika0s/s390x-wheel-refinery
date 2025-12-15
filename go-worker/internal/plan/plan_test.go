@@ -4,6 +4,9 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,10 +73,214 @@ func TestComputePlanReuseVsBuild(t *testing.T) {
 	}
 }
 
+func TestComputePlanIncludesDAG(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "demo-1.0.0-py3-none-any.whl"), []byte{}, 0o644)
+
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", Options{UpgradeStrategy: "pinned"}, nil)
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	if len(snap.DAG) == 0 {
+		t.Fatalf("expected DAG nodes")
+	}
+	rtKey := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: "3.11"}
+	rtDigest := rtKey.Digest()
+	wk := artifact.WheelKey{
+		SourceDigest:  sourceDigest("demo", "1.0.0"),
+		PyTag:         "cp311",
+		PlatformTag:   "manylinux2014_s390x",
+		RuntimeDigest: rtDigest,
+	}
+	wantWheelID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+
+	var runtimeFound, wheelFound bool
+	for _, n := range snap.DAG {
+		switch n.Type {
+		case NodeRuntime:
+			if n.ID.Digest == rtDigest {
+				runtimeFound = true
+			}
+		case NodeWheel:
+			if n.ID == wantWheelID {
+				wheelFound = true
+				if len(n.Inputs) != 1 || n.Inputs[0].Digest != rtDigest {
+					t.Fatalf("wheel node missing runtime input: %+v", n.Inputs)
+				}
+			}
+		}
+	}
+	if !runtimeFound {
+		t.Fatalf("runtime node missing from DAG")
+	}
+	if !wheelFound {
+		t.Fatalf("wheel node missing from DAG")
+	}
+}
+
+func TestPackCatalogAddsPackNodesToDAG(t *testing.T) {
+	dir := t.TempDir()
+	reqPath := filepath.Join(dir, "requirements.txt")
+	if err := os.WriteFile(reqPath, []byte("demo==1.0.0"), 0o644); err != nil {
+		t.Fatalf("write requirements: %v", err)
+	}
+	cat := &pack.Catalog{
+		Packs: map[string]pack.PackDef{
+			"openssl": {Name: "openssl", Version: "3.0", RecipeDigest: "sha256:abc"},
+		},
+		Rules: []pack.Rule{
+			{PackagePattern: "demo", Packs: []string{"openssl"}},
+		},
+	}
+	opts := Options{UpgradeStrategy: "pinned", RequirementsPath: reqPath, PackCatalog: cat}
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", opts, nil)
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	packKey := artifact.PackKey{Arch: "s390x", PolicyBaseDigest: "", Name: "openssl", Version: "3.0", RecipeDigest: "sha256:abc"}
+	packID := artifact.ID{Type: artifact.PackType, Digest: packKey.Digest()}
+	rtKey := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: "3.11"}
+	rtDigest := rtKey.Digest()
+	wk := artifact.WheelKey{
+		SourceDigest:  sourceDigest("demo", "1.0.0"),
+		PyTag:         "cp311",
+		PlatformTag:   "manylinux2014_s390x",
+		RuntimeDigest: rtDigest,
+		PackDigests:   []string{packID.Digest},
+	}
+	wantWheel := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+
+	var sawPack, sawWheel bool
+	for _, n := range snap.DAG {
+		if n.ID == packID {
+			sawPack = true
+		}
+		if n.ID == wantWheel {
+			sawWheel = true
+			var foundPack bool
+			for _, inp := range n.Inputs {
+				if inp == packID {
+					foundPack = true
+				}
+			}
+			if !foundPack {
+				t.Fatalf("wheel node missing pack input: %+v", n.Inputs)
+			}
+		}
+	}
+	if !sawPack {
+		t.Fatalf("pack node not present in DAG")
+	}
+	if !sawWheel {
+		t.Fatalf("wheel node with pack input not present")
+	}
+}
+
+func TestRepairNodesFollowWheels(t *testing.T) {
+	dir := t.TempDir()
+	reqPath := filepath.Join(dir, "requirements.txt")
+	if err := os.WriteFile(reqPath, []byte("demo==1.0.0"), 0o644); err != nil {
+		t.Fatalf("write requirements: %v", err)
+	}
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", Options{UpgradeStrategy: "pinned", RequirementsPath: reqPath}, nil)
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+	var wheels []artifact.ID
+	var repairs []DAGNode
+	for _, n := range snap.DAG {
+		if n.Type == NodeWheel {
+			wheels = append(wheels, n.ID)
+		}
+		if n.Type == NodeRepair {
+			repairs = append(repairs, n)
+		}
+	}
+	if len(repairs) != len(wheels) {
+		t.Fatalf("expected %d repair nodes, got %d", len(wheels), len(repairs))
+	}
+	for _, r := range repairs {
+		if len(r.Inputs) != 1 {
+			t.Fatalf("repair node should have one input: %+v", r.Inputs)
+		}
+		found := false
+		for _, w := range wheels {
+			if r.Inputs[0] == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("repair node input not a wheel: %+v", r.Inputs[0])
+		}
+	}
+}
+
+func TestCASOverridesActionsToReuse(t *testing.T) {
+	dir := t.TempDir()
+	reqPath := filepath.Join(dir, "requirements.txt")
+	if err := os.WriteFile(reqPath, []byte("demo==1.0.0"), 0o644); err != nil {
+		t.Fatalf("write requirements: %v", err)
+	}
+	cat := &pack.Catalog{
+		Packs: map[string]pack.PackDef{
+			"openssl": {Name: "openssl", Version: "3.0"},
+		},
+		Rules: []pack.Rule{{PackagePattern: "demo", Packs: []string{"openssl"}}},
+	}
+	rtKey := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: "3.11"}
+	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: rtKey.Digest()}
+	packKey := artifact.PackKey{Arch: "s390x", PolicyBaseDigest: "", Name: "openssl", Version: "3.0"}
+	packID := artifact.ID{Type: artifact.PackType, Digest: packKey.Digest()}
+	wk := artifact.WheelKey{
+		SourceDigest:  sourceDigest("demo", "1.0.0"),
+		PyTag:         "cp311",
+		PlatformTag:   "manylinux2014_s390x",
+		RuntimeDigest: rtID.Digest,
+		PackDigests:   []string{packID.Digest},
+	}
+	wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+	repairKey := artifact.RepairKey{InputWheelDigest: wID.Digest}
+	repairID := artifact.ID{Type: artifact.RepairType, Digest: repairKey.Digest()}
+
+	store := cas.NewMemoryStore()
+	store.Add(rtID)
+	store.Add(packID)
+	store.Add(wID)
+	store.Add(repairID)
+
+	opts := Options{UpgradeStrategy: "pinned", RequirementsPath: reqPath, PackCatalog: cat, ArtifactStore: store}
+	snap, err := computeWithResolver(dir, "3.11", "manylinux2014_s390x", opts, nil)
+	if err != nil {
+		t.Fatalf("compute failed: %v", err)
+	}
+
+	find := func(id artifact.ID) (DAGNode, bool) {
+		for _, n := range snap.DAG {
+			if n.ID == id {
+				return n, true
+			}
+		}
+		return DAGNode{}, false
+	}
+	if n, ok := find(rtID); !ok || n.Action != "reuse" {
+		t.Fatalf("runtime not marked reuse: %+v", n)
+	}
+	if n, ok := find(packID); !ok || n.Action != "reuse" {
+		t.Fatalf("pack not marked reuse: %+v", n)
+	}
+	if n, ok := find(wID); !ok || n.Action != "reuse" {
+		t.Fatalf("wheel not marked reuse: %+v", n)
+	}
+	if n, ok := find(repairID); !ok || n.Action != "reuse" {
+		t.Fatalf("repair not marked reuse: %+v", n)
+	}
+}
+
 func TestLoadWriteRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plan.json")
-	snap := Snapshot{RunID: "abc", Plan: []Node{{Name: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}}}
+	snap := Snapshot{RunID: "abc", Plan: []FlatNode{{Name: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}}, CAS: &CASInfo{RegistryURL: "http://example", RegistryRepo: "artifacts"}}
 	if err := Write(path, snap); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -83,6 +290,9 @@ func TestLoadWriteRoundTrip(t *testing.T) {
 	}
 	if got.RunID != snap.RunID || len(got.Plan) != 1 || got.Plan[0].Name != "pkg" {
 		t.Fatalf("round trip mismatch: %+v", got)
+	}
+	if got.CAS == nil || got.CAS.RegistryURL != "http://example" || got.CAS.RegistryRepo != "artifacts" {
+		t.Fatalf("cas round trip mismatch: %+v", got.CAS)
 	}
 }
 
@@ -126,12 +336,35 @@ func TestGenerateWritesPlan(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	os.WriteFile(filepath.Join(dir, "pkg-0.1.0-py3-none-any.whl"), []byte{}, 0o644)
-	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned", "", "")
+	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned", "", "", nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("generate failed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(planDir, "plan.json")); err != nil {
 		t.Fatalf("plan.json not written: %v", err)
+	}
+}
+
+func TestSnapshotRecordsCASConfig(t *testing.T) {
+	dir := t.TempDir()
+	planDir := filepath.Join(dir, "cache")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "pkg-0.1.0-py3-none-any.whl"), []byte{}, 0o644)
+	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned", "", "", nil, nil, "http://zot", "artifacts")
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	snap, err := Load(filepath.Join(planDir, "plan.json"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if snap.CAS == nil {
+		t.Fatalf("cas config missing")
+	}
+	if snap.CAS.RegistryURL != "http://zot" || snap.CAS.RegistryRepo != "artifacts" {
+		t.Fatalf("unexpected cas config: %+v", snap.CAS)
 	}
 }
 
@@ -167,8 +400,8 @@ func TestComputeFixtureMatchesExpected(t *testing.T) {
 func TestJSONShapeMatchesPythonSnapshot(t *testing.T) {
 	snap := Snapshot{
 		RunID: "abc",
-		Plan: []Node{
-			{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"},
+		Plan: []FlatNode{
+			{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PythonVersion: "3.11", PlatformTag: "manylinux2014_s390x", Action: "build"},
 		},
 	}
 	data, err := json.Marshal(snap)
@@ -194,7 +427,7 @@ func TestJSONShapeMatchesPythonSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatalf("node not object: %#v", arr[0])
 	}
-	required := []string{"name", "version", "python_tag", "platform_tag", "action"}
+	required := []string{"name", "version", "python_tag", "python_version", "platform_tag", "action"}
 	for _, k := range required {
 		if _, ok := node[k]; !ok {
 			t.Fatalf("missing field %s", k)
@@ -267,13 +500,13 @@ func TestUpgradeStrategyEagerOverridesPins(t *testing.T) {
 		t.Fatalf("eager compute: %v", err)
 	}
 
-	find := func(plan Snapshot, name string) Node {
+	find := func(plan Snapshot, name string) FlatNode {
 		for _, n := range plan.Plan {
 			if n.Name == name {
 				return n
 			}
 		}
-		return Node{}
+		return FlatNode{}
 	}
 
 	if find(pinnedSnap, "depa").Version != "==1.0.0" {
@@ -344,13 +577,13 @@ func TestPackageOverridesApplyToTopLevelAndDeps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compute failed: %v", err)
 	}
-	find := func(name string) (Node, bool) {
+	find := func(name string) (FlatNode, bool) {
 		for _, n := range snap.Plan {
 			if n.Name == name {
 				return n, true
 			}
 		}
-		return Node{}, false
+		return FlatNode{}, false
 	}
 	if n, ok := find("demo"); !ok || n.Version != "9.9.9" || n.Action != "build" {
 		t.Fatalf("override for demo not applied: %+v", n)

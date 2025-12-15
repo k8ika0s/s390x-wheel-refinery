@@ -585,6 +585,62 @@ class WheelBuilder:
             if step not in override.system_recipe:
                 override.system_recipe.append(step)
 
+    def _hint_from_logs(self, output: str) -> Optional[str]:
+        # Catalog driven
+        catalog_match = self.hint_catalog.match(output)
+        if catalog_match:
+            parts = []
+            if catalog_match.packages.get("dnf"):
+                parts.append("dnf: " + " ".join(catalog_match.packages["dnf"]))
+            if catalog_match.packages.get("apt"):
+                parts.append("apt: " + " ".join(catalog_match.packages["apt"]))
+            suggestion = " | ".join(parts)
+            recipes = catalog_match.recipes or {}
+            recipe_steps = []
+            if recipes.get("dnf"):
+                recipe_steps.extend(recipes["dnf"])
+            if recipes.get("apt"):
+                recipe_steps.extend(recipes["apt"])
+            recipe_text = "; ".join(recipe_steps)
+            return f"Suggested packages: {suggestion}" + (f" | Recipes: {recipe_text}" if recipe_text else "")
+
+        # Fallback heuristic patterns
+        missing_lib = re.search(r"cannot find -l([A-Za-z0-9_\-]+)", output)
+        if missing_lib:
+            lib = missing_lib.group(1)
+            return f"Missing system library lib{lib}"
+        missing_header = re.search(r"fatal error: ([A-Za-z0-9_/.\-]+\.h): No such file or directory", output)
+        if missing_header:
+            header = missing_header.group(1)
+            return f"Missing header {header}"
+        missing_file = re.search(r"No such file or directory: '([^']+)'", output)
+        if missing_file:
+            return f"Missing file {missing_file.group(1)} (check build deps)"
+        missing_module = re.search(r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]", output)
+        if missing_module:
+            name = missing_module.group(1)
+            return f"Missing Python module {name} (build dependency?)"
+        return None
+
+    def _recipe_steps_from_hint(self, hint: str) -> list[str]:
+        steps: list[str] = []
+        if "Suggested packages:" in hint:
+            suggestion = hint.split("Suggested packages:")[-1].strip()
+            parts = suggestion.split("|")
+            dnf_cmds = []
+            apt_cmds = []
+            for part in parts:
+                part = part.strip()
+                if part.startswith("dnf:"):
+                    dnf_cmds.extend(part.replace("dnf:", "").strip().split())
+                if part.startswith("apt:"):
+                    apt_cmds.extend(part.replace("apt:", "").strip().split())
+            if dnf_cmds:
+                steps.append("dnf install -y " + " ".join(dnf_cmds))
+            if apt_cmds:
+                steps.append("apt-get update && apt-get install -y " + " ".join(apt_cmds))
+        return steps
+
 
 def _first_sdist(paths: Iterable[Path]) -> Optional[Path]:
     for path in paths:

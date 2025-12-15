@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -52,12 +53,16 @@ func TestPodmanRunnerBuildArgs(t *testing.T) {
 	}
 }
 
-func TestPodmanRunnerStub(t *testing.T) {
-	// Force bin to "false" so it errors, demonstrating fallback stub when podman is missing.
-	r := &PodmanRunner{Bin: ""}
-	_, logContent, err := r.Run(context.Background(), Job{Name: "pkg", Version: "1.0.0"})
-	if err == nil && !strings.Contains(logContent, "podman stub") {
-		t.Fatalf("expected podman stub when podman missing")
+// PodmanRunner now fails if podman is missing; ensure error is returned.
+func TestPodmanRunnerNoBinary(t *testing.T) {
+	origPath := os.Getenv("PATH")
+	defer func() { _ = os.Setenv("PATH", origPath) }()
+	_ = os.Setenv("PATH", "")
+
+	r := &PodmanRunner{}
+	_, _, err := r.Run(context.Background(), Job{Name: "pkg", Version: "1.0.0"})
+	if err == nil || !strings.Contains(err.Error(), "podman binary not found") {
+		t.Fatalf("expected podman missing error, got %v", err)
 	}
 }
 

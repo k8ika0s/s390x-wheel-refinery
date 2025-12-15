@@ -40,6 +40,11 @@ type ManifestEntry struct {
 	Name        string
 	Version     string
 	Wheel       string
+	WheelURL    string
+	RepairURL   string
+	RepairDigest string
+	RuntimeURL  string
+	PackURLs    []string
 	PythonTag   string
 	PlatformTag string
 	Status      string
@@ -56,11 +61,12 @@ type Artifact struct {
 
 // PlanNode describes a unit in the build plan/graph.
 type PlanNode struct {
-	Name        string
-	Version     string
-	PythonTag   string
-	PlatformTag string
-	Action      string
+	Name          string
+	Version       string
+	PythonVersion string
+	PythonTag     string
+	PlatformTag   string
+	Action        string
 }
 
 // PackageSummary aggregates status for a package.

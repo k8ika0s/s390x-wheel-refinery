@@ -4,6 +4,34 @@ import { API_BASE, clearQueue, enqueueRetry, fetchDashboard, fetchLog, fetchPack
 
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
 
+function ArtifactBadges({ meta }) {
+  if (!meta) return null;
+  const items = [];
+  const add = (label, url, digest) => {
+    if (url) items.push({ label, url });
+    else if (digest) items.push({ label: `${label}:${digest.slice(0, 12)}…` });
+  };
+  add("wheel", meta.wheel_url, meta.wheel_digest);
+  add("repair", meta.repair_url, meta.repair_digest);
+  add("runtime", meta.runtime_url, meta.runtime_digest);
+  const packs = meta.pack_urls || meta.pack_digests || [];
+  packs.forEach((p, idx) => add(`pack${idx + 1}`, typeof p === "string" ? p : "", typeof p === "string" ? p : ""));
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {items.map((it, idx) =>
+        it.url ? (
+          <a key={idx} href={it.url} target="_blank" rel="noreferrer" className="chip chip-link">
+            {it.label}
+          </a>
+        ) : (
+          <span key={idx} className="chip chip-muted">{it.label}</span>
+        ),
+      )}
+    </div>
+  );
+}
+
 function Toasts({ toasts, onDismiss }) {
   return (
     <div className="fixed bottom-4 right-4 z-50 space-y-2 w-full max-w-sm">
@@ -41,7 +69,7 @@ function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, ico
   );
 }
 
-function Layout({ children, tokenActive, theme, onToggleTheme }) {
+function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
   const location = useLocation();
   const isActive = (path) => location.pathname === path || (path !== "/" && location.pathname.startsWith(path));
   return (
@@ -52,6 +80,14 @@ function Layout({ children, tokenActive, theme, onToggleTheme }) {
             <Link to="/" className="text-xl font-bold text-accent">s390x Wheel Refinery</Link>
             <span className="chip bg-slate-800 border-border text-xs">Env: {ENV_LABEL}</span>
             <span className="chip bg-slate-800 border-border text-xs">API: {API_BASE || "same-origin"}</span>
+            {metrics?.queue?.length !== undefined && (
+              <span className="chip bg-slate-800 border-border text-xs">Q: {metrics.queue.length}</span>
+            )}
+            {metrics?.db?.status && (
+              <span className={`chip bg-slate-800 border-border text-xs ${metrics.db.status === "ok" ? "text-emerald-300" : "text-amber-300"}`}>
+                DB: {metrics.db.status}
+              </span>
+            )}
             {tokenActive ? (
               <span className="chip bg-emerald-900 border border-emerald-600 text-xs text-emerald-100">Token active</span>
             ) : (
@@ -168,6 +204,7 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
               <th className="text-left py-2 cursor-pointer" onClick={() => toggleSort("status")}>Status</th>
               <th className="text-left py-2 cursor-pointer" onClick={() => toggleSort("package")}>Package</th>
               <th className="text-left py-2">Python/Platform</th>
+              <th className="text-left py-2">Artifacts</th>
               <th className="text-left py-2">Detail</th>
             </tr>
           </thead>
@@ -177,6 +214,7 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
                 <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
                 <td className="py-2"><Link className="text-accent hover:underline" to={`/package/${e.name}`}>{e.name} {e.version}</Link></td>
                 <td className="py-2 text-slate-400">{e.python_tag}/{e.platform_tag}</td>
+                <td className="py-2 text-slate-300"><ArtifactBadges meta={e.metadata} /></td>
                 <td className="py-2 text-slate-400">{e.detail || ""}</td>
               </tr>
             ))}
@@ -371,6 +409,7 @@ function PackageDetail({ token, pushToast }) {
                   <tr className="border-b border-border">
                     <th className="text-left py-2">Status</th>
                     <th className="text-left py-2">Version</th>
+                    <th className="text-left py-2">Artifacts</th>
                     <th className="text-left py-2">Detail</th>
                     <th className="text-left py-2">Log</th>
                   </tr>
@@ -380,6 +419,7 @@ function PackageDetail({ token, pushToast }) {
                     <tr key={`${e.name}-${e.version}-${e.timestamp}`} className="border-b border-slate-800">
                       <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
                       <td className="py-2 text-slate-200">{e.version}</td>
+                      <td className="py-2 text-slate-300"><ArtifactBadges meta={e.metadata} /></td>
                       <td className="py-2 text-slate-400">{e.detail || ""}</td>
                       <td className="py-2"><button className="btn btn-secondary" onClick={() => loadLog(e)}>View log</button></td>
                     </tr>
@@ -459,7 +499,7 @@ function PackageDetail({ token, pushToast }) {
 
 const STATUS_CHIPS = ["built", "failed", "reused", "cached", "missing", "skipped_known_failure"];
 
-function Dashboard({ token, onTokenChange, pushToast }) {
+function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const [authToken, setAuthToken] = useState(localStorage.getItem("refinery_token") || token || "");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -490,6 +530,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
       );
       const data = await fetchDashboard(authToken);
       setDashboard({ ...data, recent });
+      onMetrics?.(data.metrics);
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
       setError(msg);
@@ -829,15 +870,52 @@ function Dashboard({ token, onTokenChange, pushToast }) {
             </StatCard>
             {metrics && (
               <StatCard title="Metrics snapshot">
-                <div className="space-y-2 text-sm text-slate-200">
+                <div className="space-y-3 text-sm text-slate-200">
+                  <div className="text-slate-400 text-xs">{metrics.summary?.description || "Queue and DB health at a glance."}</div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Queue backend</span>
+                    <span className="chip">{metrics.queue?.backend || "unknown"}</span>
+                  </div>
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Queue length</span>
-                    <span className="chip">{metrics.queue_length}</span>
+                    <span className="chip">{metrics.queue?.length ?? "?"}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Worker mode</span>
-                    <span className="chip">{metrics.worker_mode || "unknown"}</span>
+                    <span className="text-slate-400">Oldest age (s)</span>
+                    <span className="chip">{metrics.queue?.oldest_age_seconds ?? "-"}</span>
                   </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">DB</span>
+                    <span className={`chip ${metrics.db?.status === "ok" ? "bg-emerald-900" : "bg-slate-800"}`}>
+                      {metrics.db?.status || "unknown"}
+                    </span>
+                  </div>
+                  {metrics.queue?.consumer_state && (
+                    <div className="text-xs text-amber-300">Queue note: {metrics.queue.consumer_state}</div>
+                  )}
+                  {metrics.status_counts && Object.keys(metrics.status_counts).length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-xs text-slate-400">Status counts</div>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(metrics.status_counts).map(([k, v]) => (
+                          <span key={k} className="chip chip-muted">{k}: {v}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {metrics.recent_failures && metrics.recent_failures.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-xs text-slate-400">Recent failures</div>
+                      <div className="space-y-1">
+                        {metrics.recent_failures.slice(0, 5).map((f, idx) => (
+                          <div key={idx} className="flex items-center justify-between text-xs text-slate-300">
+                            <span>{f.name} {f.version}</span>
+                            <span className="chip">{f.status}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </StatCard>
             )}
@@ -854,6 +932,7 @@ export default function App() {
   const [token, setToken] = useState(localStorage.getItem("refinery_token") || "");
   const [toasts, setToasts] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem("refinery_theme") || "dark");
+  const [metrics, setMetrics] = useState(null);
 
   const dismissToast = (id) => setToasts((ts) => ts.filter((t) => t.id !== id));
   const pushToast = ({ type = "success", title, message }) => {
@@ -871,9 +950,9 @@ export default function App() {
   };
 
   return (
-    <Layout tokenActive={Boolean(token)} theme={theme} onToggleTheme={toggleTheme}>
+    <Layout tokenActive={Boolean(token)} theme={theme} onToggleTheme={toggleTheme} metrics={metrics}>
       <Routes>
-        <Route path="/" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} />} />
+        <Route path="/" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} />} />
         <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} />} />
       </Routes>
       <Toasts toasts={toasts} onDismiss={dismissToast} />

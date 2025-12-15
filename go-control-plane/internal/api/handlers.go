@@ -27,6 +27,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", h.health)
 	mux.HandleFunc("/api/ready", h.ready)
 	mux.HandleFunc("/api/metrics", h.metrics)
+	mux.HandleFunc("/metrics", h.promMetrics)
 	mux.HandleFunc("/api/config", h.config)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
@@ -82,7 +83,98 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "metrics not enabled", "hint": "prometheus wiring deferred"})
+	type queueMetrics struct {
+		Backend       string `json:"backend"`
+		Length        int    `json:"length"`
+		OldestAgeSec  int64  `json:"oldest_age_seconds,omitempty"`
+		ConsumerState string `json:"consumer_state,omitempty"`
+	}
+	type dbMetrics struct {
+		Status string `json:"status"`
+		Error  string `json:"error,omitempty"`
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	sum := store.Summary{StatusCounts: map[string]int{}, Failures: []store.Event{}}
+	if h.Store != nil {
+		if s, err := h.Store.Summary(ctx, 10); err == nil {
+			sum = s
+		}
+	}
+
+	// Queue metrics
+	qm := queueMetrics{Backend: h.Config.QueueBackend}
+	if h.Queue != nil {
+		stats, err := h.Queue.Stats(ctx)
+		if err == nil {
+			qm.Length = stats.Length
+			qm.OldestAgeSec = stats.OldestAge
+		} else {
+			qm.ConsumerState = fmt.Sprintf("stats_error: %v", err)
+		}
+	}
+
+	// DB metrics
+	dbm := dbMetrics{Status: "unknown"}
+	if pinger, ok := h.Store.(interface{ Ping(context.Context) error }); ok {
+		if err := pinger.Ping(ctx); err != nil {
+			dbm.Status = "degraded"
+			dbm.Error = err.Error()
+		} else {
+			dbm.Status = "ok"
+		}
+	} else {
+		dbm.Status = "n/a"
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"summary": map[string]any{
+			"title":       "Control-plane metrics",
+			"description": "Queue depth, DB health, and recent failure snapshot for quick triage.",
+			"updated_at":  time.Now().Unix(),
+		},
+		"queue":           qm,
+		"db":              dbm,
+		"status_counts":   sum.StatusCounts,
+		"recent_failures": sum.Failures,
+	})
+}
+
+// promMetrics exposes a simple Prometheus text exposition for quick scrapes.
+func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	sum, _ := h.Store.Summary(ctx, 10)
+	qstats, _ := h.Queue.Stats(ctx)
+	dbOK := 0
+	if pinger, ok := h.Store.(interface{ Ping(context.Context) error }); ok {
+		if err := pinger.Ping(ctx); err == nil {
+			dbOK = 1
+		}
+	}
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "# HELP refinery_queue_length Number of items in the retry/build queue.\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_queue_length gauge\n")
+	fmt.Fprintf(&buf, "refinery_queue_length{backend=%q} %d\n", h.Config.QueueBackend, qstats.Length)
+	fmt.Fprintf(&buf, "# HELP refinery_queue_oldest_seconds Age in seconds of the oldest queued item.\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_queue_oldest_seconds gauge\n")
+	fmt.Fprintf(&buf, "refinery_queue_oldest_seconds %d\n", qstats.OldestAge)
+	fmt.Fprintf(&buf, "# HELP refinery_db_up Database connectivity (1=up,0=down).\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_db_up gauge\n")
+	fmt.Fprintf(&buf, "refinery_db_up %d\n", dbOK)
+	fmt.Fprintf(&buf, "# HELP refinery_status_count Recent status counts.\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_status_count gauge\n")
+	for k, v := range sum.StatusCounts {
+		fmt.Fprintf(&buf, "refinery_status_count{status=%q} %d\n", k, v)
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (h *Handler) sessionToken(w http.ResponseWriter, r *http.Request) {
@@ -388,11 +480,12 @@ func (h *Handler) planCompute(w http.ResponseWriter, r *http.Request) {
 		for _, raw := range planArr {
 			if m, ok := raw.(map[string]any); ok {
 				nodes = append(nodes, store.PlanNode{
-					Name:        toString(m["name"]),
-					Version:     toString(m["version"]),
-					PythonTag:   toString(m["python_tag"]),
-					PlatformTag: toString(m["platform_tag"]),
-					Action:      toString(m["action"]),
+					Name:          toString(m["name"]),
+					Version:       toString(m["version"]),
+					PythonVersion: toString(m["python_version"]),
+					PythonTag:     toString(m["python_tag"]),
+					PlatformTag:   toString(m["platform_tag"]),
+					Action:        toString(m["action"]),
 				})
 			}
 		}

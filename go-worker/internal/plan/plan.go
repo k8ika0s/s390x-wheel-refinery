@@ -3,8 +3,14 @@ package plan
 import (
 	"archive/zip"
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 	"log"
 	"math/rand"
 	"os"
@@ -15,19 +21,29 @@ import (
 	"time"
 )
 
-// Node represents a plan entry.
-type Node struct {
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	PythonTag   string `json:"python_tag"`
-	PlatformTag string `json:"platform_tag"`
-	Action      string `json:"action"`
+// FlatNode represents a legacy plan entry.
+type FlatNode struct {
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	PythonVersion string `json:"python_version,omitempty"`
+	PythonTag     string `json:"python_tag"`
+	PlatformTag   string `json:"platform_tag"`
+	Action        string `json:"action"`
 }
 
 // Snapshot is the structure stored in plan.json.
 type Snapshot struct {
-	RunID string `json:"run_id"`
-	Plan  []Node `json:"plan"`
+	RunID string     `json:"run_id"`
+	Plan  []FlatNode `json:"plan"`
+	// DAG will carry richer artifact nodes when populated by the planner (optional for now).
+	DAG []DAGNode `json:"dag,omitempty"`
+	CAS *CASInfo  `json:"cas,omitempty"`
+}
+
+// CASInfo records the CAS registry settings used for planning (for downstream reuse).
+type CASInfo struct {
+	RegistryURL  string `json:"registry_url,omitempty"`
+	RegistryRepo string `json:"registry_repo,omitempty"`
 }
 
 // Options control resolver behavior.
@@ -41,6 +57,8 @@ type Options struct {
 	PackageOverrides map[string]string
 	RequirementsPath string
 	ConstraintsPath  string
+	PackCatalog      *pack.Catalog
+	ArtifactStore    cas.Store
 }
 
 // Write writes a snapshot to the given path.
@@ -90,6 +108,10 @@ func Generate(
 	strategy,
 	requirementsPath,
 	constraintsPath string,
+	catalog *pack.Catalog,
+	store cas.Store,
+	casRegistryURL,
+	casRegistryRepo string,
 ) (Snapshot, error) {
 	maxDeps := loadMaxDepsFromEnv()
 	if maxDeps <= 0 {
@@ -111,6 +133,8 @@ func Generate(
 		PackageOverrides: loadOverridesFromEnv(),
 		RequirementsPath: requirementsPath,
 		ConstraintsPath:  constraintsPath,
+		PackCatalog:      catalog,
+		ArtifactStore:    store,
 	}
 	snap, err := computeWithResolver(inputDir, pythonVersion, platformTag, opts, &IndexClient{
 		BaseURL:       indexURL,
@@ -120,6 +144,9 @@ func Generate(
 	})
 	if err != nil {
 		return Snapshot{}, err
+	}
+	if casRegistryURL != "" {
+		snap.CAS = &CASInfo{RegistryURL: casRegistryURL, RegistryRepo: casRegistryRepo}
 	}
 	path := filepath.Join(cacheDir, "plan.json")
 	if err := Write(path, snap); err != nil {
@@ -133,6 +160,11 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 	if opts.MaxDeps <= 0 {
 		opts.MaxDeps = 1000
 	}
+	store := opts.ArtifactStore
+	if store == nil {
+		store = cas.NullStore{}
+	}
+	ctx := context.TODO()
 	reqs := loadRequirements(inputDir, opts.RequirementsPath)
 	constraints := loadConstraints(opts.ConstraintsPath)
 	files, err := os.ReadDir(inputDir)
@@ -140,7 +172,98 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		return Snapshot{}, err
 	}
 	pyTag := normalizePyTag(pythonVersion)
-	var nodes []Node
+	var nodes []FlatNode
+	var dagNodes []DAGNode
+	addRepair := func(wheelID artifact.ID, meta map[string]any) {
+		repairKey := artifact.RepairKey{
+			InputWheelDigest:  wheelID.Digest,
+			RepairToolVersion: "",
+			PolicyRulesDigest: "",
+		}
+		repairID := artifact.ID{Type: artifact.RepairType, Digest: repairKey.Digest()}
+		action := "build"
+		if ok, _ := store.Has(ctx, repairID); ok {
+			action = "reuse"
+		}
+		dagNodes = append(dagNodes, DAGNode{
+			ID:       repairID,
+			Type:     NodeRepair,
+			Inputs:   []artifact.ID{wheelID},
+			Metadata: meta,
+			Action:   action,
+		})
+	}
+	// Runtime node (shallow DAG for now)
+	rtKey := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: pythonVersion}
+	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: rtKey.Digest()}
+	rtAction := "build"
+	if ok, _ := store.Has(ctx, rtID); ok {
+		rtAction = "reuse"
+	}
+	dagNodes = append(dagNodes, DAGNode{
+		ID:     rtID,
+		Type:   NodeRuntime,
+		Action: rtAction,
+		Metadata: map[string]any{
+			"python_version": pythonVersion,
+			"python_tag":     pyTag,
+			"platform_tag":   platformTag,
+		},
+	})
+	packSeen := make(map[string]pack.PackDef)
+	selectPacks := func(pkg string) ([]artifact.ID, []string) {
+		if opts.PackCatalog == nil {
+			return nil, nil
+		}
+		var ids []artifact.ID
+		var digests []string
+		for _, def := range opts.PackCatalog.Select(pkg, "") {
+			key := artifact.PackKey{
+				Arch:             "s390x",
+				PolicyBaseDigest: "",
+				Name:             def.Name,
+				Version:          def.Version,
+				RecipeDigest:     def.RecipeDigest,
+			}
+			id := artifact.ID{Type: artifact.PackType, Digest: key.Digest()}
+			if _, ok := packSeen[id.Digest]; !ok {
+				packSeen[id.Digest] = def
+				action := "build"
+				if ok, _ := store.Has(ctx, id); ok {
+					action = "reuse"
+				}
+				var inputs []artifact.ID
+				for _, depName := range packDependencies(def.Name) {
+					if depDef, ok := opts.PackCatalog.Packs[depName]; ok {
+						depKey := artifact.PackKey{Arch: "s390x", PolicyBaseDigest: "", Name: depDef.Name, Version: depDef.Version, RecipeDigest: depDef.RecipeDigest}
+						inputs = append(inputs, artifact.ID{Type: artifact.PackType, Digest: depKey.Digest()})
+					}
+				}
+				meta := map[string]any{
+					"name": def.Name,
+				}
+				if def.Version != "" {
+					meta["version"] = def.Version
+				}
+				if def.RecipeDigest != "" {
+					meta["recipe_digest"] = def.RecipeDigest
+				}
+				if def.Note != "" {
+					meta["note"] = def.Note
+				}
+				dagNodes = append(dagNodes, DAGNode{
+					ID:       id,
+					Type:     NodePack,
+					Inputs:   inputs,
+					Metadata: meta,
+					Action:   action,
+				})
+			}
+			ids = append(ids, id)
+			digests = append(digests, id.Digest)
+		}
+		return ids, digests
+	}
 	depSeen := make(map[string]depSpec)
 	var wheelCount int
 	var depTruncated bool
@@ -183,13 +306,41 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			continue
 		}
 		seen[key] = true
-		nodes = append(nodes, Node{
-			Name:        name,
-			Version:     version,
-			PythonTag:   pyTag,
-			PlatformTag: platformTag,
-			Action:      "build",
+		packIDs, packDigests := selectPacks(name)
+		nodes = append(nodes, FlatNode{
+			Name:          name,
+			Version:       version,
+			PythonVersion: pythonVersion,
+			PythonTag:     pyTag,
+			PlatformTag:   platformTag,
+			Action:        "build",
 		})
+		wheelKey := artifact.WheelKey{
+			SourceDigest:  sourceDigest(name, version),
+			PyTag:         pyTag,
+			PlatformTag:   platformTag,
+			RuntimeDigest: rtID.Digest,
+			PackDigests:   packDigests,
+		}
+		wheelID := artifact.ID{Type: artifact.WheelType, Digest: wheelKey.Digest()}
+		wheelAction := "build"
+		if ok, _ := store.Has(ctx, wheelID); ok {
+			wheelAction = "reuse"
+		}
+		dagNodes = append(dagNodes, DAGNode{
+			ID:     wheelID,
+			Type:   NodeWheel,
+			Inputs: append([]artifact.ID{rtID}, packIDs...),
+			Metadata: map[string]any{
+				"name":           name,
+				"version":        version,
+				"python_version": pythonVersion,
+				"python_tag":     pyTag,
+				"platform_tag":   platformTag,
+			},
+			Action: wheelAction,
+		})
+		addRepair(wheelID, map[string]any{"wheel_name": name, "wheel_version": version})
 	}
 
 	for _, f := range files {
@@ -230,13 +381,41 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			key := info.Name + "::" + ver
 			if !seen[key] {
 				seen[key] = true
-				nodes = append(nodes, Node{
-					Name:        info.Name,
-					Version:     ver,
-					PythonTag:   pyTag,
-					PlatformTag: platformTag,
-					Action:      "build",
+				packIDs, packDigests := selectPacks(info.Name)
+				nodes = append(nodes, FlatNode{
+					Name:          info.Name,
+					Version:       ver,
+					PythonVersion: pythonVersion,
+					PythonTag:     pyTag,
+					PlatformTag:   platformTag,
+					Action:        "build",
 				})
+				wk := artifact.WheelKey{
+					SourceDigest:  sourceDigest(info.Name, ver),
+					PyTag:         pyTag,
+					PlatformTag:   platformTag,
+					RuntimeDigest: rtID.Digest,
+					PackDigests:   packDigests,
+				}
+				wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+				wheelAction := "build"
+				if ok, _ := store.Has(ctx, wID); ok {
+					wheelAction = "reuse"
+				}
+				dagNodes = append(dagNodes, DAGNode{
+					ID:     wID,
+					Type:   NodeWheel,
+					Inputs: append([]artifact.ID{rtID}, packIDs...),
+					Metadata: map[string]any{
+						"name":           info.Name,
+						"version":        ver,
+						"python_version": pythonVersion,
+						"python_tag":     pyTag,
+						"platform_tag":   platformTag,
+					},
+					Action: wheelAction,
+				})
+				addRepair(wID, map[string]any{"wheel_name": info.Name, "wheel_version": ver})
 			}
 			continue
 		}
@@ -246,22 +425,65 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		}
 		seen[key] = true
 
+		packIDs, packDigests := selectPacks(info.Name)
 		if isCompatible(info, pyTag, platformTag) {
-			nodes = append(nodes, Node{
-				Name:        info.Name,
-				Version:     info.Version,
-				PythonTag:   pyTag,
-				PlatformTag: platformTag,
-				Action:      "reuse",
+			nodes = append(nodes, FlatNode{
+				Name:          info.Name,
+				Version:       info.Version,
+				PythonVersion: pythonVersion,
+				PythonTag:     pyTag,
+				PlatformTag:   platformTag,
+				Action:        "reuse",
 			})
+			wk := artifact.WheelKey{SourceDigest: bestSourceDigest(info.Name, info.Version, filepath.Join(inputDir, f.Name())), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
+			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+			wheelAction := "reuse"
+			if ok, _ := store.Has(ctx, wID); ok {
+				wheelAction = "reuse"
+			}
+			dagNodes = append(dagNodes, DAGNode{
+				ID:     wID,
+				Type:   NodeWheel,
+				Inputs: append([]artifact.ID{rtID}, packIDs...),
+				Metadata: map[string]any{
+					"name":           info.Name,
+					"version":        info.Version,
+					"python_version": pythonVersion,
+					"python_tag":     pyTag,
+					"platform_tag":   platformTag,
+				},
+				Action: wheelAction,
+			})
+			addRepair(wID, map[string]any{"wheel_name": info.Name, "wheel_version": info.Version})
 		} else {
-			nodes = append(nodes, Node{
-				Name:        info.Name,
-				Version:     info.Version,
-				PythonTag:   pyTag,
-				PlatformTag: platformTag,
-				Action:      "build",
+			nodes = append(nodes, FlatNode{
+				Name:          info.Name,
+				Version:       info.Version,
+				PythonVersion: pythonVersion,
+				PythonTag:     pyTag,
+				PlatformTag:   platformTag,
+				Action:        "build",
 			})
+			wk := artifact.WheelKey{SourceDigest: bestSourceDigest(info.Name, info.Version, filepath.Join(inputDir, f.Name())), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
+			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+			wheelAction := "build"
+			if ok, _ := store.Has(ctx, wID); ok {
+				wheelAction = "reuse"
+			}
+			dagNodes = append(dagNodes, DAGNode{
+				ID:     wID,
+				Type:   NodeWheel,
+				Inputs: append([]artifact.ID{rtID}, packIDs...),
+				Metadata: map[string]any{
+					"name":           info.Name,
+					"version":        info.Version,
+					"python_version": pythonVersion,
+					"python_tag":     pyTag,
+					"platform_tag":   platformTag,
+				},
+				Action: wheelAction,
+			})
+			addRepair(wID, map[string]any{"wheel_name": info.Name, "wheel_version": info.Version})
 		}
 	}
 	for dep, spec := range depSeen {
@@ -299,13 +521,35 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			continue
 		}
 		seen[key] = true
-		nodes = append(nodes, Node{
-			Name:        dep,
-			Version:     version,
-			PythonTag:   pyTag,
-			PlatformTag: platformTag,
-			Action:      "build",
+		packIDs, packDigests := selectPacks(dep)
+		nodes = append(nodes, FlatNode{
+			Name:          dep,
+			Version:       version,
+			PythonVersion: pythonVersion,
+			PythonTag:     pyTag,
+			PlatformTag:   platformTag,
+			Action:        "build",
 		})
+		wk := artifact.WheelKey{SourceDigest: sourceDigest(dep, version), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
+		wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
+		wheelAction := "build"
+		if ok, _ := store.Has(ctx, wID); ok {
+			wheelAction = "reuse"
+		}
+		dagNodes = append(dagNodes, DAGNode{
+			ID:     wID,
+			Type:   NodeWheel,
+			Inputs: append([]artifact.ID{rtID}, packIDs...),
+			Metadata: map[string]any{
+				"name":           dep,
+				"version":        version,
+				"python_version": pythonVersion,
+				"python_tag":     pyTag,
+				"platform_tag":   platformTag,
+			},
+			Action: wheelAction,
+		})
+		addRepair(wID, map[string]any{"wheel_name": dep, "wheel_version": version})
 	}
 	if !hasInput {
 		return Snapshot{}, fmt.Errorf("no wheels or requirements found in input directory %s", inputDir)
@@ -313,7 +557,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 	if depTruncated {
 		return Snapshot{}, fmt.Errorf("dependency expansion exceeded MaxDeps (%d); increase MAX_DEPS or trim input", opts.MaxDeps)
 	}
-	return Snapshot{RunID: newRunID(), Plan: nodes}, nil
+	return Snapshot{RunID: newRunID(), Plan: nodes, DAG: dagNodes}, nil
 }
 
 type wheelInfo struct {
@@ -371,6 +615,27 @@ func newRunID() string {
 		b[i] = letters[rand.Intn(len(letters))]
 	}
 	return string(b)
+}
+
+func sourceDigest(name, version string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s==%s", normalizeName(name), strings.TrimSpace(version))))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func fileDigest(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func bestSourceDigest(name, version, path string) string {
+	if d := fileDigest(path); d != "" {
+		return d
+	}
+	return sourceDigest(name, version)
 }
 
 // readRequiresDist extracts Requires-Dist entries from METADATA inside a wheel.
@@ -588,4 +853,22 @@ func parseRequiresDist(meta string) []depSpec {
 		}
 	}
 	return out
+}
+
+// packDependencies declares manual pack dependency edges to enforce ordering.
+func packDependencies(name string) []string {
+	deps := map[string][]string{
+		"openssl":       {"zlib"},
+		"libpng":        {"zlib"},
+		"freetype":      {"libpng", "jpeg"},
+		"libxslt":       {"libxml2"},
+		"libxml2":       {"zlib"},
+		"cpython":       {"openssl", "libffi", "zlib", "xz", "bzip2", "sqlite"},
+		"cpython3.10":   {"openssl", "libffi", "zlib", "xz", "bzip2", "sqlite"},
+		"cpython3.11":   {"openssl", "libffi", "zlib", "xz", "bzip2", "sqlite"},
+		"cpython3.12":   {"openssl", "libffi", "zlib", "xz", "bzip2", "sqlite"},
+		"runtime":       {"openssl", "libffi", "zlib", "xz", "bzip2", "sqlite"},
+		"libjpeg-turbo": {},
+	}
+	return deps[strings.ToLower(name)]
 }

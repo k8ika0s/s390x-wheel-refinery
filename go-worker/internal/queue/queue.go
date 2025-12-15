@@ -6,6 +6,7 @@ import "context"
 type Request struct {
 	Package     string
 	Version     string
+	PythonVersion string
 	PythonTag   string
 	PlatformTag string
 	Recipes     []string

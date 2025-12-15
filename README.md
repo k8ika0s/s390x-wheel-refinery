@@ -1,114 +1,156 @@
 # s390x Wheel Refinery
 
-Refine arbitrary Python wheels into a coherent, reproducible set of s390x wheels. Drop wheels from any platform into `/input` **or just a `requirements.txt`**, get rebuilt s390x wheels plus a manifest, live logs, and a history database out of `/output`.
+![CI](https://github.com/k8ika0s/s390x-wheel-refinery/actions/workflows/ci.yml/badge.svg)
 
-## What it does
-- **Scan & plan**: Parse input wheels **or a `requirements.txt`** (unpinned specs resolved via index), reuse pure/compatible ones, and plan rebuilds for the rest (pinned, eager, or fallback-latest).
-- **Resilient builds**: Adaptive build variants (ordered by past success), timeouts, exponential backoff, per-attempt logs, and hint-derived recipe retries.
-- **Dynamic recovery**: Catalog-driven hints (dnf/apt) for missing libs/headers (AI/ML-friendly), auto-apply suggestions, and bounded dependency expansion to auto-build missing Python deps.
-- **Isolation & control**: Run in containers (Rocky/Fedora/Ubuntu presets or custom images) with CPU/mem limits; cache/output bind-mounted to keep the host clean.
-- **Concurrency & scheduling**: Parallel builds with warmed cache/venv; shortest-first scheduling using observed durations.
-- **Observability**: Manifest with rich metadata, SQLite history of all events, logs on disk, SSE log streaming, JSON APIs, and a React SPA control panel (charts, catalog, alerts).
+Refinery plans and executes reproducible s390x Python wheel builds. Feed it wheels **or a `requirements.txt`**, and it resolves pins, builds what is missing, repairs wheels, and publishes everything to content-addressed storage with full provenance, metrics, and UI visibility.
 
-## Quick start
-```bash
-pip install -e .
-# Option 1: wheels in /input
-refinery \
-  --input /input \
-  --output /output \
-  --cache /cache \
-  --python 3.11 \
-  --platform-tag manylinux2014_s390x \
-  --container-preset rocky \
-  --jobs 2 \
-  --auto-apply-suggestions
+---
 
-# Option 2: requirements.txt in /input (will resolve pins and plan builds)
-cat > /input/requirements.txt <<'REQ'
-numpy==1.26.4
-pandas>=2.2
-pyarrow
-REQ
-refinery --input /input --output /output --cache /cache --python 3.11 --container-preset rocky
-```
-- Exit code is non-zero if any requirements are missing or builds fail.
-- To reprocess failed packages queued from the web UI: `refinery worker --input /input --output /output --cache /cache --python 3.11`
+## Table of contents
+- [Overview](#overview)
+- [End-to-end flow](#end-to-end-flow)
+- [System components](#system-components)
+- [Artifacts, CAS, and storage](#artifacts-cas-and-storage)
+- [Recipes, packs, and runtimes](#recipes-packs-and-runtimes)
+- [Builder image](#builder-image)
+- [Control-plane and UI](#control-plane-and-ui)
+- [Worker and queue](#worker-and-queue)
+- [Requirements.txt and job shape](#requirementstxt-and-job-shape)
+- [Running locally](#running-locally)
+- [Configuration reference](#configuration-reference)
+- [Repair and compliance](#repair-and-compliance)
+- [Development and testing](#development-and-testing)
+- [Docs and diagrams](#docs-and-diagrams)
+- [Status and known gaps](#status-and-known-gaps)
+- [License](#license)
+- [Glossary](#glossary)
 
-## Key flags
-- Paths: `--input`, `--output`, `--cache`
-- Targets: `--python`, `--platform-tag`
-- Strategy: `--upgrade-strategy {pinned,eager}`, `--fallback-latest`
-- Index: `--index-url`, `--extra-index-url`, `--trusted-host`
-- Config: `--config` (TOML/JSON), `--manifest`, `--history-db`
-- Recipes: `--allow-system-recipes`, `--no-system-recipes`, `--dry-run-recipes`, `--auto-apply-suggestions`
-- Attempts: `--max-attempts`, `--attempt-timeout`, `--attempt-backoff-base`, `--attempt-backoff-max`
-- Concurrency: `--jobs`, `--schedule {shortest-first,fifo}`
-- Containers: `--container-image`, `--container-preset {rocky,fedora,ubuntu}`, `--container-engine`, `--container-cpu`, `--container-memory`
-- Resilience: `--skip-known-failures`
-- Targeted builds: `--only name` or `--only name==version` to limit which jobs run (repeatable)
-- Requirements seed: place `requirements.txt` in `/input` or set `REQUIREMENTS_PATH`; optional `CONSTRAINTS_PATH` honors pins. Unpinned specs (`>=`, `~=`) are resolved via `INDEX_URL`/`EXTRA_INDEX_URL` (supports `INDEX_USERNAME/PASSWORD`). Cap expansion with `MAX_DEPS` (default 1000). Package overrides via `PLAN_OVERRIDES_JSON`.
-- Logging: `--verbose`
+---
 
-## Pipeline
-1) **Scan** wheels and classify reuse vs rebuild.
-2) **Plan** deps (pinned/eager/fallback-latest), skip known failures, and auto-plan missing Python deps (bounded).
-3) **Build** jobs with adaptive variants, timeouts, backoff, logs, hints, and hint-based retry; cache outputs and copy to `/output`.
-4) **Emit** manifest (per-entry metadata: variant, attempt, log, duration, hints) and record every event in history.
+## Overview
+- **Planner (Go)** turns `/input` wheels or a `requirements.txt` into a DAG: runtimes → packs → wheels → repair. It checks CAS (Zot) to mark nodes as `reuse` vs `build`.
+- **Worker (Go)** drains the queue, fetches/mounts artifacts, runs builds inside a dedicated builder image via Podman, and uploads wheels/repairs back to CAS and object storage.
+- **Builder image** (`containers/refinery-builder/Containerfile`) carries toolchains, auditwheel/patchelf, and a recipe book for packs and CPython runtimes.
+- **Artifact stores**: Zot (CAS) for digested blobs; MinIO (optional) for a wheelhouse mirror.
+- **Observability**: metrics, events, manifest, control-plane API, and React UI showing artifacts, queue controls, and history.
+- **Safety**: content-addressed everything, explicit dependency edges for packs/runtimes, and default auditwheel repair to enforce policy tags.
 
-## Containers
-- Builder bases: `containers/rocky/Dockerfile`, `containers/fedora/Dockerfile`, `containers/ubuntu/Dockerfile`
-- Go control-plane: `containers/go-control-plane/Dockerfile` (Postgres/Redis/Kafka ready)
-- React SPA UI: `containers/ui/Dockerfile`
-- Make targets: `make build-rocky|build-fedora|build-ubuntu|build-web TAG=latest REGISTRY=local` (defaults to `podman`; you can set `ENGINE=docker` if preferred). Or build UI directly with `podman build -f containers/ui/Dockerfile .` (or `docker build` if you must).
+## End-to-end flow
+1. **Plan**: Planner resolves requirements, computes wheels to build, and emits a DAG with pack/runtime dependencies. CAS hits are marked as `reuse`; misses become build nodes.
+2. **Queue**: Control-plane enqueues build work (file/Redis/Kafka). UI shows queue depth and can trigger a worker run.
+3. **Fetch/mount**: Worker topologically sorts DAG pack/runtime nodes, downloads needed artifacts from CAS, extracts them, and mounts them into the builder container (`DEPS_PREFIXES` wiring).
+4. **Build**: Default runner inside the builder image builds each wheel with the requested Python version/tag and mounted packs.
+5. **Repair**: `recipes/repair.sh` runs auditwheel to emit `<name>-<version>-repair.whl` with the correct manylinux policy tag.
+6. **Publish**: Worker uploads packs/runtimes (when built), wheels, and repairs to CAS; mirrors wheels/repairs to MinIO when configured; emits manifest/events/metrics to the control-plane.
 
-## Web UI / API
-- Start Go control-plane: build with `containers/go-control-plane/Dockerfile`, run with Postgres/Redis/Kafka (see compose below), API at `:8080`.
-- React SPA: build/run `containers/ui/Dockerfile` (or `npm install && npm run dev` in `ui/` with `VITE_API_BASE=http://localhost:8080`).
-- Features: recent events, top failures, top slow packages, variant history, hint catalog, queue length, worker trigger, and retry enqueue. Logs stream via `/api/logs` (plus `/api/logs/stream/{name}/{version}` SSE). APIs for stats remain under `/api/*`.
-- Retry queue: POST `/package/{name}/retry` (SPA button or API) stores a request in `<cache>/retry_queue.json` with suggested recipes. Run the worker to consume the queue and rebuild those packages.
-- Queue visibility & trigger: SPA shows queue depth and offers “Run worker now,” which calls `/api/worker/trigger` (enabled when the control-plane has access to `/input`, `/output`, `/cache` or a worker webhook is configured).
-- Auth: optional `WORKER_TOKEN` env protects queue/worker endpoints (supply via `X-Worker-Token` or `?token=` when invoking). Control-plane also honors `WORKER_TOKEN` for trigger/smoke and ingest endpoints.
-- Queue CLI: `refinery queue --cache /cache` prints queue length; `--queue-path` overrides the default.
-- Token cookie helper: `POST /api/session/token?token=<WORKER_TOKEN>` sets a `worker_token` cookie for the browser, avoiding query/header injection in the UI.
+## System components
+- **Go control-plane**: APIs for manifests, logs, queue, metrics, artifact metadata, and worker triggers (`containers/go-control-plane/Dockerfile`).
+- **Go worker**: Podman runner plus CAS/object-store client, executes build/repair steps (`containers/go-worker/Dockerfile`).
+- **Builder image**: `refinery-builder:latest` built from `containers/refinery-builder/Containerfile`; houses recipes and toolchains.
+- **UI (React)**: dashboards for queue, artifacts, metrics, events, and log viewing (`containers/ui/Dockerfile`).
+- **External services**: Postgres, Redis (or Kafka) for queue/history; Zot for CAS; MinIO for wheelhouse object storage.
 
-## Compose
-- Go control-plane stack (Postgres/Redis/Kafka + control-plane + Go worker + UI): `podman compose -f docker-compose.control-plane.yml up` (API: :8080, UI: :3000). `docker compose` also works if you prefer Docker. Queue backend selectable via `QUEUE_BACKEND=file|redis|kafka` (compose defaults to redis). Kafka does not support queue clear; use file/redis for dev resets. Worker posts plan/manifest/logs to the Go control-plane when `CONTROL_PLANE_URL`/`CONTROL_PLANE_TOKEN` are set (compose wires these).
-- Podman is expected inside the worker container host; leave `PODMAN_BIN` empty to stub for local smoke, set `PODMAN_BIN=podman` (or similar) for real builds. Override the build entrypoint with `WORKER_RUN_CMD` when needed.
+## Artifacts, CAS, and storage
+- **CAS (Zot)** stores packs, runtimes, wheels, and repair outputs under digests. Keys include name/version/policy and the recipe digest.
+- **Object storage (MinIO optional)** mirrors wheel/repair artifacts for easy download.
+- **Manifests** describe every build with digests, timing, logs, and repair metadata; the control-plane stores and serves them.
+- **Local cache** can be used for CAS fallbacks; set `LOCAL_CAS_DIR` in the worker to avoid refetching unchanged blobs.
 
-## Manifest & history
-- Manifest: `<output>/manifest.json` with status, path, detail, and metadata (variant, attempt, log_path, duration, hints).
-- History DB: every reuse/build/fail/missing/system_recipe/attempt with metadata for queries, UI, and adaptive scheduling.
+## Recipes, packs, and runtimes
+- Location: `recipes/` with pinned sources and SHA256s in `recipes/versions.sh`.
+- Coverage: core crypto/ffi/compression (openssl, libffi, zlib, xz, bzip2, zstd), DB/XML (sqlite, libxml2, libxslt), imaging (jpeg, libpng, freetype), math (openblas), build tools (pkgconf, cmake, ninja, rust), and CPython runtimes (3.10/3.11/3.12).
+- Contract: recipes expect `PACK_OUTPUT` (empty dir), install into `${PACK_OUTPUT}/usr/local` by default, and honor `DEPS_PREFIXES` for dependency prefixes. Each emits `manifest.json` with name/version/policy/recipe digest/deps.
+- Use: the worker mounts dependencies, sets `DEPS_PREFIXES`, runs the recipe, tars `PACK_OUTPUT`, and pushes the blob to CAS.
 
-## Resilience details
-- Catalog-driven hints (dnf/apt) including AI/ML libraries (OpenBLAS/LAPACK/torch/numpy headers, etc.).
-- Auto-apply suggestions adds system_packages + recipe steps; one extra hint-based retry runs when hints exist.
-- Bounded dependency expansion auto-plans missing Python deps (depth-limited).
-- Adaptive variant ordering uses past success rates per package; exponential backoff between attempts; timeouts per attempt.
-- Parents are requeued after dependency builds (bounded by depth/attempt budgets).
+## Builder image
+- Built from `containers/refinery-builder/Containerfile`; includes build essentials, auditwheel, patchelf, and the recipe book at `/app/recipes`.
+- Defaults injected into the worker: `CONTAINER_IMAGE=refinery-builder:latest`, `PACK_RECIPES_DIR=/app/recipes`, `DEFAULT_RUNTIME_CMD=/app/recipes/cpython311.sh`, `DEFAULT_REPAIR_CMD=/app/recipes/repair.sh`.
+- Build it locally: `podman build -f containers/refinery-builder/Containerfile -t refinery-builder:latest .` (or `docker build` if needed).
 
-## Retry queue & worker
-- Web UI/API enqueue retries into `<cache>/retry_queue.json` (includes requested version, python tag, platform tag, and recipe steps).
-- Go worker service (container) drains the queue using Podman with `/input`, `/output`, `/cache` bind mounts. Default command inside the build container is `refinery --input /input --output /output --cache /cache --python $PYTHON_TAG --platform-tag $PLATFORM_TAG --only $JOB_NAME==$JOB_VERSION --jobs 1`; override with `WORKER_RUN_CMD`. Environment like `JOB_NAME/JOB_VERSION/PYTHON_TAG/PLATFORM_TAG/RECIPES` are injected.
-- Queue backends: file/JSON, Redis, Kafka (configure via `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`).
-- Worker endpoints: `/health`, `/ready`, and `POST /trigger` (optionally gated by `WORKER_TOKEN`). Control-plane can call the worker webhook; the UI “Run worker now” button calls the control-plane which forwards to the worker.
-- Useful for follow-up retries after triage without re-running the full pipeline; the queue is drained in batches.
-- Podman expectations: set `PODMAN_BIN=podman` (or a stub for local dry-runs). Override the container-side build command with `WORKER_RUN_CMD` when needed; default is `refinery --input /input --output /output --cache /cache --python $PYTHON_TAG --platform-tag $PLATFORM_TAG --only $JOB_NAME==$JOB_VERSION --jobs 1`.
-- Optional requeue on failure: set `REQUEUE_ON_FAILURE=true` and `MAX_REQUEUE_ATTEMPTS` to automatically push failed jobs back onto the queue with attempt counts.
+## Control-plane and UI
+- API on `:8080` (compose wiring): manifests, artifacts, metrics (`/metrics` Prometheus), queue ops, logs, and worker trigger.
+- UI on `:3000` (compose wiring): artifacts with digests/URLs, queue depth, metrics panels, and log viewers.
+- Auth: optional `WORKER_TOKEN` protects queue/trigger endpoints; UI can set it via `POST /api/session/token?token=...`.
 
-## Scheduling & resources
-- Shortest-first uses recorded avg durations; FIFO available.
-- Container CPU/mem flags restrict build containers.
-- Warm venv/cache once before high `--jobs` for best concurrency.
+## Worker and queue
+- Queue backends: `file`, `redis`, or `kafka` (compose defaults to Redis).
+- Worker mounts `/input`, `/output`, `/cache`; drains queue; runs Podman with the builder image. `PODMAN_BIN` defaults to whatever is on `PATH` and errors if absent.
+- DAG ordering: worker topologically sorts pack/runtime nodes from the planner DAG to guarantee dependency order before wheel builds.
+- Reuse vs build: CAS hits are reused; misses trigger pack/runtime builds and uploads unless the artifact is manifest-only.
 
-## Data locations
-- Output wheels: `/output`
-- Cache (sdists/wheels/logs): `/cache`
-- Logs: `/cache/logs/<pkg>-<ver>-attemptN-<variant>.log`
-- Manifest: `/output/manifest.json`
-- History DB: `/cache/history.db`
+## Requirements.txt and job shape
+- Inputs: drop wheels and/or `requirements.txt` into `/input`.
+- Planner resolves requirements (honors constraints), computes wheel targets, and pins a Python tag from the requested version. Unpinned specs are resolved against configured indexes.
+- Job metadata includes `python_tag`, `abi_tag`, `platform_tag`, requested packs, and repair policy. Defaults map Python version → manylinux2014_s390x.
 
-## Testing
-- Install dev deps: `pip install -e .[dev]`
-- Run tests: `pytest -q`
-- CI: GitHub Actions runs ruff lint, pytest, a web image build smoke, and a dummy-wheel orchestration smoke run on pushes/PRs, with pip caching for speed. Optional manual s390x emulated build is available via workflow dispatch.
+## Running locally
+- **Prereqs**: Podman (or Docker), git, Go toolchain, Node/npm for UI dev.
+- **Bring up the stack** (Zot + MinIO + Postgres + Redis/Kafka + control-plane + worker + UI):
+  ```bash
+  podman compose -f docker-compose.control-plane.yml up
+  # or: docker compose -f docker-compose.control-plane.yml up
+  ```
+  Builds the control-plane, worker, and UI images; uses Zot for CAS and MinIO for wheelhouse.
+- **Builder image**: build once locally (`refinery-builder:latest`) before running real workers:
+  ```bash
+  podman build -f containers/refinery-builder/Containerfile -t refinery-builder:latest .
+  ```
+- **Mounts**: place inputs in `./input`, outputs appear in `./output`, cache/logs in `./cache`.
+
+## Configuration reference
+- **Control-plane**: `HTTP_ADDR`, `POSTGRES_DSN`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `WORKER_WEBHOOK_URL`, `WORKER_PLAN_URL`, `WORKER_TOKEN`, `CAS_REGISTRY_URL`, `CAS_REGISTRY_REPO`, `OBJECT_STORE_*`.
+- **Worker**: `INPUT_DIR`, `OUTPUT_DIR`, `CACHE_DIR`, `PYTHON_VERSION`, `PLATFORM_TAG`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `PODMAN_BIN`, `CONTAINER_IMAGE`, `WORKER_RUN_CMD` (override container entrypoint), `PACK_RECIPES_DIR`, `DEFAULT_RUNTIME_CMD`, `DEFAULT_REPAIR_CMD`, `CAS_REGISTRY_URL/REPO`, `LOCAL_CAS_DIR`, `OBJECT_STORE_*`.
+- **Repair metadata**: `REPAIR_POLICY_HASH`, `REPAIR_TOOL_VERSION` are attached to repair artifacts for provenance.
+
+## Repair and compliance
+- `recipes/repair.sh` runs auditwheel repair by default; installs auditwheel if missing in the builder image and fails when no repaired wheel is produced.
+- Output naming: `<name>-<version>-repair.whl` with policy tag (manylinux2014_s390x by default).
+- Policy and tool info are stored alongside the artifact so downstream consumers can verify provenance.
+
+## Development and testing
+- **Go**:
+  ```bash
+  cd go-worker && go test ./...
+  cd go-control-plane && go test ./...
+  ```
+- **UI**:
+  ```bash
+  cd ui
+  npm install
+  npm test
+  # npm run dev (with VITE_API_BASE=http://localhost:8080) for local UI
+  ```
+- **Recipes**: smoke a pack locally:
+  ```bash
+  ZLIB_OUT="$(mktemp -d)"
+  PACK_OUTPUT="$ZLIB_OUT" SOURCES_DIR="$PWD/.sources" ./recipes/zlib.sh
+  ```
+
+## Docs and diagrams
+- Architecture snapshot: `docs/overview.md`.
+- System diagram (Mermaid): `docs/diagrams/overall-system.mmd`.
+- Builder image details: `containers/refinery-builder/Containerfile`.
+
+## Status and known gaps
+- Pack dependency metadata is currently hardcoded in the planner; promoting this to a catalog is planned.
+- Ensure real pack/runtime recipes are built and pushed in environments beyond local smoke (builder image must be built/published where workers run).
+- Continue to refine repair/policy metadata and catalog-driven pack selection as recipes expand.
+
+## License
+- Licensed under the GNU Affero General Public License v3.0. See `LICENSE`.
+
+## Glossary
+- **CAS**: Content-addressable storage; stores blobs by digest. We use Zot as the CAS registry. https://project-zot.github.io/docs/
+- **Zot**: OCI registry used here as CAS for packs/runtimes/wheels/repairs. https://github.com/project-zot/zot
+- **MinIO**: S3-compatible object store used to mirror wheels/repairs for download. https://min.io
+- **Auditwheel**: Tool to check/repair wheels to comply with manylinux policy tags; default repair step uses it. https://github.com/pypa/auditwheel
+- **Podman**: Container engine used by the worker runner; defaults to the binary on PATH. https://podman.io
+- **Manylinux2014**: Baseline glibc/musl compatibility policy for Linux wheels; s390x is supported. https://peps.python.org/pep-0599/
+- **Pack**: A bundle of native deps (libs/headers/pkg-config) built from a recipe into a prefix (e.g., /opt/packs/<digest>/usr/local).
+- **Runtime**: A built CPython interpreter + stdlib/headers produced by runtime recipes; mounted into builds.
+- **DEPS_PREFIXES**: Colon-separated list of mounted pack prefixes passed to recipes so they can find headers/libs.
+- **Repair wheel**: The post-processed wheel emitted by `recipes/repair.sh`, named `<name>-<version>-repair.whl` with policy tag metadata.
+- **Builder image**: `refinery-builder:latest` containing toolchains, auditwheel/patchelf, and recipes at `/app/recipes`.
+- **Control-plane**: Go service exposing API/metrics/queue/logs and persisting manifests/events.
+- **Worker**: Go service that drains the queue, fetches CAS artifacts, mounts packs/runtimes, and runs builds via Podman in the builder image.
+- **DAG**: Directed acyclic graph emitted by the planner describing dependencies between runtimes, packs, wheels, and repair steps.

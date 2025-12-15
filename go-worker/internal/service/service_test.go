@@ -46,6 +46,10 @@ func TestPlanEndpointGeneratesPlan(t *testing.T) {
 				cfg.UpgradeStrategy,
 				cfg.RequirementsPath,
 				cfg.ConstraintsPath,
+				cfg.PackCatalog,
+				cfg.CASStore(),
+				cfg.CASRegistryURL,
+				cfg.CASRegistryRepo,
 			)
 			if err != nil {
 				wr.WriteHeader(http.StatusInternalServerError)
