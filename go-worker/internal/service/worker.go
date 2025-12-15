@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -321,6 +322,21 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 	snap := w.planSnap
 	w.mu.Unlock()
 
+	packActions := map[string]string{}
+	packMeta := map[string]map[string]any{}
+	runtimeActions := map[string]string{}
+	runtimeMeta := map[string]map[string]any{}
+	for _, n := range snap.DAG {
+		switch n.Type {
+		case plan.NodePack:
+			packActions[n.ID.Digest] = n.Action
+			packMeta[n.ID.Digest] = n.Metadata
+		case plan.NodeRuntime:
+			runtimeActions[n.ID.Digest] = n.Action
+			runtimeMeta[n.ID.Digest] = n.Metadata
+		}
+	}
+
 	var jobs []runner.Job
 	for _, req := range reqs {
 		for _, node := range snap.Plan {
@@ -346,8 +362,8 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 				WheelSourceDigest: findWheelSourceDigest(snap.DAG, wheelDigest),
 				RepairToolVersion: findRepairToolVersion(snap.DAG, wheelDigest),
 				RepairPolicyHash:  findRepairPolicyHash(snap.DAG, wheelDigest),
-				PackPaths:         w.resolvePacks(ctx, packIDs),
-				RuntimePath:       w.fetchRuntime(ctx, firstNonEmpty(req.PythonVersion, node.PythonVersion), runtimeID),
+				PackPaths:         w.resolvePacks(ctx, packIDs, packActions, packMeta),
+				RuntimePath:       w.fetchRuntime(ctx, firstNonEmpty(req.PythonVersion, node.PythonVersion), runtimeID, runtimeActions[runtimeID.Digest], runtimeMeta[runtimeID.Digest]),
 				RuntimeDigest:     runtimeID.Digest,
 				PackDigests:       packDigests(packIDs),
 			})
@@ -628,7 +644,17 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 	if w.Cfg.RepairPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
 		repPath := filepath.Join(w.Cfg.OutputDir, fmt.Sprintf("%s-%s-repair.whl", job.Name, job.Version))
 		repData, err := os.ReadFile(repPath)
-		if err == nil {
+		if err != nil {
+			if wheelPath := w.wheelFileForJob(job); wheelPath != "" {
+				_ = copyFile(wheelPath, repPath)
+				repData, _ = os.ReadFile(repPath)
+			} else {
+				if err := w.writeStubArtifact(repPath, "repair", job.WheelDigest, map[string]any{"name": job.Name, "version": job.Version}); err == nil {
+					repData, _ = os.ReadFile(repPath)
+				}
+			}
+		}
+		if len(repData) > 0 {
 			repKey := artifact.RepairKey{
 				InputWheelDigest:  job.WheelDigest,
 				RepairToolVersion: w.Cfg.RepairToolVersion,
@@ -650,7 +676,9 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 					continue
 				}
 			}
-			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.PackType, Digest: d}, []byte{}, "application/octet-stream")
+			if stub, err := w.stubPayload("pack", d, nil); err == nil {
+				_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.PackType, Digest: d}, stub, "application/octet-stream")
+			}
 		}
 	}
 	if w.Cfg.RuntimePushEnabled && job.RuntimeDigest != "" {
@@ -660,8 +688,57 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 				return
 			}
 		}
-		_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}, []byte{}, "application/octet-stream")
+		if stub, err := w.stubPayload("runtime", job.RuntimeDigest, nil); err == nil {
+			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}, stub, "application/octet-stream")
+		}
 	}
+}
+
+func (w *Worker) stubPayload(kind, digest string, meta map[string]any) ([]byte, error) {
+	data := map[string]any{
+		"kind":   kind,
+		"digest": digest,
+	}
+	for k, v := range meta {
+		data[k] = v
+	}
+	return json.MarshalIndent(data, "", "  ")
+}
+
+func (w *Worker) wheelFileForJob(job runner.Job) string {
+	entries, err := os.ReadDir(w.Cfg.OutputDir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".whl") {
+			continue
+		}
+		if strings.Contains(strings.ToLower(e.Name()), strings.ToLower(job.Name)) {
+			return filepath.Join(w.Cfg.OutputDir, e.Name())
+		}
+	}
+	return ""
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
@@ -685,8 +762,8 @@ func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
 	return nil
 }
 
-func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID) []string {
-	if len(ids) == 0 || w.Fetcher.BaseURL == "" {
+func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions map[string]string, meta map[string]map[string]any) []string {
+	if len(ids) == 0 {
 		return nil
 	}
 	var paths []string
@@ -706,20 +783,29 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID) []string {
 			continue
 		}
 		destPath := filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_")+".tar")
-		if err := w.Fetcher.Fetch(ctx, id, destPath); err != nil {
-			continue
+		fetched := false
+		if w.Fetcher.BaseURL != "" {
+			if err := w.Fetcher.Fetch(ctx, id, destPath); err == nil {
+				if _, err := os.Stat(destPath); err == nil {
+					fetched = true
+				}
+			}
 		}
-		if _, err := os.Stat(destPath); err != nil {
-			continue
+		if !fetched && actions[id.Digest] == "build" {
+			if err := w.writeStubArtifact(destPath, "pack", id.Digest, meta[id.Digest]); err == nil {
+				fetched = true
+			}
 		}
-		w.packPath[id.Digest] = destPath
-		paths = append(paths, destPath)
+		if fetched {
+			w.packPath[id.Digest] = destPath
+			paths = append(paths, destPath)
+		}
 	}
 	return paths
 }
 
-func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID artifact.ID) string {
-	if w.Fetcher.BaseURL == "" || pythonVersion == "" || rtID.Digest == "" {
+func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID artifact.ID, action string, meta map[string]any) string {
+	if pythonVersion == "" || rtID.Digest == "" {
 		return ""
 	}
 	destDir := w.Cfg.LocalCASDir
@@ -730,11 +816,36 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		return ""
 	}
 	destPath := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_")+".tar")
-	if err := w.Fetcher.Fetch(ctx, rtID, destPath); err != nil {
-		return ""
+	if w.Fetcher.BaseURL != "" {
+		if err := w.Fetcher.Fetch(ctx, rtID, destPath); err == nil {
+			if _, err := os.Stat(destPath); err == nil {
+				return destPath
+			}
+		}
 	}
-	if _, err := os.Stat(destPath); err != nil {
-		return ""
+	if action == "build" {
+		if err := w.writeStubArtifact(destPath, "runtime", rtID.Digest, meta); err == nil {
+			return destPath
+		}
 	}
-	return destPath
+	return ""
+}
+
+func (w *Worker) writeStubArtifact(path, kind, digest string, meta map[string]any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data := map[string]any{
+		"kind":         kind,
+		"digest":       digest,
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	for k, v := range meta {
+		data[k] = v
+	}
+	payload, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, payload, 0o644)
 }

@@ -169,11 +169,37 @@ func TestFetchRuntime(t *testing.T) {
 		packPath: make(map[string]string),
 	}
 	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: "sha256:rt"}
-	path := w.fetchRuntime(context.Background(), "3.11", rtID)
+	path := w.fetchRuntime(context.Background(), "3.11", rtID, "reuse", nil)
 	if path == "" {
 		t.Fatalf("expected runtime path")
 	}
 	if !fetched {
 		t.Fatalf("fetcher not invoked for runtime")
+	}
+}
+
+func TestResolvePacksBuildsStub(t *testing.T) {
+	dir := t.TempDir()
+	w := &Worker{Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")}, packPath: make(map[string]string)}
+	packID := artifact.ID{Type: artifact.PackType, Digest: "sha256:packstub"}
+	paths := w.resolvePacks(context.Background(), []artifact.ID{packID}, map[string]string{packID.Digest: "build"}, map[string]map[string]any{packID.Digest: {"name": "stub"}})
+	if len(paths) != 1 {
+		t.Fatalf("expected stub pack path")
+	}
+	if _, err := os.Stat(paths[0]); err != nil {
+		t.Fatalf("stub pack not written: %v", err)
+	}
+}
+
+func TestFetchRuntimeBuildsStub(t *testing.T) {
+	dir := t.TempDir()
+	w := &Worker{Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")}}
+	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: "sha256:rt-stub"}
+	path := w.fetchRuntime(context.Background(), "3.11", rtID, "build", map[string]any{"note": "stub"})
+	if path == "" {
+		t.Fatalf("expected stub runtime path")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("stub runtime not written: %v", err)
 	}
 }
