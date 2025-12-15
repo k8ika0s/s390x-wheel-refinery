@@ -72,6 +72,7 @@ func TestFetchArtifactUsesFetcher(t *testing.T) {
 				}),
 			},
 		},
+		packPath: make(map[string]string),
 	}
 	job := runner.Job{WheelDigest: "sha256:abc", WheelAction: "reuse"}
 	if err := w.fetchArtifact(context.Background(), job); err != nil {
@@ -93,12 +94,18 @@ func TestMatchCarriesWheelDigestAndAction(t *testing.T) {
 	snap := plan.Snapshot{
 		Plan: []plan.FlatNode{{Name: "demo", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}},
 		DAG: []plan.DAGNode{
-			{ID: artifact.ID{Type: artifact.WheelType, Digest: digest}, Type: plan.NodeWheel, Action: "reuse", Metadata: map[string]any{"name": "demo", "version": "1.0.0", "python_tag": "cp311", "platform_tag": "manylinux2014_s390x"}},
+			{
+				ID:       artifact.ID{Type: artifact.WheelType, Digest: digest},
+				Type:     plan.NodeWheel,
+				Action:   "reuse",
+				Metadata: map[string]any{"name": "demo", "version": "1.0.0", "python_tag": "cp311", "platform_tag": "manylinux2014_s390x"},
+				Inputs:   []artifact.ID{{Type: artifact.PackType, Digest: "sha256:pack1"}},
+			},
 		},
 	}
 	w := &Worker{Cfg: Config{}, planSnap: snap}
 	reqs := []queue.Request{{Package: "demo", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x"}}
-	jobs := w.match(reqs)
+	jobs := w.match(context.Background(), reqs)
 	if len(jobs) != 1 {
 		t.Fatalf("expected 1 job, got %d", len(jobs))
 	}
@@ -107,5 +114,8 @@ func TestMatchCarriesWheelDigestAndAction(t *testing.T) {
 	}
 	if jobs[0].WheelAction != "reuse" {
 		t.Fatalf("wheel action not propagated: %s", jobs[0].WheelAction)
+	}
+	if len(jobs[0].PackPaths) != 0 {
+		t.Fatalf("pack paths should be empty without fetch")
 	}
 }

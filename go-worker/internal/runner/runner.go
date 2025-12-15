@@ -19,6 +19,8 @@ type Job struct {
 	Recipes       []string
 	WheelDigest   string
 	WheelAction   string
+	RuntimePath   string
+	PackPaths     []string
 }
 
 // Runner executes build jobs.
@@ -139,6 +141,13 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 	args = append(args, "-e", fmt.Sprintf("PLATFORM_TAG=%s", job.PlatformTag))
 	if len(job.Recipes) > 0 {
 		args = append(args, "-e", fmt.Sprintf("RECIPES=%s", strings.Join(job.Recipes, ",")))
+	}
+	if job.RuntimePath != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:/opt/runtime:ro", job.RuntimePath))
+		args = append(args, "-e", "RUNTIME_PATH=/opt/runtime")
+	}
+	for i, pth := range job.PackPaths {
+		args = append(args, "-v", fmt.Sprintf("%s:/opt/packs/pack%d:ro", pth, i))
 	}
 	image := p.defaultImage()
 	cmdArgs := p.buildCmd(job)

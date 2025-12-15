@@ -29,6 +29,7 @@ type Worker struct {
 	Cfg      Config
 	Store    objectstore.Store
 	Fetcher  cas.Fetcher
+	packPath map[string]string
 	mu       sync.Mutex
 	planSnap plan.Snapshot
 }
@@ -104,7 +105,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 	}
 
-	jobs := w.match(reqs)
+	jobs := w.match(ctx, reqs)
 	results := make([]result, len(jobs))
 	g, ctx := errgroup.WithContext(ctx)
 	for i, job := range jobs {
@@ -207,7 +208,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) match(reqs []queue.Request) []runner.Job {
+func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 	w.mu.Lock()
 	snap := w.planSnap
 	w.mu.Unlock()
@@ -224,7 +225,7 @@ func (w *Worker) match(reqs []queue.Request) []runner.Job {
 			if req.Version != "" && req.Version != "latest" && req.Version != node.Version {
 				continue
 			}
-			wheelDigest, wheelAction := findWheelArtifact(snap.DAG, node, req)
+			wheelDigest, wheelAction, packIDs := findWheelArtifact(snap.DAG, node, req)
 			jobs = append(jobs, runner.Job{
 				Name:          node.Name,
 				Version:       node.Version,
@@ -234,6 +235,7 @@ func (w *Worker) match(reqs []queue.Request) []runner.Job {
 				Recipes:       req.Recipes,
 				WheelDigest:   wheelDigest,
 				WheelAction:   wheelAction,
+				PackPaths:     w.resolvePacks(ctx, packIDs),
 			})
 		}
 	}
@@ -244,7 +246,7 @@ func equalsIgnoreCase(a, b string) bool {
 	return strings.EqualFold(a, b)
 }
 
-func findWheelArtifact(dag []plan.DAGNode, node plan.FlatNode, req queue.Request) (digest, action string) {
+func findWheelArtifact(dag []plan.DAGNode, node plan.FlatNode, req queue.Request) (digest, action string, packIDs []artifact.ID) {
 	for _, n := range dag {
 		if n.Type != plan.NodeWheel {
 			continue
@@ -262,9 +264,9 @@ func findWheelArtifact(dag []plan.DAGNode, node plan.FlatNode, req queue.Request
 		if platTag != "" && platTag != node.PlatformTag && platTag != req.PlatformTag {
 			continue
 		}
-		return n.ID.Digest, n.Action
+		return n.ID.Digest, n.Action, n.Inputs
 	}
-	return "", ""
+	return "", "", nil
 }
 
 // requestsFromPlan seeds work items directly from the current plan when the queue is empty.
@@ -426,4 +428,34 @@ func (w *Worker) fetchArtifact(ctx context.Context, job runner.Job) error {
 	}
 	destPath := filepath.Join(destDir, strings.ReplaceAll(job.WheelDigest, ":", "_")+".bin")
 	return w.Fetcher.Fetch(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, destPath)
+}
+
+func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID) []string {
+	if len(ids) == 0 || w.Fetcher.BaseURL == "" {
+		return nil
+	}
+	var paths []string
+	for _, id := range ids {
+		if id.Type != artifact.PackType {
+			continue
+		}
+		if p, ok := w.packPath[id.Digest]; ok {
+			paths = append(paths, p)
+			continue
+		}
+		destDir := w.Cfg.LocalCASDir
+		if destDir == "" {
+			destDir = filepath.Join(w.Cfg.CacheDir, "cas")
+		}
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			continue
+		}
+		destPath := filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_")+".tar")
+		if err := w.Fetcher.Fetch(ctx, id, destPath); err != nil {
+			continue
+		}
+		w.packPath[id.Digest] = destPath
+		paths = append(paths, destPath)
+	}
+	return paths
 }
