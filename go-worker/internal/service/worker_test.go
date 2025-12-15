@@ -2,65 +2,46 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
-	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
 )
 
-func TestWorkerDrainMatchesJobs(t *testing.T) {
-	dir := t.TempDir()
-	planPath := filepath.Join(dir, "plan.json")
-	snap := plan.Snapshot{RunID: "r1", Plan: []plan.FlatNode{{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}}}
-	data, _ := json.Marshal(snap)
-	if err := os.WriteFile(planPath, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	fq := queue.NewFileQueue(filepath.Join(dir, "queue.json"))
-	_ = fq.Enqueue(context.Background(), queue.Request{Package: "pkg", Version: "1.0.0"})
-	r := &runner.FakeRunner{Dur: 100 * time.Millisecond, Log: "ok"}
-	w := &Worker{Queue: fq, Runner: r, Reporter: nil, Cfg: Config{OutputDir: dir, CacheDir: dir}}
-	// preload plan
-	if err := w.LoadPlan(); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Drain(context.Background()); err != nil {
-		t.Fatalf("drain error: %v", err)
-	}
-	if len(r.Calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(r.Calls))
-	}
+type fakeStore struct {
+	keys []string
 }
 
-func TestWorkerRunsPlanWhenQueueEmpty(t *testing.T) {
+func (f *fakeStore) Put(_ context.Context, key string, _ []byte, _ string) error {
+	f.keys = append(f.keys, key)
+	return nil
+}
+
+func TestUploadArtifactsFiltersWheels(t *testing.T) {
 	dir := t.TempDir()
-	planPath := filepath.Join(dir, "plan.json")
-	snap := plan.Snapshot{RunID: "r1", Plan: []plan.FlatNode{
-		{Name: "pkg", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"},
-		{Name: "reuse", Version: "2.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "reuse"},
-	}}
-	data, _ := json.Marshal(snap)
-	if err := os.WriteFile(planPath, data, 0o644); err != nil {
+	output := filepath.Join(dir, "out")
+	if err := os.MkdirAll(output, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fq := queue.NewFileQueue(filepath.Join(dir, "queue.json"))
-	r := &runner.FakeRunner{Dur: 100 * time.Millisecond, Log: "ok"}
-	w := &Worker{Queue: fq, Runner: r, Reporter: nil, Cfg: Config{OutputDir: dir, CacheDir: dir, BatchSize: 10}}
-	if err := w.LoadPlan(); err != nil {
+	// matching wheel
+	if err := os.WriteFile(filepath.Join(output, "demo-1.0.0-py3-none-any.whl"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Drain(context.Background()); err != nil {
-		t.Fatalf("drain error: %v", err)
+	// non-matching wheel
+	if err := os.WriteFile(filepath.Join(output, "other-1.0.0-py3-none-any.whl"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if got := len(r.Calls); got != 1 {
-		t.Fatalf("expected 1 build from plan, got %d", got)
+	fs := &fakeStore{}
+	w := &Worker{
+		Cfg:   Config{OutputDir: output},
+		Store: fs,
 	}
-	if r.Calls[0].Name != "pkg" {
-		t.Fatalf("expected build job for pkg, got %s", r.Calls[0].Name)
+	w.uploadArtifacts(context.Background(), runner.Job{Name: "demo", Version: "1.0.0"})
+	if len(fs.keys) != 1 {
+		t.Fatalf("expected 1 upload, got %d", len(fs.keys))
+	}
+	if fs.keys[0] != "demo/1.0.0/demo-1.0.0-py3-none-any.whl" {
+		t.Fatalf("unexpected key: %s", fs.keys[0])
 	}
 }

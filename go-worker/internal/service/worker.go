@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/objectstore"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,7 @@ type Worker struct {
 	Runner   runner.Runner
 	Reporter *reporter.Client
 	Cfg      Config
+	Store    objectstore.Store
 	mu       sync.Mutex
 	planSnap plan.Snapshot
 }
@@ -176,6 +178,8 @@ func (w *Worker) Drain(ctx context.Context) error {
 				Attempts:      res.attempt + 1,
 				EnqueuedAt:    time.Now().Unix(),
 			})
+		} else if res.err == nil {
+			w.uploadArtifacts(ctx, res.job)
 		}
 	}
 
@@ -295,7 +299,7 @@ func BuildWorker(cfg Config) (*Worker, error) {
 		RunCmd:      cfg.RunCmd,
 	}
 	rep := &reporter.Client{BaseURL: strings.TrimRight(cfg.ControlPlaneURL, "/"), Token: cfg.ControlPlaneToken}
-	return &Worker{Queue: q, Runner: r, Reporter: rep, Cfg: cfg}, nil
+	return &Worker{Queue: q, Runner: r, Reporter: rep, Cfg: cfg, Store: cfg.ObjectStore()}, nil
 }
 
 func queueKey(name, version string) string {
@@ -328,4 +332,32 @@ func writeManifest(outputDir string, manifest any) {
 // RunOnce is used by trigger handler.
 func (w *Worker) RunOnce(ctx context.Context) error {
 	return w.Drain(ctx)
+}
+
+// uploadArtifacts pushes built wheel files to object storage (best effort).
+func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
+	store := w.Store
+	if store == nil {
+		return
+	}
+	entries, err := os.ReadDir(w.Cfg.OutputDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".whl") {
+			continue
+		}
+		// crude match: wheel filename contains package name
+		if !strings.Contains(strings.ToLower(e.Name()), strings.ToLower(job.Name)) {
+			continue
+		}
+		path := filepath.Join(w.Cfg.OutputDir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		key := fmt.Sprintf("%s/%s/%s", strings.ToLower(job.Name), job.Version, e.Name())
+		_ = store.Put(ctx, key, data, "application/octet-stream")
+	}
 }
