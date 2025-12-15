@@ -141,15 +141,30 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
+			if u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: res.job.WheelDigest}); u != "" {
+				meta["wheel_url"] = u
+			}
 		}
 		if res.job.WheelAction != "" {
 			meta["wheel_action"] = res.job.WheelAction
 		}
 		if res.job.RuntimeDigest != "" {
 			meta["runtime_digest"] = res.job.RuntimeDigest
+			if u := w.casURL(artifact.ID{Type: artifact.RuntimeType, Digest: res.job.RuntimeDigest}); u != "" {
+				meta["runtime_url"] = u
+			}
 		}
 		if len(res.job.PackDigests) > 0 {
 			meta["pack_digests"] = res.job.PackDigests
+			var urls []string
+			for _, d := range res.job.PackDigests {
+				if u := w.casURL(artifact.ID{Type: artifact.PackType, Digest: d}); u != "" {
+					urls = append(urls, u)
+				}
+			}
+			if len(urls) > 0 {
+				meta["pack_urls"] = urls
+			}
 		}
 
 		entry := map[string]any{
@@ -174,15 +189,30 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.job.WheelDigest != "" {
 			logPayload["wheel_digest"] = res.job.WheelDigest
+			if u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: res.job.WheelDigest}); u != "" {
+				logPayload["wheel_url"] = u
+			}
 		}
 		if res.job.WheelAction != "" {
 			logPayload["wheel_action"] = res.job.WheelAction
 		}
 		if res.job.RuntimeDigest != "" {
 			logPayload["runtime_digest"] = res.job.RuntimeDigest
+			if u := w.casURL(artifact.ID{Type: artifact.RuntimeType, Digest: res.job.RuntimeDigest}); u != "" {
+				logPayload["runtime_url"] = u
+			}
 		}
 		if len(res.job.PackDigests) > 0 {
 			logPayload["pack_digests"] = res.job.PackDigests
+			var urls []string
+			for _, d := range res.job.PackDigests {
+				if u := w.casURL(artifact.ID{Type: artifact.PackType, Digest: d}); u != "" {
+					urls = append(urls, u)
+				}
+			}
+			if len(urls) > 0 {
+				logPayload["pack_urls"] = urls
+			}
 		}
 		if w.Reporter != nil {
 			_ = w.Reporter.PostLog(logPayload)
@@ -301,6 +331,17 @@ func packDigests(ids []artifact.ID) []string {
 		}
 	}
 	return out
+}
+
+func (w *Worker) casURL(id artifact.ID) string {
+	if w.Cfg.CASRegistryURL == "" || id.Digest == "" {
+		return ""
+	}
+	repo := w.Cfg.CASRegistryRepo
+	if repo == "" {
+		repo = "artifacts"
+	}
+	return fmt.Sprintf("%s/v2/%s/blobs/%s", strings.TrimRight(w.Cfg.CASRegistryURL, "/"), strings.Trim(repo, "/"), id.Digest)
 }
 
 // requestsFromPlan seeds work items directly from the current plan when the queue is empty.

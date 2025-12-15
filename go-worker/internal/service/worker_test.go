@@ -120,6 +120,14 @@ func TestMatchCarriesWheelDigestAndAction(t *testing.T) {
 	}
 }
 
+func TestCasURLHelper(t *testing.T) {
+	w := &Worker{Cfg: Config{CASRegistryURL: "http://zot:5000", CASRegistryRepo: "artifacts"}}
+	u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: "sha256:dead"})
+	if u != "http://zot:5000/v2/artifacts/blobs/sha256:dead" {
+		t.Fatalf("unexpected url: %s", u)
+	}
+}
+
 func TestFetchRuntime(t *testing.T) {
 	dir := t.TempDir()
 	fetched := false
