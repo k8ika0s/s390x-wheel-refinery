@@ -150,6 +150,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
+			if res.job.WheelSourceDigest != "" {
+				meta["wheel_source_digest"] = res.job.WheelSourceDigest
+			}
 			if u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: res.job.WheelDigest}); u != "" {
 				meta["wheel_url"] = u
 			} else if res.job.WheelDigest != "" {
@@ -225,6 +228,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.job.WheelDigest != "" {
 			logPayload["wheel_digest"] = res.job.WheelDigest
+			if res.job.WheelSourceDigest != "" {
+				logPayload["wheel_source_digest"] = res.job.WheelSourceDigest
+			}
 			if u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: res.job.WheelDigest}); u != "" {
 				logPayload["wheel_url"] = u
 			} else if u := w.objectURL(res.job, "wheel"); u != "" {
@@ -315,18 +321,19 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 			}
 			wheelDigest, wheelAction, packIDs, runtimeID := findWheelArtifact(snap.DAG, node, req)
 			jobs = append(jobs, runner.Job{
-				Name:          node.Name,
-				Version:       node.Version,
-				PythonVersion: firstNonEmpty(req.PythonVersion, node.PythonVersion),
-				PythonTag:     firstNonEmpty(node.PythonTag, pyTagFromVersion(firstNonEmpty(req.PythonVersion, node.PythonVersion))),
-				PlatformTag:   node.PlatformTag,
-				Recipes:       req.Recipes,
-				WheelDigest:   wheelDigest,
-				WheelAction:   wheelAction,
-				PackPaths:     w.resolvePacks(ctx, packIDs),
-				RuntimePath:   w.fetchRuntime(ctx, firstNonEmpty(req.PythonVersion, node.PythonVersion), runtimeID),
-				RuntimeDigest: runtimeID.Digest,
-				PackDigests:   packDigests(packIDs),
+				Name:              node.Name,
+				Version:           node.Version,
+				PythonVersion:     firstNonEmpty(req.PythonVersion, node.PythonVersion),
+				PythonTag:         firstNonEmpty(node.PythonTag, pyTagFromVersion(firstNonEmpty(req.PythonVersion, node.PythonVersion))),
+				PlatformTag:       node.PlatformTag,
+				Recipes:           req.Recipes,
+				WheelDigest:       wheelDigest,
+				WheelAction:       wheelAction,
+				WheelSourceDigest: findWheelSourceDigest(snap.DAG, wheelDigest),
+				PackPaths:         w.resolvePacks(ctx, packIDs),
+				RuntimePath:       w.fetchRuntime(ctx, firstNonEmpty(req.PythonVersion, node.PythonVersion), runtimeID),
+				RuntimeDigest:     runtimeID.Digest,
+				PackDigests:       packDigests(packIDs),
 			})
 		}
 	}
@@ -377,6 +384,18 @@ func packDigests(ids []artifact.ID) []string {
 		}
 	}
 	return out
+}
+
+func findWheelSourceDigest(dag []plan.DAGNode, wheelDigest string) string {
+	for _, n := range dag {
+		if n.Type != plan.NodeWheel || n.ID.Digest != wheelDigest {
+			continue
+		}
+		if sd, ok := n.Metadata["source_digest"].(string); ok {
+			return sd
+		}
+	}
+	return ""
 }
 
 func (w *Worker) casURL(id artifact.ID) string {

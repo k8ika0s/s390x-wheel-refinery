@@ -11,18 +11,19 @@ import (
 
 // Job describes a build job the worker executes.
 type Job struct {
-	Name          string
-	Version       string
-	PythonVersion string
-	PythonTag     string
-	PlatformTag   string
-	Recipes       []string
-	WheelDigest   string
-	WheelAction   string
-	RuntimePath   string
-	PackPaths     []string
-	RuntimeDigest string
-	PackDigests   []string
+	Name              string
+	Version           string
+	PythonVersion     string
+	PythonTag         string
+	PlatformTag       string
+	Recipes           []string
+	WheelDigest       string
+	WheelAction       string
+	RuntimePath       string
+	PackPaths         []string
+	RuntimeDigest     string
+	PackDigests       []string
+	WheelSourceDigest string
 }
 
 // Runner executes build jobs.
