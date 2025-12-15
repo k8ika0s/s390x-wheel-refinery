@@ -427,7 +427,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				PlatformTag:   platformTag,
 				Action:        "reuse",
 			})
-			wk := artifact.WheelKey{SourceDigest: sourceDigest(info.Name, info.Version), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
+			wk := artifact.WheelKey{SourceDigest: bestSourceDigest(info.Name, info.Version, filepath.Join(inputDir, f.Name())), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
 			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
 			wheelAction := "reuse"
 			if ok, _ := store.Has(ctx, wID); ok {
@@ -456,7 +456,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				PlatformTag:   platformTag,
 				Action:        "build",
 			})
-			wk := artifact.WheelKey{SourceDigest: sourceDigest(info.Name, info.Version), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
+			wk := artifact.WheelKey{SourceDigest: bestSourceDigest(info.Name, info.Version, filepath.Join(inputDir, f.Name())), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
 			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
 			wheelAction := "build"
 			if ok, _ := store.Has(ctx, wID); ok {
@@ -612,6 +612,22 @@ func newRunID() string {
 func sourceDigest(name, version string) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s==%s", normalizeName(name), strings.TrimSpace(version))))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func fileDigest(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func bestSourceDigest(name, version, path string) string {
+	if d := fileDigest(path); d != "" {
+		return d
+	}
+	return sourceDigest(name, version)
 }
 
 // readRequiresDist extracts Requires-Dist entries from METADATA inside a wheel.

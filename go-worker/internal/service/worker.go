@@ -114,7 +114,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 		i, job := i, job
 		g.Go(func() error {
 			if job.WheelAction == "reuse" && job.WheelDigest != "" {
-				_ = w.fetchWheel(ctx, job)
+				if err := w.fetchWheel(ctx, job); err != nil {
+					return fmt.Errorf("fetch wheel %s: %w", job.WheelDigest, err)
+				}
 			}
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			repID := artifact.ID{}
@@ -591,6 +593,7 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 	if err != nil {
 		return
 	}
+	// Pack publish is not tied to specific files; packs are metadata-only here.
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".whl") {
 			continue
@@ -622,6 +625,15 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 			}
 		}
 	}
+	// Optional pack/runtime publish (empty placeholder payload)
+	if w.Cfg.PackPushEnabled {
+		for _, d := range job.PackDigests {
+			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.PackType, Digest: d}, []byte{}, "application/octet-stream")
+		}
+	}
+	if w.Cfg.RuntimePushEnabled && job.RuntimeDigest != "" {
+		_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}, []byte{}, "application/octet-stream")
+	}
 }
 
 func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
@@ -636,7 +648,13 @@ func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
 		return err
 	}
 	destPath := filepath.Join(destDir, strings.ReplaceAll(job.WheelDigest, ":", "_")+".bin")
-	return w.Fetcher.Fetch(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, destPath)
+	if err := w.Fetcher.Fetch(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, destPath); err != nil {
+		return err
+	}
+	if _, err := os.Stat(destPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID) []string {
@@ -663,6 +681,9 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID) []string {
 		if err := w.Fetcher.Fetch(ctx, id, destPath); err != nil {
 			continue
 		}
+		if _, err := os.Stat(destPath); err != nil {
+			continue
+		}
 		w.packPath[id.Digest] = destPath
 		paths = append(paths, destPath)
 	}
@@ -682,6 +703,9 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 	}
 	destPath := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_")+".tar")
 	if err := w.Fetcher.Fetch(ctx, rtID, destPath); err != nil {
+		return ""
+	}
+	if _, err := os.Stat(destPath); err != nil {
 		return ""
 	}
 	return destPath

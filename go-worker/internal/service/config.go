@@ -54,6 +54,10 @@ type Config struct {
 	LocalCASDir         string
 	CASPushEnabled      bool
 	RepairPushEnabled   bool
+	RepairToolVersion   string
+	RepairPolicyHash    string
+	PackPushEnabled     bool
+	RuntimePushEnabled  bool
 }
 
 func fromEnv() Config {
@@ -98,6 +102,10 @@ func fromEnv() Config {
 		LocalCASDir:         getenv("LOCAL_CAS_DIR", "/cache/cas"),
 		CASPushEnabled:      getenvBool("CAS_PUSH_ENABLED", false),
 		RepairPushEnabled:   getenvBool("REPAIR_PUSH_ENABLED", false),
+		RepairToolVersion:   getenv("REPAIR_TOOL_VERSION", ""),
+		RepairPolicyHash:    getenv("REPAIR_POLICY_HASH", ""),
+		PackPushEnabled:     getenvBool("PACK_PUSH_ENABLED", false),
+		RuntimePushEnabled:  getenvBool("RUNTIME_PUSH_ENABLED", false),
 	}
 	return cfg
 }

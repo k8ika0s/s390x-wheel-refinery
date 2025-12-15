@@ -69,7 +69,7 @@ func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string,
 		if path, err := exec.LookPath("podman"); err == nil {
 			bin = path
 		} else {
-			return time.Since(start), "podman stub (podman not found)", nil
+			return time.Since(start), "", fmt.Errorf("podman binary not found; set PODMAN_BIN")
 		}
 	}
 	args := p.buildArgs(job)
@@ -150,9 +150,27 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 	if job.RuntimePath != "" {
 		args = append(args, "-v", fmt.Sprintf("%s:/opt/runtime:ro", job.RuntimePath))
 		args = append(args, "-e", "RUNTIME_PATH=/opt/runtime")
+		args = append(args, "-e", "PYTHONHOME=/opt/runtime")
+		args = append(args, "-e", "PATH=/opt/runtime/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin")
+		args = append(args, "-e", "LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:/opt/packs/lib")
 	}
 	for i, pth := range job.PackPaths {
 		args = append(args, "-v", fmt.Sprintf("%s:/opt/packs/pack%d:ro", pth, i))
+	}
+	if job.RuntimeDigest != "" {
+		args = append(args, "-e", fmt.Sprintf("RUNTIME_DIGEST=%s", job.RuntimeDigest))
+	}
+	if len(job.PackDigests) > 0 {
+		args = append(args, "-e", fmt.Sprintf("PACK_DIGESTS=%s", strings.Join(job.PackDigests, ",")))
+	}
+	if job.WheelSourceDigest != "" {
+		args = append(args, "-e", fmt.Sprintf("WHEEL_SOURCE_DIGEST=%s", job.WheelSourceDigest))
+	}
+	if job.RepairToolVersion != "" {
+		args = append(args, "-e", fmt.Sprintf("REPAIR_TOOL_VERSION=%s", job.RepairToolVersion))
+	}
+	if job.RepairPolicyHash != "" {
+		args = append(args, "-e", fmt.Sprintf("REPAIR_POLICY_HASH=%s", job.RepairPolicyHash))
 	}
 	image := p.defaultImage()
 	cmdArgs := p.buildCmd(job)
