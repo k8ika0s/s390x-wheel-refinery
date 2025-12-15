@@ -4,6 +4,34 @@ import { API_BASE, clearQueue, enqueueRetry, fetchDashboard, fetchLog, fetchPack
 
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
 
+function ArtifactBadges({ meta }) {
+  if (!meta) return null;
+  const items = [];
+  const add = (label, url, digest) => {
+    if (url) items.push({ label, url });
+    else if (digest) items.push({ label: `${label}:${digest.slice(0, 12)}…` });
+  };
+  add("wheel", meta.wheel_url, meta.wheel_digest);
+  add("repair", meta.repair_url, meta.repair_digest);
+  add("runtime", meta.runtime_url, meta.runtime_digest);
+  const packs = meta.pack_urls || meta.pack_digests || [];
+  packs.forEach((p, idx) => add(`pack${idx + 1}`, typeof p === "string" ? p : "", typeof p === "string" ? p : ""));
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {items.map((it, idx) =>
+        it.url ? (
+          <a key={idx} href={it.url} target="_blank" rel="noreferrer" className="chip chip-link">
+            {it.label}
+          </a>
+        ) : (
+          <span key={idx} className="chip chip-muted">{it.label}</span>
+        ),
+      )}
+    </div>
+  );
+}
+
 function Toasts({ toasts, onDismiss }) {
   return (
     <div className="fixed bottom-4 right-4 z-50 space-y-2 w-full max-w-sm">
@@ -168,6 +196,7 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
               <th className="text-left py-2 cursor-pointer" onClick={() => toggleSort("status")}>Status</th>
               <th className="text-left py-2 cursor-pointer" onClick={() => toggleSort("package")}>Package</th>
               <th className="text-left py-2">Python/Platform</th>
+              <th className="text-left py-2">Artifacts</th>
               <th className="text-left py-2">Detail</th>
             </tr>
           </thead>
@@ -177,6 +206,7 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
                 <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
                 <td className="py-2"><Link className="text-accent hover:underline" to={`/package/${e.name}`}>{e.name} {e.version}</Link></td>
                 <td className="py-2 text-slate-400">{e.python_tag}/{e.platform_tag}</td>
+                <td className="py-2 text-slate-300"><ArtifactBadges meta={e.metadata} /></td>
                 <td className="py-2 text-slate-400">{e.detail || ""}</td>
               </tr>
             ))}
@@ -371,6 +401,7 @@ function PackageDetail({ token, pushToast }) {
                   <tr className="border-b border-border">
                     <th className="text-left py-2">Status</th>
                     <th className="text-left py-2">Version</th>
+                    <th className="text-left py-2">Artifacts</th>
                     <th className="text-left py-2">Detail</th>
                     <th className="text-left py-2">Log</th>
                   </tr>
@@ -380,6 +411,7 @@ function PackageDetail({ token, pushToast }) {
                     <tr key={`${e.name}-${e.version}-${e.timestamp}`} className="border-b border-slate-800">
                       <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
                       <td className="py-2 text-slate-200">{e.version}</td>
+                      <td className="py-2 text-slate-300"><ArtifactBadges meta={e.metadata} /></td>
                       <td className="py-2 text-slate-400">{e.detail || ""}</td>
                       <td className="py-2"><button className="btn btn-secondary" onClick={() => loadLog(e)}>View log</button></td>
                     </tr>
