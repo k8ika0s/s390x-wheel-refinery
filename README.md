@@ -22,6 +22,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - [Development and testing](#development-and-testing)
 - [Docs and diagrams](#docs-and-diagrams)
 - [Status and known gaps](#status-and-known-gaps)
+- [Glossary](#glossary)
 
 ---
 
@@ -133,3 +134,19 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - Pack dependency metadata is currently hardcoded in the planner; promoting this to a catalog is planned.
 - Ensure real pack/runtime recipes are built and pushed in environments beyond local smoke (builder image must be built/published where workers run).
 - Continue to refine repair/policy metadata and catalog-driven pack selection as recipes expand.
+
+## Glossary
+- **CAS**: Content-addressable storage; stores blobs by digest. We use Zot as the CAS registry. https://project-zot.github.io/docs/
+- **Zot**: OCI registry used here as CAS for packs/runtimes/wheels/repairs. https://github.com/project-zot/zot
+- **MinIO**: S3-compatible object store used to mirror wheels/repairs for download. https://min.io
+- **Auditwheel**: Tool to check/repair wheels to comply with manylinux policy tags; default repair step uses it. https://github.com/pypa/auditwheel
+- **Podman**: Container engine used by the worker runner; defaults to the binary on PATH. https://podman.io
+- **Manylinux2014**: Baseline glibc/musl compatibility policy for Linux wheels; s390x is supported. https://peps.python.org/pep-0599/
+- **Pack**: A bundle of native deps (libs/headers/pkg-config) built from a recipe into a prefix (e.g., /opt/packs/<digest>/usr/local).
+- **Runtime**: A built CPython interpreter + stdlib/headers produced by runtime recipes; mounted into builds.
+- **DEPS_PREFIXES**: Colon-separated list of mounted pack prefixes passed to recipes so they can find headers/libs.
+- **Repair wheel**: The post-processed wheel emitted by `recipes/repair.sh`, named `<name>-<version>-repair.whl` with policy tag metadata.
+- **Builder image**: `refinery-builder:latest` containing toolchains, auditwheel/patchelf, and recipes at `/app/recipes`.
+- **Control-plane**: Go service exposing API/metrics/queue/logs and persisting manifests/events.
+- **Worker**: Go service that drains the queue, fetches CAS artifacts, mounts packs/runtimes, and runs builds via Podman in the builder image.
+- **DAG**: Directed acyclic graph emitted by the planner describing dependencies between runtimes, packs, wheels, and repair steps.
