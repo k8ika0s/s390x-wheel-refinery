@@ -186,6 +186,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.repair.Type == artifact.RepairType && res.repair.Digest != "" {
 			meta["repair_digest"] = res.repair.Digest
+			if w.Cfg.RepairToolVersion != "" {
+				meta["repair_tool_version"] = w.Cfg.RepairToolVersion
+			}
+			if w.Cfg.RepairPolicyHash != "" {
+				meta["repair_policy_hash"] = w.Cfg.RepairPolicyHash
+			}
 			if u := w.casURL(res.repair); u != "" {
 				meta["repair_url"] = u
 			} else if u := w.objectURL(res.job, "repair"); u != "" {
@@ -262,6 +268,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.repair.Type == artifact.RepairType && res.repair.Digest != "" {
 			logPayload["repair_digest"] = res.repair.Digest
+			if w.Cfg.RepairToolVersion != "" {
+				logPayload["repair_tool_version"] = w.Cfg.RepairToolVersion
+			}
+			if w.Cfg.RepairPolicyHash != "" {
+				logPayload["repair_policy_hash"] = w.Cfg.RepairPolicyHash
+			}
 			if u := w.casURL(res.repair); u != "" {
 				logPayload["repair_url"] = u
 			} else if u := w.objectURL(res.job, "repair"); u != "" {
@@ -617,7 +629,11 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		repPath := filepath.Join(w.Cfg.OutputDir, fmt.Sprintf("%s-%s-repair.whl", job.Name, job.Version))
 		repData, err := os.ReadFile(repPath)
 		if err == nil {
-			repKey := artifact.RepairKey{InputWheelDigest: job.WheelDigest}
+			repKey := artifact.RepairKey{
+				InputWheelDigest:  job.WheelDigest,
+				RepairToolVersion: w.Cfg.RepairToolVersion,
+				PolicyRulesDigest: w.Cfg.RepairPolicyHash,
+			}
 			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}, repData, "application/octet-stream")
 			if store != nil {
 				repairKey := fmt.Sprintf("%s/%s/repair-%s.whl", strings.ToLower(job.Name), job.Version, job.WheelDigest)
@@ -626,12 +642,24 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		}
 	}
 	// Optional pack/runtime publish (empty placeholder payload)
-	if w.Cfg.PackPushEnabled {
-		for _, d := range job.PackDigests {
+	if w.Cfg.PackPushEnabled && len(job.PackDigests) > 0 {
+		for idx, d := range job.PackDigests {
+			if idx < len(job.PackPaths) && job.PackPaths[idx] != "" {
+				if data, err := os.ReadFile(job.PackPaths[idx]); err == nil {
+					_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.PackType, Digest: d}, data, "application/octet-stream")
+					continue
+				}
+			}
 			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.PackType, Digest: d}, []byte{}, "application/octet-stream")
 		}
 	}
 	if w.Cfg.RuntimePushEnabled && job.RuntimeDigest != "" {
+		if job.RuntimePath != "" {
+			if data, err := os.ReadFile(job.RuntimePath); err == nil {
+				_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}, data, "application/octet-stream")
+				return
+			}
+		}
 		_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}, []byte{}, "application/octet-stream")
 	}
 }

@@ -15,8 +15,8 @@ const mockData = {
   "/api/variants/pkg": [{ metadata: { variant: "default" }, status: "built" }],
   "/api/failures?name=pkg&limit=50": [],
   "/api/recent?package=pkg&limit=50": [{ name: "pkg", version: "1.0", status: "built", detail: "ok", timestamp: "now" }],
-  "/logs/pkg/1.0": { content: "build log" },
-  "/package/pkg/retry": { detail: "enqueued" },
+  "/api/logs/pkg/1.0": { content: "build log" },
+  "/api/queue/enqueue": { detail: "enqueued" },
   "/api/worker/trigger": { detail: "ok" },
 };
 
@@ -57,7 +57,7 @@ describe("App dashboard", () => {
     fireEvent.change(screen.getByPlaceholderText(/package name/i), { target: { value: "pkg" } });
     fireEvent.click(screen.getAllByText(/Enqueue/i)[1]);
     await waitFor(() => {
-      const called = (global.fetch.mock.calls || []).some(([url]) => url.includes("/package/pkg/retry"));
+      const called = (global.fetch.mock.calls || []).some(([url, opts]) => url.includes("/api/queue/enqueue") && opts?.body?.includes("\"pkg\""));
       expect(called).toBe(true);
     });
   });
