@@ -14,7 +14,7 @@ Containers and compose files are the refinery’s “packaging and wiring.” Th
 - Provides environment variables for worker mode, tokens, API base, mounts.
 
 **Current status**
-- Containerfiles for Go control-plane, Go worker, and UI exist; podman-compose includes control-plane, worker, UI, Postgres, Redis, and Redpanda.
+- Containerfiles for Go control-plane, Go worker, and UI exist; podman-compose includes control-plane, worker, UI, Postgres, Redis, and Redpanda. Worker runs privileged to allow embedded podman.
 - CORS configured for SPA; mounts placeholders for input/output/cache.
 
 **Next steps / gaps**

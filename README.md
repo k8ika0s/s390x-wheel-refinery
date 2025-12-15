@@ -45,7 +45,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 
 ## System components
 - **Go control-plane**: APIs for manifests, logs, queue, metrics, artifact metadata, and worker triggers (`containers/go-control-plane/Containerfile`).
-- **Go worker**: Podman-only runner plus CAS/object-store client, executes build/repair steps (`containers/go-worker/Containerfile`).
+- **Go worker**: Podman-only runner plus CAS/object-store client, executes build/repair steps (`containers/go-worker/Containerfile`). Worker image embeds podman.
 - **Builder image**: `refinery-builder:latest` built from `containers/refinery-builder/Containerfile`; houses recipes and toolchains.
 - **UI (React)**: dashboards for queue, artifacts, metrics, events, and log viewing (`containers/ui/Containerfile`).
 - **External services**: Postgres, Redis (or Kafka) for queue/history; Zot for CAS; MinIO for wheelhouse object storage.
@@ -74,7 +74,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 
 ## Worker and queue
 - Queue backends: `file`, `redis`, or `kafka` (compose defaults to Redis).
-- Worker mounts `/input`, `/output`, `/cache`; drains queue; runs Podman with the builder image (Podman-only). `PODMAN_BIN` defaults to whatever is on `PATH` and errors if absent. Default build command now wheels `JOB_NAME[/==JOB_VERSION]` via pip inside the builder image using any mounted runtime/packs.
+- Worker mounts `/input`, `/output`, `/cache`; drains queue; runs Podman with the builder image (Podman-only). `PODMAN_BIN` defaults to whatever is on `PATH` and errors if absent. Default build command now wheels `JOB_NAME[/==JOB_VERSION]` via pip inside the builder image using any mounted runtime/packs. Worker container is privileged to allow nested podman.
 - DAG ordering: worker topologically sorts pack/runtime nodes from the planner DAG to guarantee dependency order before wheel builds.
 - Reuse vs build: CAS hits are reused; misses trigger pack/runtime builds and uploads unless the artifact is manifest-only.
 
