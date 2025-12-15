@@ -5,7 +5,7 @@ flowchart TD
     QUEUE[Retry queue] --> QAPI[Queue APIs\nlist/clear/enqueue]
     WORKER[Worker trigger\nlocal or webhook] --> API
     MANIFEST[/manifest.json/] --> API
-    API[FastAPI Control Plane] --> UI[SPA/UI]
+    API[Go Control Plane] --> UI[SPA/UI]
     SUMMARY --> API
     VARIANTS --> API
     LOGS --> API

@@ -15,10 +15,9 @@ The API/control plane is the refinery’s “traffic controller.” It exposes H
 - Orchestrates worker triggers and exposes CORS-enabled endpoints for the SPA.
 
 **Current status**
-- FastAPI app with CORS enabled, summary/recent/failures/variants/logs/queue/metrics endpoints; worker trigger + session token; queue clear and retry endpoints.
-- Auth via worker token header/query/cookie.
+- Go HTTP service with CORS enabled; Postgres-backed history/logs/manifest/plan; queue backends (file/Redis/Kafka) selected via config.
+- Endpoints: summary/recent/history slices (failures/variants/package), logs (get/search/stream), plan (get/save/compute via worker), manifest/artifacts, queue (list/stats/enqueue/clear), worker trigger/smoke, metrics stub, session token helper.
+- Auth via worker token header/query/cookie for write/queue actions.
 
 **Next steps / gaps**
-- Add endpoints for build plan/manifest download and wheel artifacts.
-- Add hint catalog CRUD endpoints.
-- Add history search/pagination, cache/worker insight endpoints, and log search/tail support.
+- Improve metrics (Prometheus), pagination/search UX, and cache/worker insight endpoints.

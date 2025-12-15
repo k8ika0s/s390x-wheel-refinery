@@ -27,11 +27,13 @@ refinery \
 4) If it fails, check the dashboard to see hints and logs.
 
 ## Dashboard (React SPA)
-Start the API with:
+Run the Go control-plane and UI:
 ```
-refinery serve --db /cache/history.db --host 0.0.0.0 --port 8000
+# Compose stack (Postgres/Redis/Redpanda + Go control-plane + UI + Go worker)
+podman compose -f docker-compose.control-plane.yml up
+# or docker compose -f docker-compose.control-plane.yml up
 ```
-Then run the React dashboard pointing at that API. From `ui/`, run `npm install && VITE_API_BASE=http://localhost:8000 npm run dev` for local work, or build the production UI container in `containers/ui/Dockerfile` (served on port 3000 by default). The SPA shows recent events (reused, built, failed), top failures and slow packages, hint catalog, queue depth with items, worker trigger, variant history, per-package detail pages, and log viewing (via `/logs/...`). The UI now includes a sticky header with environment/API and token badges, toasts for actions, skeleton states while loading, paginated/sortable event tables with sticky headers, a richer queue table (select, bulk retry, clear), tabs on package detail (overview/events/hints), paginated variants/failures, and log viewers with autoscroll/download controls.
+API will be on :8080, UI on :3000. For local UI dev from `ui/`, run `npm install && VITE_API_BASE=http://localhost:8080 npm run dev`. The SPA shows recent events, failures/slow packages, hint catalog, queue depth with items, worker trigger, variant history, per-package detail pages, and log viewing (via `/api/logs/...`). It includes a sticky header with environment/API and token badges, toasts, skeleton states, paginated/sortable event tables with sticky headers, a richer queue table (select, bulk retry, clear), tabs on package detail (overview/events/hints), paginated variants/failures, and log viewers with autoscroll/download controls.
 
 ## Key options (plain-English)
 - `--python 3.11`: Target Python version for the rebuilt wheels.
@@ -57,20 +59,11 @@ Then run the React dashboard pointing at that API. From `ui/`, run `npm install 
 4) If it keeps failing, use `--skip-known-failures` to move on, then address it later.
 
 ## Retry later with the queue
-- On a package page in the dashboard, click **Retry with recipe** (or call `POST /package/{name}/retry`), which drops a request into `/cache/retry_queue.json`.
-- When you’re ready, run the worker to consume the queue (uses the same cache/history):
-```
-refinery worker \
-  --input /input \
-  --output /output \
-  --cache /cache \
-  --python 3.11
-```
-- The worker applies the queued recipe steps as overrides and rebuilds the matching packages. The queue is emptied after each worker run.
-- In the dashboard you’ll also see the queue length and a **Run worker now** button. It works when the API container can see `/input`, `/output`, and `/cache` (or when `WORKER_*` env vars point to them). You can also enable a periodic drain with `WORKER_AUTORUN_INTERVAL` (seconds) in local mode.
-- If you prefer an external worker: run `uvicorn s390x_wheel_refinery.worker_service:app --host 0.0.0.0 --port 9000` in a container that has the same mounts, then set `WORKER_WEBHOOK_URL=http://worker:9000/trigger` (and optionally `WORKER_TOKEN`) in the API container. The UI “Run worker now” will call the webhook instead of running locally.
+- On a package page in the dashboard, click **Retry with recipe** (or call `POST /api/queue/enqueue`), which drops a request into the queue backend (file/Redis/Kafka, defaults to file/Redis via compose).
+- When you’re ready, trigger the Go worker (compose includes one) to consume the queue; the worker applies queued recipes as overrides and rebuilds matching packages. The queue is emptied as it runs.
+- The dashboard shows queue length and a **Run worker now** button. It works when the control-plane can reach the worker (local or webhook) and both see `/input`, `/output`, and `/cache`.
 - Optional auth: set `WORKER_TOKEN` to require `X-Worker-Token` (or `?token=`) for queue/worker actions.
-- CLI queue check: `refinery queue --cache /cache` shows queue length (use `--queue-path` to override).
+- CLI queue check: use the Go API `/api/queue`/`/api/queue/stats` or the UI.
 - Cookie tip: if you don’t want the token in URLs, set a cookie named `worker_token` in the browser (or call `POST /api/session/token?token=<your_token>`); the UI will send it automatically when triggering the worker.
 
 ## Tips for AI/ML stacks

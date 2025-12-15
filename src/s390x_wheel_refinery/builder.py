@@ -685,14 +685,14 @@ def _extract_sdist(source: Path, destination: Path) -> None:
         if missing_lib:
             lib = missing_lib.group(1)
             return f"Missing system library lib{lib}"
-        missing_header = re.search(r"fatal error: ([A-Za-z0-9_/.\-]+\.h): No such file or directory", output)
+        missing_header = re.search(r"fatal error: ([A-Za-z0-9_/.\-]+\\.h): No such file or directory", output)
         if missing_header:
             header = missing_header.group(1)
             return f"Missing header {header}"
         missing_file = re.search(r"No such file or directory: '([^']+)'", output)
         if missing_file:
             return f"Missing file {missing_file.group(1)} (check build deps)"
-        missing_module = re.search(r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]", output)
+        missing_module = re.search(r"ModuleNotFoundError: No module named ['\\\"]([^'\\\"]+)['\\\"]", output)
         if missing_module:
             name = missing_module.group(1)
             return f"Missing Python module {name} (build dependency?)"
