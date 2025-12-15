@@ -872,7 +872,7 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 			}
 		}
 		if !fetched && actions[id.Digest] == "build" {
-			if err := builder.BuildPack(destPath, builder.PackBuildOpts{Digest: id.Digest, Meta: meta[id.Digest]}); err == nil {
+			if err := builder.BuildPack(destPath, builder.PackBuildOpts{Digest: id.Digest, Meta: meta[id.Digest], Cmd: w.Cfg.PackBuilderCmd}); err == nil {
 				fetched = true
 			}
 		}
@@ -906,7 +906,7 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		}
 	}
 	if action == "build" {
-		if err := builder.BuildRuntime(destPath, builder.RuntimeBuildOpts{Digest: rtID.Digest, PythonVersion: pythonVersion, Meta: meta}); err == nil {
+		if err := builder.BuildRuntime(destPath, builder.RuntimeBuildOpts{Digest: rtID.Digest, PythonVersion: pythonVersion, Meta: meta, Cmd: w.Cfg.RuntimeBuilderCmd}); err == nil {
 			return destPath
 		}
 	}

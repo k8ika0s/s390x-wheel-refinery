@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 )
@@ -13,6 +14,8 @@ import (
 type PackBuildOpts struct {
 	Digest string
 	Meta   map[string]any
+	// Shell command to run before tar creation; receives PACK_OUTPUT dir in env.
+	Cmd string
 }
 
 // RuntimeBuildOpts describes inputs for building a runtime artifact.
@@ -21,10 +24,17 @@ type RuntimeBuildOpts struct {
 	PythonVersion string
 	Policy        string
 	Meta          map[string]any
+	// Shell command to run before tar creation; receives RUNTIME_OUTPUT dir in env.
+	Cmd string
 }
 
 // BuildPack writes a simple tar artifact with a manifest describing the pack.
 func BuildPack(path string, opts PackBuildOpts) error {
+	if opts.Cmd != "" {
+		if err := runCommand(opts.Cmd, "PACK_OUTPUT"); err != nil {
+			return err
+		}
+	}
 	manifest := map[string]any{
 		"kind":        "pack",
 		"digest":      opts.Digest,
@@ -36,6 +46,11 @@ func BuildPack(path string, opts PackBuildOpts) error {
 
 // BuildRuntime writes a simple tar artifact with a manifest describing the runtime.
 func BuildRuntime(path string, opts RuntimeBuildOpts) error {
+	if opts.Cmd != "" {
+		if err := runCommand(opts.Cmd, "RUNTIME_OUTPUT"); err != nil {
+			return err
+		}
+	}
 	manifest := map[string]any{
 		"kind":           "runtime",
 		"digest":         opts.Digest,
@@ -76,4 +91,21 @@ func writeTar(path string, manifest map[string]any) error {
 		return err
 	}
 	return nil
+}
+
+// runCommand executes a shell command if provided, setting an output dir env var.
+func runCommand(cmd, outputEnv string) error {
+	if cmd == "" {
+		return nil
+	}
+	tmp, err := os.MkdirTemp("", "refinery-build-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	c := exec.Command("sh", "-c", cmd)
+	c.Env = append(os.Environ(), outputEnv+"="+tmp)
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	return c.Run()
 }
