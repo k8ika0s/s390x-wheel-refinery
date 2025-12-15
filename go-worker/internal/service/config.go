@@ -116,8 +116,8 @@ func fromEnv() Config {
 		RuntimePushEnabled:  getenvBool("RUNTIME_PUSH_ENABLED", false),
 		PackBuilderCmd:      getenv("PACK_BUILDER_CMD", ""),
 		RuntimeBuilderCmd:   getenv("RUNTIME_BUILDER_CMD", ""),
-		DefaultPackCmd:      getenv("DEFAULT_PACK_CMD", "/app/recipes/noop-pack.sh"),
-		DefaultRuntimeCmd:   getenv("DEFAULT_RUNTIME_CMD", "/app/recipes/runtime-cpython.sh"),
+		DefaultPackCmd:      getenv("DEFAULT_PACK_CMD", "/app/recipes/pkgconf.sh"),
+		DefaultRuntimeCmd:   getenv("DEFAULT_RUNTIME_CMD", "/app/recipes/cpython311.sh"),
 		DefaultRepairCmd:    getenv("DEFAULT_REPAIR_CMD", "/app/recipes/repair.sh"),
 		PackRecipesDir:      getenv("PACK_RECIPES_DIR", "/app/recipes"),
 	}

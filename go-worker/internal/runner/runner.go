@@ -112,12 +112,33 @@ func (p *PodmanRunner) buildCmd(job Job) []string {
 	if len(p.RunCmd) > 0 {
 		return p.RunCmd
 	}
-	// Default command uses the Python refinery CLI inside the container to build a single job.
+	// Default command builds a wheel via pip inside the builder image using JOB_NAME/JOB_VERSION.
 	return []string{
 		"/bin/sh",
 		"-c",
-		"refinery --input /input --output /output --cache /cache --python ${PYTHON_TAG:-3.11} " +
-			"--platform-tag ${PLATFORM_TAG:-manylinux2014_s390x} --only ${JOB_NAME:-}${JOB_VERSION:+==${JOB_VERSION:-}} --jobs 1",
+		`set -euo pipefail
+spec="${JOB_NAME:-}"
+if [ -z "$spec" ]; then
+  echo "runner: JOB_NAME is required" >&2
+  exit 1
+fi
+if [ -n "${JOB_VERSION:-}" ]; then
+  spec="${spec}==${JOB_VERSION}"
+fi
+PYBIN="${PYTHON_BIN:-${PYTHON_PATH:-python3}}"
+export PIP_NO_INPUT=1
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/cache/pip}"
+if [ -n "${DEPS_PREFIXES:-}" ]; then
+  pc_paths=""
+  for pfx in $(echo "${DEPS_PREFIXES}" | tr ':' ' '); do
+    pc_paths="${pc_paths}${pfx}/lib/pkgconfig:"
+    export CFLAGS="${CFLAGS:-} -I${pfx}/include"
+    export LDFLAGS="${LDFLAGS:-} -L${pfx}/lib"
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:${pfx}/lib:${pfx}/lib64"
+  done
+  export PKG_CONFIG_PATH="${pc_paths}${PKG_CONFIG_PATH:-}"
+fi
+exec "${PYBIN}" -m pip wheel "${spec}" -w /output --no-deps`,
 	}
 }
 

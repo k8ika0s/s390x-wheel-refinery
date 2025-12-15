@@ -115,7 +115,6 @@ services:
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379
       PODMAN_BIN: podman
-      WORKER_RUN_CMD: refinery-build
       CAS_REGISTRY_URL: http://zot:5000
       CAS_REGISTRY_REPO: artifacts
       OBJECT_STORE_ENDPOINT: http://minio:9000
