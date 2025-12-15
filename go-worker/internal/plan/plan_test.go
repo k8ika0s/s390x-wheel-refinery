@@ -280,7 +280,7 @@ func TestCASOverridesActionsToReuse(t *testing.T) {
 func TestLoadWriteRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plan.json")
-	snap := Snapshot{RunID: "abc", Plan: []FlatNode{{Name: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}}}
+	snap := Snapshot{RunID: "abc", Plan: []FlatNode{{Name: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}}, CAS: &CASInfo{RegistryURL: "http://example", RegistryRepo: "artifacts"}}
 	if err := Write(path, snap); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -290,6 +290,9 @@ func TestLoadWriteRoundTrip(t *testing.T) {
 	}
 	if got.RunID != snap.RunID || len(got.Plan) != 1 || got.Plan[0].Name != "pkg" {
 		t.Fatalf("round trip mismatch: %+v", got)
+	}
+	if got.CAS == nil || got.CAS.RegistryURL != "http://example" || got.CAS.RegistryRepo != "artifacts" {
+		t.Fatalf("cas round trip mismatch: %+v", got.CAS)
 	}
 }
 
@@ -333,12 +336,35 @@ func TestGenerateWritesPlan(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 	os.WriteFile(filepath.Join(dir, "pkg-0.1.0-py3-none-any.whl"), []byte{}, 0o644)
-	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned", "", "", nil, nil)
+	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned", "", "", nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("generate failed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(planDir, "plan.json")); err != nil {
 		t.Fatalf("plan.json not written: %v", err)
+	}
+}
+
+func TestSnapshotRecordsCASConfig(t *testing.T) {
+	dir := t.TempDir()
+	planDir := filepath.Join(dir, "cache")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "pkg-0.1.0-py3-none-any.whl"), []byte{}, 0o644)
+	_, err := Generate(dir, planDir, "3.11", "manylinux2014_s390x", "", "", "pinned", "", "", nil, nil, "http://zot", "artifacts")
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	snap, err := Load(filepath.Join(planDir, "plan.json"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if snap.CAS == nil {
+		t.Fatalf("cas config missing")
+	}
+	if snap.CAS.RegistryURL != "http://zot" || snap.CAS.RegistryRepo != "artifacts" {
+		t.Fatalf("unexpected cas config: %+v", snap.CAS)
 	}
 }
 

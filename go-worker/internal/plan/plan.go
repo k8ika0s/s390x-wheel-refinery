@@ -37,6 +37,13 @@ type Snapshot struct {
 	Plan  []FlatNode `json:"plan"`
 	// DAG will carry richer artifact nodes when populated by the planner (optional for now).
 	DAG []DAGNode `json:"dag,omitempty"`
+	CAS *CASInfo  `json:"cas,omitempty"`
+}
+
+// CASInfo records the CAS registry settings used for planning (for downstream reuse).
+type CASInfo struct {
+	RegistryURL  string `json:"registry_url,omitempty"`
+	RegistryRepo string `json:"registry_repo,omitempty"`
 }
 
 // Options control resolver behavior.
@@ -103,6 +110,8 @@ func Generate(
 	constraintsPath string,
 	catalog *pack.Catalog,
 	store cas.Store,
+	casRegistryURL,
+	casRegistryRepo string,
 ) (Snapshot, error) {
 	maxDeps := loadMaxDepsFromEnv()
 	if maxDeps <= 0 {
@@ -135,6 +144,9 @@ func Generate(
 	})
 	if err != nil {
 		return Snapshot{}, err
+	}
+	if casRegistryURL != "" {
+		snap.CAS = &CASInfo{RegistryURL: casRegistryURL, RegistryRepo: casRegistryRepo}
 	}
 	path := filepath.Join(cacheDir, "plan.json")
 	if err := Write(path, snap); err != nil {

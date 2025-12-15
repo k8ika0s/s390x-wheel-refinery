@@ -58,6 +58,8 @@ func (w *Worker) LoadPlan() error {
 				w.Cfg.ConstraintsPath,
 				w.Cfg.PackCatalog,
 				w.Cfg.CASStore(),
+				w.Cfg.CASRegistryURL,
+				w.Cfg.CASRegistryRepo,
 			)
 			if err != nil {
 				return err
