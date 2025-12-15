@@ -60,6 +60,7 @@ type Config struct {
 	RuntimePushEnabled  bool
 	PackBuilderCmd      string
 	RuntimeBuilderCmd   string
+	DefaultPackCmd      string
 }
 
 func fromEnv() Config {
@@ -110,6 +111,7 @@ func fromEnv() Config {
 		RuntimePushEnabled:  getenvBool("RUNTIME_PUSH_ENABLED", false),
 		PackBuilderCmd:      getenv("PACK_BUILDER_CMD", ""),
 		RuntimeBuilderCmd:   getenv("RUNTIME_BUILDER_CMD", ""),
+		DefaultPackCmd:      getenv("DEFAULT_PACK_CMD", "/app/recipes/noop-pack.sh"),
 	}
 	return cfg
 }

@@ -872,7 +872,11 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 			}
 		}
 		if !fetched && actions[id.Digest] == "build" {
-			if err := builder.BuildPack(destPath, builder.PackBuildOpts{Digest: id.Digest, Meta: meta[id.Digest], Cmd: w.Cfg.PackBuilderCmd}); err == nil {
+			cmd := w.Cfg.PackBuilderCmd
+			if cmd == "" {
+				cmd = w.Cfg.DefaultPackCmd
+			}
+			if err := builder.BuildPack(destPath, builder.PackBuildOpts{Digest: id.Digest, Meta: meta[id.Digest], Cmd: cmd}); err == nil {
 				fetched = true
 			}
 		}

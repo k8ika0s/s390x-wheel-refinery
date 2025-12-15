@@ -31,7 +31,7 @@ type RuntimeBuildOpts struct {
 // BuildPack writes a simple tar artifact with a manifest describing the pack.
 func BuildPack(path string, opts PackBuildOpts) error {
 	if opts.Cmd != "" {
-		if err := runCommand(opts.Cmd, "PACK_OUTPUT"); err != nil {
+		if err := runCommand(opts.Cmd, "PACK_OUTPUT", filepath.Dir(path)); err != nil {
 			return err
 		}
 	}
@@ -47,7 +47,7 @@ func BuildPack(path string, opts PackBuildOpts) error {
 // BuildRuntime writes a simple tar artifact with a manifest describing the runtime.
 func BuildRuntime(path string, opts RuntimeBuildOpts) error {
 	if opts.Cmd != "" {
-		if err := runCommand(opts.Cmd, "RUNTIME_OUTPUT"); err != nil {
+		if err := runCommand(opts.Cmd, "RUNTIME_OUTPUT", filepath.Dir(path)); err != nil {
 			return err
 		}
 	}
@@ -94,11 +94,11 @@ func writeTar(path string, manifest map[string]any) error {
 }
 
 // runCommand executes a shell command if provided, setting an output dir env var.
-func runCommand(cmd, outputEnv string) error {
+func runCommand(cmd, outputEnv, destDir string) error {
 	if cmd == "" {
 		return nil
 	}
-	tmp, err := os.MkdirTemp("", "refinery-build-*")
+	tmp, err := os.MkdirTemp(destDir, "refinery-build-*")
 	if err != nil {
 		return err
 	}
