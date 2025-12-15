@@ -358,6 +358,7 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 				continue
 			}
 			wheelDigest, wheelAction, packIDs, runtimeID := findWheelArtifact(snap.DAG, node, req)
+			orderedPacks := topoSortFromDag(packIDs, snap.DAG)
 			jobs = append(jobs, runner.Job{
 				Name:              node.Name,
 				Version:           node.Version,
@@ -370,10 +371,10 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 				WheelSourceDigest: findWheelSourceDigest(snap.DAG, wheelDigest),
 				RepairToolVersion: findRepairToolVersion(snap.DAG, wheelDigest),
 				RepairPolicyHash:  findRepairPolicyHash(snap.DAG, wheelDigest),
-				PackPaths:         w.resolvePacks(ctx, packIDs, packActions, packMeta),
+				PackPaths:         w.resolvePacks(ctx, orderedPacks, packActions, packMeta),
 				RuntimePath:       w.fetchRuntime(ctx, firstNonEmpty(req.PythonVersion, node.PythonVersion), runtimeID, runtimeActions[runtimeID.Digest], runtimeMeta[runtimeID.Digest]),
 				RuntimeDigest:     runtimeID.Digest,
-				PackDigests:       packDigests(packIDs),
+				PackDigests:       packDigests(orderedPacks),
 			})
 		}
 	}
@@ -1118,4 +1119,43 @@ func isManifestOnly(dir string) bool {
 		return false
 	}
 	return true
+}
+
+// topoSortFromDag orders pack IDs using DAG edges (dependencies first).
+func topoSortFromDag(targets []artifact.ID, dag []plan.DAGNode) []artifact.ID {
+	idSet := make(map[string]struct{})
+	for _, t := range targets {
+		idSet[t.Digest] = struct{}{}
+	}
+	nodeByDigest := make(map[string]plan.DAGNode)
+	for _, n := range dag {
+		if n.Type != plan.NodePack {
+			continue
+		}
+		nodeByDigest[n.ID.Digest] = n
+	}
+	visited := make(map[string]bool)
+	var ordered []artifact.ID
+	var visit func(string)
+	visit = func(d string) {
+		if visited[d] {
+			return
+		}
+		visited[d] = true
+		n, ok := nodeByDigest[d]
+		if ok {
+			for _, inp := range n.Inputs {
+				if inp.Type == artifact.PackType {
+					visit(inp.Digest)
+				}
+			}
+		}
+		if _, ok := idSet[d]; ok {
+			ordered = append(ordered, artifact.ID{Type: artifact.PackType, Digest: d})
+		}
+	}
+	for d := range idSet {
+		visit(d)
+	}
+	return ordered
 }

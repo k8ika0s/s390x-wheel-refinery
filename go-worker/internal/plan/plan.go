@@ -232,6 +232,13 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				if ok, _ := store.Has(ctx, id); ok {
 					action = "reuse"
 				}
+				var inputs []artifact.ID
+				for _, depName := range packDependencies(def.Name) {
+					if depDef, ok := opts.PackCatalog.Packs[depName]; ok {
+						depKey := artifact.PackKey{Arch: "s390x", PolicyBaseDigest: "", Name: depDef.Name, Version: depDef.Version, RecipeDigest: depDef.RecipeDigest}
+						inputs = append(inputs, artifact.ID{Type: artifact.PackType, Digest: depKey.Digest()})
+					}
+				}
 				meta := map[string]any{
 					"name": def.Name,
 				}
@@ -247,6 +254,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				dagNodes = append(dagNodes, DAGNode{
 					ID:       id,
 					Type:     NodePack,
+					Inputs:   inputs,
 					Metadata: meta,
 					Action:   action,
 				})
@@ -845,4 +853,22 @@ func parseRequiresDist(meta string) []depSpec {
 		}
 	}
 	return out
+}
+
+// packDependencies declares manual pack dependency edges to enforce ordering.
+func packDependencies(name string) []string {
+	deps := map[string][]string{
+		"openssl":       {"zlib"},
+		"libpng":        {"zlib"},
+		"freetype":      {"libpng", "jpeg"},
+		"libxslt":       {"libxml2"},
+		"libxml2":       {"zlib"},
+		"cpython":       {"openssl", "libffi", "zlib", "xz", "bzip2", "sqlite"},
+		"cpython3.10":   {"openssl", "libffi", "zlib", "xz", "bzip2", "sqlite"},
+		"cpython3.11":   {"openssl", "libffi", "zlib", "xz", "bzip2", "sqlite"},
+		"cpython3.12":   {"openssl", "libffi", "zlib", "xz", "bzip2", "sqlite"},
+		"runtime":       {"openssl", "libffi", "zlib", "xz", "bzip2", "sqlite"},
+		"libjpeg-turbo": {},
+	}
+	return deps[strings.ToLower(name)]
 }
