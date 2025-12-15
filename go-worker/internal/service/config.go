@@ -56,6 +56,7 @@ type Config struct {
 	RepairPushEnabled   bool
 	RepairToolVersion   string
 	RepairPolicyHash    string
+	RepairCmd           string
 	PackPushEnabled     bool
 	RuntimePushEnabled  bool
 	PackBuilderCmd      string
@@ -107,6 +108,7 @@ func fromEnv() Config {
 		RepairPushEnabled:   getenvBool("REPAIR_PUSH_ENABLED", false),
 		RepairToolVersion:   getenv("REPAIR_TOOL_VERSION", ""),
 		RepairPolicyHash:    getenv("REPAIR_POLICY_HASH", ""),
+		RepairCmd:           getenv("REPAIR_CMD", ""),
 		PackPushEnabled:     getenvBool("PACK_PUSH_ENABLED", false),
 		RuntimePushEnabled:  getenvBool("RUNTIME_PUSH_ENABLED", false),
 		PackBuilderCmd:      getenv("PACK_BUILDER_CMD", ""),

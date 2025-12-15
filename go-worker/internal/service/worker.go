@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -658,7 +659,7 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		repData, err := os.ReadFile(repPath)
 		if err != nil {
 			if wheelPath := w.wheelFileForJob(job); wheelPath != "" {
-				_ = copyFile(wheelPath, repPath)
+				_ = w.runRepair(wheelPath, repPath)
 				repData, _ = os.ReadFile(repPath)
 			} else {
 				if err := w.writeStubArtifact(repPath, "repair", job.WheelDigest, map[string]any{"name": job.Name, "version": job.Version}); err == nil {
@@ -811,6 +812,31 @@ func verifyBytesDigest(data []byte, expected string) (bool, error) {
 	sum := sha256.Sum256(data)
 	actual := "sha256:" + hex.EncodeToString(sum[:])
 	return actual == expected, nil
+}
+
+func (w *Worker) runRepair(wheelPath, repairPath string) error {
+	if wheelPath == "" {
+		return fmt.Errorf("wheel path missing for repair")
+	}
+	if w.Cfg.RepairCmd == "" {
+		return copyFile(wheelPath, repairPath)
+	}
+	cmd := exec.Command("sh", "-c", w.Cfg.RepairCmd)
+	cmd.Env = append(os.Environ(),
+		"WHEEL_PATH="+wheelPath,
+		"REPAIR_OUTPUT="+repairPath,
+		"REPAIR_TOOL_VERSION="+w.Cfg.RepairToolVersion,
+		"REPAIR_POLICY_HASH="+w.Cfg.RepairPolicyHash,
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	if _, err := os.Stat(repairPath); err != nil {
+		return fmt.Errorf("repair output not produced: %v", err)
+	}
+	return nil
 }
 
 func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
