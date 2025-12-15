@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
 )
 
@@ -43,5 +46,27 @@ func TestUploadArtifactsFiltersWheels(t *testing.T) {
 	}
 	if fs.keys[0] != "demo/1.0.0/demo-1.0.0-py3-none-any.whl" {
 		t.Fatalf("unexpected key: %s", fs.keys[0])
+	}
+}
+
+func TestMatchCarriesWheelDigestAndAction(t *testing.T) {
+	digest := artifact.WheelKey{SourceDigest: "sha256:abc", PyTag: "cp311", PlatformTag: "manylinux2014_s390x", RuntimeDigest: "rt"}.Digest()
+	snap := plan.Snapshot{
+		Plan: []plan.FlatNode{{Name: "demo", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}},
+		DAG: []plan.DAGNode{
+			{ID: artifact.ID{Type: artifact.WheelType, Digest: digest}, Type: plan.NodeWheel, Action: "reuse", Metadata: map[string]any{"name": "demo", "version": "1.0.0", "python_tag": "cp311", "platform_tag": "manylinux2014_s390x"}},
+		},
+	}
+	w := &Worker{Cfg: Config{}, planSnap: snap}
+	reqs := []queue.Request{{Package: "demo", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x"}}
+	jobs := w.match(reqs)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+	if jobs[0].WheelDigest != digest {
+		t.Fatalf("wheel digest not propagated: %s", jobs[0].WheelDigest)
+	}
+	if jobs[0].WheelAction != "reuse" {
+		t.Fatalf("wheel action not propagated: %s", jobs[0].WheelAction)
 	}
 }

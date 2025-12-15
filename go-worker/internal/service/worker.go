@@ -132,6 +132,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 				firstErr = res.err
 			}
 		}
+		if res.job.WheelDigest != "" {
+			meta["wheel_digest"] = res.job.WheelDigest
+		}
+		if res.job.WheelAction != "" {
+			meta["wheel_action"] = res.job.WheelAction
+		}
 
 		entry := map[string]any{
 			"name":         res.job.Name,
@@ -152,6 +158,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.err != nil {
 			logPayload["error"] = res.err.Error()
+		}
+		if res.job.WheelDigest != "" {
+			logPayload["wheel_digest"] = res.job.WheelDigest
+		}
+		if res.job.WheelAction != "" {
+			logPayload["wheel_action"] = res.job.WheelAction
 		}
 		if w.Reporter != nil {
 			_ = w.Reporter.PostLog(logPayload)
@@ -206,6 +218,7 @@ func (w *Worker) match(reqs []queue.Request) []runner.Job {
 			if req.Version != "" && req.Version != "latest" && req.Version != node.Version {
 				continue
 			}
+			wheelDigest, wheelAction := findWheelArtifact(snap.DAG, node, req)
 			jobs = append(jobs, runner.Job{
 				Name:          node.Name,
 				Version:       node.Version,
@@ -213,6 +226,8 @@ func (w *Worker) match(reqs []queue.Request) []runner.Job {
 				PythonTag:     firstNonEmpty(node.PythonTag, pyTagFromVersion(firstNonEmpty(req.PythonVersion, node.PythonVersion))),
 				PlatformTag:   node.PlatformTag,
 				Recipes:       req.Recipes,
+				WheelDigest:   wheelDigest,
+				WheelAction:   wheelAction,
 			})
 		}
 	}
@@ -221,6 +236,29 @@ func (w *Worker) match(reqs []queue.Request) []runner.Job {
 
 func equalsIgnoreCase(a, b string) bool {
 	return strings.EqualFold(a, b)
+}
+
+func findWheelArtifact(dag []plan.DAGNode, node plan.FlatNode, req queue.Request) (digest, action string) {
+	for _, n := range dag {
+		if n.Type != plan.NodeWheel {
+			continue
+		}
+		name, _ := n.Metadata["name"].(string)
+		ver, _ := n.Metadata["version"].(string)
+		if !equalsIgnoreCase(name, node.Name) || ver != node.Version {
+			continue
+		}
+		pyTag, _ := n.Metadata["python_tag"].(string)
+		platTag, _ := n.Metadata["platform_tag"].(string)
+		if pyTag != "" && pyTag != node.PythonTag && pyTag != req.PythonTag {
+			continue
+		}
+		if platTag != "" && platTag != node.PlatformTag && platTag != req.PlatformTag {
+			continue
+		}
+		return n.ID.Digest, n.Action
+	}
+	return "", ""
 }
 
 // requestsFromPlan seeds work items directly from the current plan when the queue is empty.

@@ -17,6 +17,8 @@ type Job struct {
 	PythonTag     string
 	PlatformTag   string
 	Recipes       []string
+	WheelDigest   string
+	WheelAction   string
 }
 
 // Runner executes build jobs.
