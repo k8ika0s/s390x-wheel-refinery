@@ -7,8 +7,8 @@ flowchart LR
     PLAN[Go planner<br/>DAG: runtime+packs+wheels+repair<br/>CAS reuse vs build]
     Q[Queue backend<br/>file / Redis / Kafka]
     subgraph CAS
-        ZOT[CAS registry (Zot)]
-        MINIO[Object store (MinIO) optional]
+        ZOT["CAS registry: Zot"]
+        MINIO["Object store: MinIO (optional)"]
     end
     subgraph Builder
         WKR[Go worker]
