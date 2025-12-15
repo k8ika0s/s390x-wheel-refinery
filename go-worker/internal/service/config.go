@@ -81,7 +81,7 @@ func fromEnv() Config {
 		CacheDir:            getenv("CACHE_DIR", "/cache"),
 		PythonVersion:       getenv("PYTHON_VERSION", "3.11"),
 		PlatformTag:         getenv("PLATFORM_TAG", "manylinux2014_s390x"),
-		ContainerImage:      getenv("CONTAINER_IMAGE", ""),
+		ContainerImage:      getenv("CONTAINER_IMAGE", "refinery-builder:latest"),
 		ContainerPreset:     getenv("CONTAINER_PRESET", "rocky"),
 		WorkerToken:         getenv("WORKER_TOKEN", ""),
 		ControlPlaneURL:     getenv("CONTROL_PLANE_URL", ""),
