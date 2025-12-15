@@ -4,10 +4,13 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -637,6 +640,12 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		if err != nil {
 			continue
 		}
+		if job.WheelDigest != "" {
+			if ok, err := verifyBytesDigest(data, job.WheelDigest); err != nil || !ok {
+				log.Printf("skip CAS push for wheel: digest mismatch %s", job.WheelDigest)
+				continue
+			}
+		}
 		key := fmt.Sprintf("%s/%s/%s", strings.ToLower(job.Name), job.Version, e.Name())
 		_ = store.Put(ctx, key, data, "application/octet-stream")
 		if w.Cfg.CASPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
@@ -662,10 +671,14 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 				RepairToolVersion: w.Cfg.RepairToolVersion,
 				PolicyRulesDigest: w.Cfg.RepairPolicyHash,
 			}
-			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}, repData, "application/octet-stream")
-			if store != nil {
-				repairKey := fmt.Sprintf("%s/%s/repair-%s.whl", strings.ToLower(job.Name), job.Version, job.WheelDigest)
-				_ = store.Put(ctx, repairKey, repData, "application/octet-stream")
+			if ok, err := verifyBytesDigest(repData, repKey.Digest()); err == nil && !ok {
+				log.Printf("skip CAS push for repair: digest mismatch %s", repKey.Digest())
+			} else {
+				_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}, repData, "application/octet-stream")
+				if store != nil {
+					repairKey := fmt.Sprintf("%s/%s/repair-%s.whl", strings.ToLower(job.Name), job.Version, job.WheelDigest)
+					_ = store.Put(ctx, repairKey, repData, "application/octet-stream")
+				}
 			}
 		}
 	}
@@ -674,6 +687,10 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		for idx, d := range job.PackDigests {
 			if idx < len(job.PackPaths) && job.PackPaths[idx] != "" {
 				if data, err := os.ReadFile(job.PackPaths[idx]); err == nil {
+					if ok, err := verifyBytesDigest(data, d); err == nil && !ok {
+						log.Printf("skip CAS push for pack: digest mismatch %s", d)
+						continue
+					}
 					_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.PackType, Digest: d}, data, "application/octet-stream")
 					continue
 				}
@@ -686,6 +703,10 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 	if w.Cfg.RuntimePushEnabled && job.RuntimeDigest != "" {
 		if job.RuntimePath != "" {
 			if data, err := os.ReadFile(job.RuntimePath); err == nil {
+				if ok, err := verifyBytesDigest(data, job.RuntimeDigest); err == nil && !ok {
+					log.Printf("skip CAS push for runtime: digest mismatch %s", job.RuntimeDigest)
+					return
+				}
 				_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}, data, "application/octet-stream")
 				return
 			}
@@ -771,6 +792,26 @@ func writeTarWithManifest(path string, manifest map[string]any) error {
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
+func verifyFileDigest(path, expected string) (bool, error) {
+	if expected == "" || !strings.HasPrefix(expected, "sha256:") {
+		return true, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	return verifyBytesDigest(data, expected)
+}
+
+func verifyBytesDigest(data []byte, expected string) (bool, error) {
+	if expected == "" || !strings.HasPrefix(expected, "sha256:") {
+		return true, nil
+	}
+	sum := sha256.Sum256(data)
+	actual := "sha256:" + hex.EncodeToString(sum[:])
+	return actual == expected, nil
+}
+
 func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
 	if job.WheelDigest == "" || w.Fetcher.BaseURL == "" {
 		return nil
@@ -788,6 +829,12 @@ func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
 	}
 	if _, err := os.Stat(destPath); err != nil {
 		return err
+	}
+	if ok, err := verifyFileDigest(destPath, job.WheelDigest); err != nil || !ok {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("wheel digest mismatch: expected %s", job.WheelDigest)
 	}
 	return nil
 }
@@ -817,7 +864,9 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 		if w.Fetcher.BaseURL != "" {
 			if err := w.Fetcher.Fetch(ctx, id, destPath); err == nil {
 				if _, err := os.Stat(destPath); err == nil {
-					fetched = true
+					if ok, err := verifyFileDigest(destPath, id.Digest); err == nil && ok {
+						fetched = true
+					}
 				}
 			}
 		}
@@ -849,7 +898,9 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 	if w.Fetcher.BaseURL != "" {
 		if err := w.Fetcher.Fetch(ctx, rtID, destPath); err == nil {
 			if _, err := os.Stat(destPath); err == nil {
-				return destPath
+				if ok, err := verifyFileDigest(destPath, rtID.Digest); err == nil && ok {
+					return destPath
+				}
 			}
 		}
 	}

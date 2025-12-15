@@ -78,7 +78,7 @@ func TestFetchArtifactUsesFetcher(t *testing.T) {
 		},
 		packPath: make(map[string]string),
 	}
-	job := runner.Job{WheelDigest: "sha256:abc", WheelAction: "reuse"}
+	job := runner.Job{WheelDigest: "sha256:3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7", WheelAction: "reuse"}
 	if err := w.fetchWheel(context.Background(), job); err != nil {
 		t.Fatalf("fetchWheel: %v", err)
 	}
@@ -158,17 +158,18 @@ func TestFetchRuntime(t *testing.T) {
 			Client: &http.Client{
 				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 					fetched = true
-					return &http.Response{
+					resp := &http.Response{
 						StatusCode: http.StatusOK,
 						Body:       io.NopCloser(strings.NewReader("data")),
 						Header:     make(http.Header),
-					}, nil
+					}
+					return resp, nil
 				}),
 			},
 		},
 		packPath: make(map[string]string),
 	}
-	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: "sha256:rt"}
+	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: "sha256:3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"}
 	path := w.fetchRuntime(context.Background(), "3.11", rtID, "reuse", nil)
 	if path == "" {
 		t.Fatalf("expected runtime path")
