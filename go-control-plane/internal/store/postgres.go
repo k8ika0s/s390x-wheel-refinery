@@ -490,7 +490,7 @@ func (p *PostgresStore) Manifest(ctx context.Context, limit int) ([]ManifestEntr
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT name,version,wheel,python_tag,platform_tag,status,extract(epoch from created_at)::bigint FROM manifests ORDER BY created_at DESC LIMIT $1`, limit)
+	rows, err := p.db.QueryContext(ctx, `SELECT name,version,wheel,wheel_url,runtime_url,pack_urls,python_tag,platform_tag,status,extract(epoch from created_at)::bigint FROM manifests ORDER BY created_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -498,9 +498,11 @@ func (p *PostgresStore) Manifest(ctx context.Context, limit int) ([]ManifestEntr
 	var out []ManifestEntry
 	for rows.Next() {
 		var m ManifestEntry
-		if err := rows.Scan(&m.Name, &m.Version, &m.Wheel, &m.PythonTag, &m.PlatformTag, &m.Status, &m.CreatedAt); err != nil {
+		var packs pq.StringArray
+		if err := rows.Scan(&m.Name, &m.Version, &m.Wheel, &m.WheelURL, &m.RuntimeURL, &packs, &m.PythonTag, &m.PlatformTag, &m.Status, &m.CreatedAt); err != nil {
 			return nil, err
 		}
+		m.PackURLs = []string(packs)
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -514,8 +516,9 @@ func (p *PostgresStore) SaveManifest(ctx context.Context, entries []ManifestEntr
 		if m.CreatedAt == 0 {
 			m.CreatedAt = time.Now().Unix()
 		}
-		_, err := p.db.ExecContext(ctx, `INSERT INTO manifests (name,version,wheel,python_tag,platform_tag,status,created_at)
-			VALUES ($1,$2,$3,$4,$5,$6,TO_TIMESTAMP($7))`, m.Name, m.Version, m.Wheel, m.PythonTag, m.PlatformTag, m.Status, m.CreatedAt)
+		_, err := p.db.ExecContext(ctx, `INSERT INTO manifests (name,version,wheel,wheel_url,runtime_url,pack_urls,python_tag,platform_tag,status,created_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,TO_TIMESTAMP($10))`,
+			m.Name, m.Version, m.Wheel, m.WheelURL, m.RuntimeURL, pq.StringArray(m.PackURLs), m.PythonTag, m.PlatformTag, m.Status, m.CreatedAt)
 		if err != nil {
 			return err
 		}
@@ -530,7 +533,7 @@ func (p *PostgresStore) Artifacts(ctx context.Context, limit int) ([]Artifact, e
 	}
 	var out []Artifact
 	for _, m := range manifests {
-		out = append(out, Artifact{Name: m.Name, Version: m.Version, Path: m.Wheel, URL: ""})
+		out = append(out, Artifact{Name: m.Name, Version: m.Version, Path: m.Wheel, URL: m.WheelURL})
 	}
 	return out, nil
 }

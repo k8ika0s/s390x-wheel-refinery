@@ -40,6 +40,9 @@ type ManifestEntry struct {
 	Name        string
 	Version     string
 	Wheel       string
+	WheelURL    string
+	RuntimeURL  string
+	PackURLs    []string
 	PythonTag   string
 	PlatformTag string
 	Status      string
