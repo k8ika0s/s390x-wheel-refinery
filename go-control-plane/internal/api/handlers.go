@@ -95,6 +95,13 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
+	sum := store.Summary{StatusCounts: map[string]int{}, Failures: []store.Event{}}
+	if h.Store != nil {
+		if s, err := h.Store.Summary(ctx, 10); err == nil {
+			sum = s
+		}
+	}
+
 	// Queue metrics
 	qm := queueMetrics{Backend: h.Config.QueueBackend}
 	if h.Queue != nil {
@@ -121,12 +128,15 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"summary": map[string]string{
+		"summary": map[string]any{
 			"title":       "Control-plane metrics",
-			"description": "Quick glance at queue depth and database health. Export Prometheus metrics separately if enabled.",
+			"description": "Queue depth, DB health, and recent failure snapshot for quick triage.",
+			"updated_at":  time.Now().Unix(),
 		},
-		"queue": qm,
-		"db":    dbm,
+		"queue":           qm,
+		"db":              dbm,
+		"status_counts":   sum.StatusCounts,
+		"recent_failures": sum.Failures,
 	})
 }
 

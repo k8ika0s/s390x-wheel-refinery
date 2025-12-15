@@ -861,15 +861,52 @@ function Dashboard({ token, onTokenChange, pushToast }) {
             </StatCard>
             {metrics && (
               <StatCard title="Metrics snapshot">
-                <div className="space-y-2 text-sm text-slate-200">
+                <div className="space-y-3 text-sm text-slate-200">
+                  <div className="text-slate-400 text-xs">{metrics.summary?.description || "Queue and DB health at a glance."}</div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Queue backend</span>
+                    <span className="chip">{metrics.queue?.backend || "unknown"}</span>
+                  </div>
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Queue length</span>
-                    <span className="chip">{metrics.queue_length}</span>
+                    <span className="chip">{metrics.queue?.length ?? "?"}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Worker mode</span>
-                    <span className="chip">{metrics.worker_mode || "unknown"}</span>
+                    <span className="text-slate-400">Oldest age (s)</span>
+                    <span className="chip">{metrics.queue?.oldest_age_seconds ?? "-"}</span>
                   </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">DB</span>
+                    <span className={`chip ${metrics.db?.status === "ok" ? "bg-emerald-900" : "bg-slate-800"}`}>
+                      {metrics.db?.status || "unknown"}
+                    </span>
+                  </div>
+                  {metrics.queue?.consumer_state && (
+                    <div className="text-xs text-amber-300">Queue note: {metrics.queue.consumer_state}</div>
+                  )}
+                  {metrics.status_counts && Object.keys(metrics.status_counts).length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-xs text-slate-400">Status counts</div>
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(metrics.status_counts).map(([k, v]) => (
+                          <span key={k} className="chip chip-muted">{k}: {v}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {metrics.recent_failures && metrics.recent_failures.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-xs text-slate-400">Recent failures</div>
+                      <div className="space-y-1">
+                        {metrics.recent_failures.slice(0, 5).map((f, idx) => (
+                          <div key={idx} className="flex items-center justify-between text-xs text-slate-300">
+                            <span>{f.name} {f.version}</span>
+                            <span className="chip">{f.status}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </StatCard>
             )}
