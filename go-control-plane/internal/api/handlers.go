@@ -82,7 +82,52 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "metrics not enabled", "hint": "prometheus wiring deferred"})
+	type queueMetrics struct {
+		Backend       string `json:"backend"`
+		Length        int    `json:"length"`
+		OldestAgeSec  int64  `json:"oldest_age_seconds,omitempty"`
+		ConsumerState string `json:"consumer_state,omitempty"`
+	}
+	type dbMetrics struct {
+		Status string `json:"status"`
+		Error  string `json:"error,omitempty"`
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	// Queue metrics
+	qm := queueMetrics{Backend: h.Config.QueueBackend}
+	if h.Queue != nil {
+		stats, err := h.Queue.Stats(ctx)
+		if err == nil {
+			qm.Length = stats.Length
+			qm.OldestAgeSec = stats.OldestAge
+		} else {
+			qm.ConsumerState = fmt.Sprintf("stats_error: %v", err)
+		}
+	}
+
+	// DB metrics
+	dbm := dbMetrics{Status: "unknown"}
+	if pinger, ok := h.Store.(interface{ Ping(context.Context) error }); ok {
+		if err := pinger.Ping(ctx); err != nil {
+			dbm.Status = "degraded"
+			dbm.Error = err.Error()
+		} else {
+			dbm.Status = "ok"
+		}
+	} else {
+		dbm.Status = "n/a"
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"summary": map[string]string{
+			"title":       "Control-plane metrics",
+			"description": "Quick glance at queue depth and database health. Export Prometheus metrics separately if enabled.",
+		},
+		"queue": qm,
+		"db":    dbm,
+	})
 }
 
 func (h *Handler) sessionToken(w http.ResponseWriter, r *http.Request) {
