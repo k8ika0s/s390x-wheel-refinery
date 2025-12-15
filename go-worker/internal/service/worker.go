@@ -153,7 +153,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 			if u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: res.job.WheelDigest}); u != "" {
 				meta["wheel_url"] = u
 			} else if res.job.WheelDigest != "" {
-				if u := w.objectURL(res.job); u != "" {
+				if u := w.objectURL(res.job, "wheel"); u != "" {
 					meta["wheel_url"] = u
 				}
 			}
@@ -182,6 +182,8 @@ func (w *Worker) Drain(ctx context.Context) error {
 		if res.repair.Type == artifact.RepairType && res.repair.Digest != "" {
 			meta["repair_digest"] = res.repair.Digest
 			if u := w.casURL(res.repair); u != "" {
+				meta["repair_url"] = u
+			} else if u := w.objectURL(res.job, "repair"); u != "" {
 				meta["repair_url"] = u
 			}
 		}
@@ -225,6 +227,8 @@ func (w *Worker) Drain(ctx context.Context) error {
 			logPayload["wheel_digest"] = res.job.WheelDigest
 			if u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: res.job.WheelDigest}); u != "" {
 				logPayload["wheel_url"] = u
+			} else if u := w.objectURL(res.job, "wheel"); u != "" {
+				logPayload["wheel_url"] = u
 			}
 		}
 		if res.job.WheelAction != "" {
@@ -251,6 +255,8 @@ func (w *Worker) Drain(ctx context.Context) error {
 		if res.repair.Type == artifact.RepairType && res.repair.Digest != "" {
 			logPayload["repair_digest"] = res.repair.Digest
 			if u := w.casURL(res.repair); u != "" {
+				logPayload["repair_url"] = u
+			} else if u := w.objectURL(res.job, "repair"); u != "" {
 				logPayload["repair_url"] = u
 			}
 		}
@@ -384,11 +390,15 @@ func (w *Worker) casURL(id artifact.ID) string {
 	return fmt.Sprintf("%s/v2/%s/blobs/%s", strings.TrimRight(w.Cfg.CASRegistryURL, "/"), strings.Trim(repo, "/"), id.Digest)
 }
 
-func (w *Worker) objectURL(job runner.Job) string {
+func (w *Worker) objectURL(job runner.Job, kind string) string {
 	if w.Store == nil {
 		return ""
 	}
-	key := fmt.Sprintf("%s/%s/", strings.ToLower(job.Name), job.Version)
+	base := fmt.Sprintf("%s/%s/", strings.ToLower(job.Name), job.Version)
+	key := base
+	if kind == "repair" && job.WheelDigest != "" {
+		key = fmt.Sprintf("%srepair-%s", base, job.WheelDigest)
+	}
 	if os, ok := w.Store.(interface{ URL(string) string }); ok {
 		return os.URL(key)
 	}
@@ -551,9 +561,15 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, data, "application/octet-stream")
 		}
 	}
-	if w.Cfg.RepairPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" && lastWheelData != nil {
-		repKey := artifact.RepairKey{InputWheelDigest: job.WheelDigest}
-		_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}, lastWheelData, "application/octet-stream")
+	if lastWheelData != nil {
+		if w.Cfg.RepairPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
+			repKey := artifact.RepairKey{InputWheelDigest: job.WheelDigest}
+			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}, lastWheelData, "application/octet-stream")
+		}
+		if store != nil && job.WheelDigest != "" {
+			repairKey := fmt.Sprintf("%s/%s/repair-%s", strings.ToLower(job.Name), job.Version, job.WheelDigest)
+			_ = store.Put(ctx, repairKey, lastWheelData, "application/octet-stream")
+		}
 	}
 }
 

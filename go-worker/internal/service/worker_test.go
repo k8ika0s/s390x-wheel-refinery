@@ -141,7 +141,7 @@ func (u urlStore) URL(_ string) string                                       { r
 
 func TestObjectURLFallback(t *testing.T) {
 	w := &Worker{Store: urlStore{url: "http://minio/bucket/path"}}
-	u := w.objectURL(runner.Job{Name: "demo", Version: "1.0.0"})
+	u := w.objectURL(runner.Job{Name: "demo", Version: "1.0.0"}, "wheel")
 	if u == "" {
 		t.Fatalf("expected object url")
 	}
