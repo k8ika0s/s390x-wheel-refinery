@@ -901,8 +901,20 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 		if !fetched && actions[id.Digest] == "build" {
 			cmd := w.Cfg.PackBuilderCmd
 			if cmd == "" {
-				cmd = w.Cfg.DefaultPackCmd
+				// Derive script name from metadata name if present; fallback to default.
+				if m := meta[id.Digest]; m != nil {
+					if n, ok := m["name"].(string); ok && n != "" {
+						script := filepath.Join(w.Cfg.PackRecipesDir, fmt.Sprintf("%s.sh", n))
+						if _, err := os.Stat(script); err == nil {
+							cmd = script
+						}
+					}
+				}
+				if cmd == "" {
+					cmd = w.Cfg.DefaultPackCmd
+				}
 			}
+			// Build pack; DEPS_PREFIXES intentionally empty until pack extraction/mount flow is added.
 			if err := builder.BuildPack(destPath, builder.PackBuildOpts{Digest: id.Digest, Meta: meta[id.Digest], Cmd: cmd}); err == nil {
 				fetched = true
 			}

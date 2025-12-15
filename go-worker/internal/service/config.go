@@ -64,6 +64,7 @@ type Config struct {
 	DefaultPackCmd      string
 	DefaultRuntimeCmd   string
 	DefaultRepairCmd    string
+	PackRecipesDir      string
 }
 
 func fromEnv() Config {
@@ -118,6 +119,7 @@ func fromEnv() Config {
 		DefaultPackCmd:      getenv("DEFAULT_PACK_CMD", "/app/recipes/noop-pack.sh"),
 		DefaultRuntimeCmd:   getenv("DEFAULT_RUNTIME_CMD", "/app/recipes/runtime-cpython.sh"),
 		DefaultRepairCmd:    getenv("DEFAULT_REPAIR_CMD", "/app/recipes/repair.sh"),
+		PackRecipesDir:      getenv("PACK_RECIPES_DIR", "/app/recipes"),
 	}
 	return cfg
 }
