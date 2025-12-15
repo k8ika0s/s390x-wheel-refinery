@@ -171,12 +171,17 @@ func (w *Worker) Drain(ctx context.Context) error {
 			}
 		}
 
+		wheelURL := ""
+		if v, ok := meta["wheel_url"].(string); ok {
+			wheelURL = v
+		}
 		entry := map[string]any{
 			"name":         res.job.Name,
 			"version":      res.job.Version,
 			"status":       status,
 			"python_tag":   res.job.PythonTag,
 			"platform_tag": res.job.PlatformTag,
+			"wheel":        wheelURL,
 			"metadata":     meta,
 		}
 		manifestEntries = append(manifestEntries, entry)
