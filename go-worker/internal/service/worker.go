@@ -145,6 +145,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 		if res.job.WheelAction != "" {
 			meta["wheel_action"] = res.job.WheelAction
 		}
+		if res.job.RuntimeDigest != "" {
+			meta["runtime_digest"] = res.job.RuntimeDigest
+		}
+		if len(res.job.PackDigests) > 0 {
+			meta["pack_digests"] = res.job.PackDigests
+		}
 
 		entry := map[string]any{
 			"name":         res.job.Name,
@@ -171,6 +177,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.job.WheelAction != "" {
 			logPayload["wheel_action"] = res.job.WheelAction
+		}
+		if res.job.RuntimeDigest != "" {
+			logPayload["runtime_digest"] = res.job.RuntimeDigest
+		}
+		if len(res.job.PackDigests) > 0 {
+			logPayload["pack_digests"] = res.job.PackDigests
 		}
 		if w.Reporter != nil {
 			_ = w.Reporter.PostLog(logPayload)
