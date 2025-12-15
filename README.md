@@ -22,6 +22,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - [Development and testing](#development-and-testing)
 - [Docs and diagrams](#docs-and-diagrams)
 - [Status and known gaps](#status-and-known-gaps)
+- [License](#license)
 - [Glossary](#glossary)
 
 ---
@@ -134,6 +135,9 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - Pack dependency metadata is currently hardcoded in the planner; promoting this to a catalog is planned.
 - Ensure real pack/runtime recipes are built and pushed in environments beyond local smoke (builder image must be built/published where workers run).
 - Continue to refine repair/policy metadata and catalog-driven pack selection as recipes expand.
+
+## License
+- Licensed under the GNU Affero General Public License v3.0. See `LICENSE`.
 
 ## Glossary
 - **CAS**: Content-addressable storage; stores blobs by digest. We use Zot as the CAS registry. https://project-zot.github.io/docs/
