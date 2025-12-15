@@ -225,7 +225,7 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 			if req.Version != "" && req.Version != "latest" && req.Version != node.Version {
 				continue
 			}
-			wheelDigest, wheelAction, packIDs := findWheelArtifact(snap.DAG, node, req)
+			wheelDigest, wheelAction, packIDs, runtimeID := findWheelArtifact(snap.DAG, node, req)
 			jobs = append(jobs, runner.Job{
 				Name:          node.Name,
 				Version:       node.Version,
@@ -236,7 +236,9 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 				WheelDigest:   wheelDigest,
 				WheelAction:   wheelAction,
 				PackPaths:     w.resolvePacks(ctx, packIDs),
-				RuntimePath:   w.fetchRuntime(ctx, firstNonEmpty(req.PythonVersion, node.PythonVersion)),
+				RuntimePath:   w.fetchRuntime(ctx, firstNonEmpty(req.PythonVersion, node.PythonVersion), runtimeID),
+				RuntimeDigest: runtimeID.Digest,
+				PackDigests:   packDigests(packIDs),
 			})
 		}
 	}
@@ -247,7 +249,7 @@ func equalsIgnoreCase(a, b string) bool {
 	return strings.EqualFold(a, b)
 }
 
-func findWheelArtifact(dag []plan.DAGNode, node plan.FlatNode, req queue.Request) (digest, action string, packIDs []artifact.ID) {
+func findWheelArtifact(dag []plan.DAGNode, node plan.FlatNode, req queue.Request) (digest, action string, packIDs []artifact.ID, runtimeID artifact.ID) {
 	for _, n := range dag {
 		if n.Type != plan.NodeWheel {
 			continue
@@ -265,9 +267,28 @@ func findWheelArtifact(dag []plan.DAGNode, node plan.FlatNode, req queue.Request
 		if platTag != "" && platTag != node.PlatformTag && platTag != req.PlatformTag {
 			continue
 		}
-		return n.ID.Digest, n.Action, n.Inputs
+		var packs []artifact.ID
+		for _, inp := range n.Inputs {
+			if inp.Type == artifact.PackType {
+				packs = append(packs, inp)
+			}
+			if inp.Type == artifact.RuntimeType {
+				runtimeID = inp
+			}
+		}
+		return n.ID.Digest, n.Action, packs, runtimeID
 	}
-	return "", "", nil
+	return "", "", nil, artifact.ID{}
+}
+
+func packDigests(ids []artifact.ID) []string {
+	var out []string
+	for _, id := range ids {
+		if id.Type == artifact.PackType {
+			out = append(out, id.Digest)
+		}
+	}
+	return out
 }
 
 // requestsFromPlan seeds work items directly from the current plan when the queue is empty.
@@ -353,6 +374,7 @@ func BuildWorker(cfg Config) (*Worker, error) {
 		Cfg:      cfg,
 		Store:    cfg.ObjectStore(),
 		Fetcher:  cfg.CASFetcher(),
+		packPath: make(map[string]string),
 	}, nil
 }
 
@@ -461,12 +483,10 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID) []string {
 	return paths
 }
 
-func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string) string {
-	if w.Fetcher.BaseURL == "" || pythonVersion == "" {
+func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID artifact.ID) string {
+	if w.Fetcher.BaseURL == "" || pythonVersion == "" || rtID.Digest == "" {
 		return ""
 	}
-	key := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: pythonVersion}
-	id := artifact.ID{Type: artifact.RuntimeType, Digest: key.Digest()}
 	destDir := w.Cfg.LocalCASDir
 	if destDir == "" {
 		destDir = filepath.Join(w.Cfg.CacheDir, "cas")
@@ -474,8 +494,8 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string) string 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return ""
 	}
-	destPath := filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_")+".tar")
-	if err := w.Fetcher.Fetch(ctx, id, destPath); err != nil {
+	destPath := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_")+".tar")
+	if err := w.Fetcher.Fetch(ctx, rtID, destPath); err != nil {
 		return ""
 	}
 	return destPath

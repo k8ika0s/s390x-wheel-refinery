@@ -141,7 +141,8 @@ func TestFetchRuntime(t *testing.T) {
 		},
 		packPath: make(map[string]string),
 	}
-	path := w.fetchRuntime(context.Background(), "3.11")
+	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: "sha256:rt"}
+	path := w.fetchRuntime(context.Background(), "3.11", rtID)
 	if path == "" {
 		t.Fatalf("expected runtime path")
 	}

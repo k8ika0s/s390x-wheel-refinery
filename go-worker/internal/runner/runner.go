@@ -21,6 +21,8 @@ type Job struct {
 	WheelAction   string
 	RuntimePath   string
 	PackPaths     []string
+	RuntimeDigest string
+	PackDigests   []string
 }
 
 // Runner executes build jobs.
