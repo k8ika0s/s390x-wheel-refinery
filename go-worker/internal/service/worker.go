@@ -919,6 +919,7 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 		return nil
 	}
 	var paths []string
+	var depsBuilt []string
 	for _, id := range ids {
 		if id.Type != artifact.PackType {
 			continue
@@ -962,9 +963,14 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 					cmd = w.Cfg.DefaultPackCmd
 				}
 			}
-			// Build pack; DEPS_PREFIXES intentionally empty until pack extraction/mount flow is added.
-			if err := builder.BuildPack(destPath, builder.PackBuildOpts{Digest: id.Digest, Meta: meta[id.Digest], Cmd: cmd}); err == nil {
+			depsPrefixes := strings.Join(depPrefixes(paths, depsBuilt), ":")
+			envCmd := cmd
+			if depsPrefixes != "" {
+				envCmd = fmt.Sprintf("DEPS_PREFIXES=%s %s", depsPrefixes, cmd)
+			}
+			if err := builder.BuildPack(destPath, builder.PackBuildOpts{Digest: id.Digest, Meta: meta[id.Digest], Cmd: envCmd}); err == nil {
 				fetched = true
+				depsBuilt = append(depsBuilt, destPath)
 			}
 		}
 		if fetched {
@@ -1051,4 +1057,17 @@ func (w *Worker) writeRuntimeArtifact(path, digest string, meta map[string]any) 
 		"generated_at": time.Now().UTC().Format(time.RFC3339),
 		"meta":         meta,
 	})
+}
+
+func depPrefixes(groups ...[]string) []string {
+	var out []string
+	for _, g := range groups {
+		for _, p := range g {
+			if p == "" {
+				continue
+			}
+			out = append(out, filepath.Join(p, "usr", "local"))
+		}
+	}
+	return out
 }
