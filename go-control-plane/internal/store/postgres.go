@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS manifests (
     version      TEXT NOT NULL,
     wheel        TEXT NOT NULL,
     wheel_url    TEXT,
+    repair_url   TEXT,
+    repair_digest TEXT,
     runtime_url  TEXT,
     pack_urls    TEXT[],
     python_tag   TEXT,
@@ -76,6 +78,8 @@ CREATE INDEX IF NOT EXISTS idx_manifests_version ON manifests(version);
 ALTER TABLE manifests ADD COLUMN IF NOT EXISTS wheel_url TEXT;
 ALTER TABLE manifests ADD COLUMN IF NOT EXISTS runtime_url TEXT;
 ALTER TABLE manifests ADD COLUMN IF NOT EXISTS pack_urls TEXT[];
+ALTER TABLE manifests ADD COLUMN IF NOT EXISTS repair_url TEXT;
+ALTER TABLE manifests ADD COLUMN IF NOT EXISTS repair_digest TEXT;
 
 CREATE TABLE IF NOT EXISTS plans (
     id         BIGSERIAL PRIMARY KEY,
@@ -497,7 +501,7 @@ func (p *PostgresStore) Manifest(ctx context.Context, limit int) ([]ManifestEntr
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT name,version,wheel,wheel_url,runtime_url,pack_urls,python_tag,platform_tag,status,extract(epoch from created_at)::bigint FROM manifests ORDER BY created_at DESC LIMIT $1`, limit)
+	rows, err := p.db.QueryContext(ctx, `SELECT name,version,wheel,wheel_url,repair_url,repair_digest,runtime_url,pack_urls,python_tag,platform_tag,status,extract(epoch from created_at)::bigint FROM manifests ORDER BY created_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +510,7 @@ func (p *PostgresStore) Manifest(ctx context.Context, limit int) ([]ManifestEntr
 	for rows.Next() {
 		var m ManifestEntry
 		var packs pq.StringArray
-		if err := rows.Scan(&m.Name, &m.Version, &m.Wheel, &m.WheelURL, &m.RuntimeURL, &packs, &m.PythonTag, &m.PlatformTag, &m.Status, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.Name, &m.Version, &m.Wheel, &m.WheelURL, &m.RepairURL, &m.RepairDigest, &m.RuntimeURL, &packs, &m.PythonTag, &m.PlatformTag, &m.Status, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		m.PackURLs = []string(packs)
@@ -523,9 +527,9 @@ func (p *PostgresStore) SaveManifest(ctx context.Context, entries []ManifestEntr
 		if m.CreatedAt == 0 {
 			m.CreatedAt = time.Now().Unix()
 		}
-		_, err := p.db.ExecContext(ctx, `INSERT INTO manifests (name,version,wheel,wheel_url,runtime_url,pack_urls,python_tag,platform_tag,status,created_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,TO_TIMESTAMP($10))`,
-			m.Name, m.Version, m.Wheel, m.WheelURL, m.RuntimeURL, pq.StringArray(m.PackURLs), m.PythonTag, m.PlatformTag, m.Status, m.CreatedAt)
+		_, err := p.db.ExecContext(ctx, `INSERT INTO manifests (name,version,wheel,wheel_url,repair_url,repair_digest,runtime_url,pack_urls,python_tag,platform_tag,status,created_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TO_TIMESTAMP($12))`,
+			m.Name, m.Version, m.Wheel, m.WheelURL, m.RepairURL, m.RepairDigest, m.RuntimeURL, pq.StringArray(m.PackURLs), m.PythonTag, m.PlatformTag, m.Status, m.CreatedAt)
 		if err != nil {
 			return err
 		}

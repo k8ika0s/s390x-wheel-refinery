@@ -41,6 +41,8 @@ type ManifestEntry struct {
 	Version     string
 	Wheel       string
 	WheelURL    string
+	RepairURL   string
+	RepairDigest string
 	RuntimeURL  string
 	PackURLs    []string
 	PythonTag   string
