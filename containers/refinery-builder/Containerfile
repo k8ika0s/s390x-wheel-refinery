@@ -1,0 +1,27 @@
+# Builder container for s390x wheel refinery recipes
+# Provides toolchains + auditwheel/patchelf for repair
+FROM registry.access.redhat.com/ubi8/ubi:8.9
+
+RUN dnf -y update && \
+    dnf -y install \
+      gcc gcc-c++ make automake autoconf libtool \
+      perl git wget curl patch xz bzip2 tar findutils \
+      openssl-devel libffi-devel zlib-devel \
+      which python3 python3-pip python3-virtualenv \
+      cmake ninja-build pkgconf && \
+    dnf clean all
+
+# auditwheel + patchelf for repair step
+RUN python3 -m pip install --no-cache-dir auditwheel patchelf \
+ && rm -rf /root/.cache/pip
+
+WORKDIR /app
+COPY recipes/ /app/recipes/
+
+# Defaults expected by worker
+ENV PACK_RECIPES_DIR=/app/recipes \
+    DEFAULT_PACK_CMD=/app/recipes/pkgconf.sh \
+    DEFAULT_RUNTIME_CMD=/app/recipes/cpython311.sh \
+    DEFAULT_REPAIR_CMD=/app/recipes/repair.sh
+
+ENTRYPOINT ["/bin/bash"]
