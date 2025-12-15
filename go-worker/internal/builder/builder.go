@@ -84,6 +84,19 @@ func writeTar(path string, manifest map[string]any) error {
 	if _, err := tw.Write(payload); err != nil {
 		return err
 	}
+	// add a minimal payload to avoid manifest-only artifacts
+	keepData := []byte("keep")
+	if err := tw.WriteHeader(&tar.Header{
+		Name:    "usr/local/.keep",
+		Mode:    0o644,
+		Size:    int64(len(keepData)),
+		ModTime: time.Unix(0, 0),
+	}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(keepData); err != nil {
+		return err
+	}
 	if err := tw.Close(); err != nil {
 		return err
 	}
