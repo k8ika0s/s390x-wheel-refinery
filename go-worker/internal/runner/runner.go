@@ -127,6 +127,7 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 	if tag == "" {
 		tag = pyTagFromVersion(job.PythonVersion)
 	}
+	var depPrefixes []string
 	args := []string{
 		"run", "--rm",
 		"-v", fmt.Sprintf("%s:/input:ro", p.InputDir),
@@ -156,12 +157,16 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 	}
 	for i, pth := range job.PackPaths {
 		args = append(args, "-v", fmt.Sprintf("%s:/opt/packs/pack%d:ro", pth, i))
+		depPrefixes = append(depPrefixes, fmt.Sprintf("/opt/packs/pack%d/usr/local", i))
 	}
 	if job.RuntimeDigest != "" {
 		args = append(args, "-e", fmt.Sprintf("RUNTIME_DIGEST=%s", job.RuntimeDigest))
 	}
 	if len(job.PackDigests) > 0 {
 		args = append(args, "-e", fmt.Sprintf("PACK_DIGESTS=%s", strings.Join(job.PackDigests, ",")))
+	}
+	if len(depPrefixes) > 0 {
+		args = append(args, "-e", fmt.Sprintf("DEPS_PREFIXES=%s", strings.Join(depPrefixes, ":")))
 	}
 	if job.WheelSourceDigest != "" {
 		args = append(args, "-e", fmt.Sprintf("WHEEL_SOURCE_DIGEST=%s", job.WheelSourceDigest))
