@@ -1,6 +1,8 @@
 package service
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -741,6 +743,34 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
+func writeTarWithManifest(path string, manifest map[string]any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	buf := bytes.NewBuffer(nil)
+	tw := tar.NewWriter(buf)
+	hdr := &tar.Header{
+		Name:    "manifest.json",
+		Mode:    0o644,
+		Size:    int64(len(payload)),
+		ModTime: time.Unix(0, 0),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	if _, err := tw.Write(payload); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o644)
+}
+
 func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
 	if job.WheelDigest == "" || w.Fetcher.BaseURL == "" {
 		return nil
@@ -792,7 +822,7 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 			}
 		}
 		if !fetched && actions[id.Digest] == "build" {
-			if err := w.writeStubArtifact(destPath, "pack", id.Digest, meta[id.Digest]); err == nil {
+			if err := w.writePackArtifact(destPath, id.Digest, meta[id.Digest]); err == nil {
 				fetched = true
 			}
 		}
@@ -824,7 +854,7 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		}
 	}
 	if action == "build" {
-		if err := w.writeStubArtifact(destPath, "runtime", rtID.Digest, meta); err == nil {
+		if err := w.writeRuntimeArtifact(destPath, rtID.Digest, meta); err == nil {
 			return destPath
 		}
 	}
@@ -848,4 +878,22 @@ func (w *Worker) writeStubArtifact(path, kind, digest string, meta map[string]an
 		return err
 	}
 	return os.WriteFile(path, payload, 0o644)
+}
+
+func (w *Worker) writePackArtifact(path, digest string, meta map[string]any) error {
+	return writeTarWithManifest(path, map[string]any{
+		"kind":         "pack",
+		"digest":       digest,
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+		"meta":         meta,
+	})
+}
+
+func (w *Worker) writeRuntimeArtifact(path, digest string, meta map[string]any) error {
+	return writeTarWithManifest(path, map[string]any{
+		"kind":         "runtime",
+		"digest":       digest,
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+		"meta":         meta,
+	})
 }
