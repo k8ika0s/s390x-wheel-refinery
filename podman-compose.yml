@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   postgres:
-    image: postgres:16
+    image: quay.io/bitnami/postgresql:16
     environment:
       POSTGRES_USER: refinery
       POSTGRES_PASSWORD: refinery
@@ -13,23 +13,15 @@ services:
       - "5432:5432"
 
   redis:
-    image: redis:7
+    image: quay.io/bitnami/redis:7
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
       - "6379:6379"
 
-  redpanda:
-    image: redpandadata/redpanda:latest
-    command: >
-      redpanda start --overprovisioned --smp 1 --memory 1G --reserve-memory 0M
-      --node-id 0 --check=false --pandaproxy-addr 0.0.0.0:8082
-      --advertise-pandaproxy-addr redpanda:8082 --kafka-addr 0.0.0.0:9092
-      --advertise-kafka-addr redpanda:9092
-    ports:
-      - "9092:9092"
-
   zot:
-    image: ghcr.io/project-zot/zot-minimal-linux-amd64:latest
+    build:
+      context: .
+      dockerfile: containers/zot/Containerfile
     container_name: zot
     ports:
       - "5000:5000"
@@ -42,7 +34,7 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minio
@@ -65,7 +57,6 @@ services:
     depends_on:
       - postgres
       - redis
-      - redpanda
       - zot
       - minio
     environment:
@@ -73,7 +64,7 @@ services:
       POSTGRES_DSN: postgres://refinery:refinery@postgres:5432/refinery?sslmode=disable
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379
-      KAFKA_BROKERS: redpanda:9092
+      KAFKA_BROKERS: ""
       WORKER_WEBHOOK_URL: http://worker:9000/trigger
       WORKER_PLAN_URL: http://worker:9000/plan
       WORKER_TOKEN: ${WORKER_TOKEN:-}

@@ -1,0 +1,27 @@
+FROM golang:1.22 as builder
+WORKDIR /src
+RUN git clone https://github.com/project-zot/zot.git .
+RUN CGO_ENABLED=0 go build -o /zot ./cmd/zot
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal
+RUN microdnf -y update && microdnf -y install shadow-utils && microdnf clean all
+RUN useradd -r -u 1000 zot && mkdir -p /var/lib/zot && chown -R zot:zot /var/lib/zot
+COPY --from=builder /zot /usr/local/bin/zot
+COPY <<'EOF' /etc/zot/config.json
+{
+  "storage": {
+    "rootDirectory": "/var/lib/zot"
+  },
+  "http": {
+    "address": "0.0.0.0",
+    "port": "5000"
+  },
+  "log": {
+    "level": "info"
+  }
+}
+EOF
+USER zot
+EXPOSE 5000
+ENTRYPOINT ["/usr/local/bin/zot"]
+CMD ["serve", "/etc/zot/config.json"]
