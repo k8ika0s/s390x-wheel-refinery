@@ -61,7 +61,7 @@ services:
   control-plane:
     build:
       context: .
-      dockerfile: containers/go-control-plane/Dockerfile
+      dockerfile: containers/go-control-plane/Containerfile
     depends_on:
       - postgres
       - redis
@@ -89,7 +89,7 @@ services:
   ui:
     build:
       context: .
-      dockerfile: containers/ui/Dockerfile
+      dockerfile: containers/ui/Containerfile
       args:
         VITE_API_BASE: http://control-plane:8080
     environment:
@@ -102,7 +102,8 @@ services:
   worker:
     build:
       context: .
-      dockerfile: containers/go-worker/Dockerfile
+      dockerfile: containers/go-worker/Containerfile
+    privileged: true
     environment:
       INPUT_DIR: /input
       OUTPUT_DIR: /output
@@ -115,7 +116,6 @@ services:
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379
       PODMAN_BIN: podman
-      WORKER_RUN_CMD: refinery-build
       CAS_REGISTRY_URL: http://zot:5000
       CAS_REGISTRY_REPO: artifacts
       OBJECT_STORE_ENDPOINT: http://minio:9000
@@ -126,6 +126,7 @@ services:
       - ./input:/input:ro
       - ./output:/output
       - ./cache:/cache
+      - podman-storage:/var/lib/containers
     depends_on:
       - control-plane
 
@@ -133,3 +134,4 @@ volumes:
   pgdata:
   zotdata:
   miniodata:
+  podman-storage:

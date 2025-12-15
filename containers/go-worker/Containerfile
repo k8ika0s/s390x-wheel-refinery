@@ -1,0 +1,25 @@
+# Build stage
+FROM golang:1.22 AS builder
+WORKDIR /app
+COPY go-worker/ ./
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /go-worker ./cmd/worker
+
+# Runtime stage with embedded podman
+FROM registry.access.redhat.com/ubi8/ubi:8.9
+RUN microdnf -y update && \
+    microdnf -y install podman fuse-overlayfs && \
+    microdnf clean all
+
+# Configure podman storage to use vfs (safer for nested builds)
+RUN mkdir -p /etc/containers && \
+    cat > /etc/containers/storage.conf <<'EOF'
+[storage]
+driver = "vfs"
+graphroot = "/var/lib/containers/storage"
+runroot = "/run/containers/storage"
+mount_program = ""
+EOF
+
+COPY --from=builder /go-worker /usr/local/bin/worker
+EXPOSE 9000
+ENTRYPOINT ["/usr/local/bin/worker"]

@@ -42,7 +42,7 @@ Auth: stubbed (open for now); reserve header/query/cookie token for future write
 ### Notes
 - No legacy API coexistence needed; this Go service is the first deploy.
 - Defaults (pagination/timeouts) to be proposed with the implementation.
-- Compose: `docker-compose.control-plane.yml` brings up Postgres, Redis, Redpanda (Kafka), the Go control-plane, the Python worker (wired to POST plan/manifest/logs back), and the UI pointed at the Go API. File/Redis/Kafka queue backends selectable via env (`QUEUE_BACKEND`).
+- Compose: `podman-compose.yml` brings up Postgres, Redis, Redpanda (Kafka), the Go control-plane, the Go worker (wired to POST plan/manifest/logs back), and the UI pointed at the Go API. File/Redis/Kafka queue backends selectable via env (`QUEUE_BACKEND`).
 - Metrics endpoint is stubbed (501) until Prometheus wiring is added.
 - Kafka backend does not support a “clear” operation; use Redis/file if you need queue clearing during development.
-- Quick start: `docker-compose -f docker-compose.control-plane.yml up` (API :8080, UI :3000). Env overrides: `QUEUE_BACKEND=file|redis|kafka` (default redis), `POSTGRES_DSN`, `REDIS_URL`, `KAFKA_BROKERS`, `WORKER_TOKEN`, `WORKER_WEBHOOK_URL` if you run a remote worker.
+- Quick start: `podman compose -f podman-compose.yml up` (API :8080, UI :3000). Env overrides: `QUEUE_BACKEND=file|redis|kafka` (default redis), `POSTGRES_DSN`, `REDIS_URL`, `KAFKA_BROKERS`, `WORKER_TOKEN`, `WORKER_WEBHOOK_URL` if you run a remote worker.

@@ -30,8 +30,8 @@ refinery \
 Run the Go control-plane and UI:
 ```
 # Compose stack (Postgres/Redis/Redpanda + Go control-plane + UI + Go worker)
-podman compose -f docker-compose.control-plane.yml up
-# or docker compose -f docker-compose.control-plane.yml up
+podman compose -f podman-compose.yml up
+# worker runs privileged to allow embedded podman
 ```
 API will be on :8080, UI on :3000. For local UI dev from `ui/`, run `npm install && VITE_API_BASE=http://localhost:8080 npm run dev`. The SPA shows recent events, failures/slow packages, hint catalog, queue depth with items, worker trigger, variant history, per-package detail pages, and log viewing (via `/api/logs/...`). It includes a sticky header with environment/API and token badges, toasts, skeleton states, paginated/sortable event tables with sticky headers, a richer queue table (select, bulk retry, clear), tabs on package detail (overview/events/hints), paginated variants/failures, and log viewers with autoscroll/download controls.
 

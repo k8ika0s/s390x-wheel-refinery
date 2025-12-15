@@ -44,10 +44,10 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 6. **Publish**: Worker uploads packs/runtimes (when built), wheels, and repairs to CAS; mirrors wheels/repairs to MinIO when configured; emits manifest/events/metrics to the control-plane.
 
 ## System components
-- **Go control-plane**: APIs for manifests, logs, queue, metrics, artifact metadata, and worker triggers (`containers/go-control-plane/Dockerfile`).
-- **Go worker**: Podman runner plus CAS/object-store client, executes build/repair steps (`containers/go-worker/Dockerfile`).
+- **Go control-plane**: APIs for manifests, logs, queue, metrics, artifact metadata, and worker triggers (`containers/go-control-plane/Containerfile`).
+- **Go worker**: Podman-only runner plus CAS/object-store client, executes build/repair steps (`containers/go-worker/Containerfile`). Worker image embeds podman.
 - **Builder image**: `refinery-builder:latest` built from `containers/refinery-builder/Containerfile`; houses recipes and toolchains.
-- **UI (React)**: dashboards for queue, artifacts, metrics, events, and log viewing (`containers/ui/Dockerfile`).
+- **UI (React)**: dashboards for queue, artifacts, metrics, events, and log viewing (`containers/ui/Containerfile`).
 - **External services**: Postgres, Redis (or Kafka) for queue/history; Zot for CAS; MinIO for wheelhouse object storage.
 
 ## Artifacts, CAS, and storage
@@ -74,7 +74,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 
 ## Worker and queue
 - Queue backends: `file`, `redis`, or `kafka` (compose defaults to Redis).
-- Worker mounts `/input`, `/output`, `/cache`; drains queue; runs Podman with the builder image. `PODMAN_BIN` defaults to whatever is on `PATH` and errors if absent.
+- Worker mounts `/input`, `/output`, `/cache`; drains queue; runs Podman with the builder image (Podman-only). `PODMAN_BIN` defaults to whatever is on `PATH` and errors if absent. Default build command now wheels `JOB_NAME[/==JOB_VERSION]` via pip inside the builder image using any mounted runtime/packs. Worker container is privileged to allow nested podman.
 - DAG ordering: worker topologically sorts pack/runtime nodes from the planner DAG to guarantee dependency order before wheel builds.
 - Reuse vs build: CAS hits are reused; misses trigger pack/runtime builds and uploads unless the artifact is manifest-only.
 
@@ -84,11 +84,10 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - Job metadata includes `python_tag`, `abi_tag`, `platform_tag`, requested packs, and repair policy. Defaults map Python version → manylinux2014_s390x.
 
 ## Running locally
-- **Prereqs**: Podman (or Docker), git, Go toolchain, Node/npm for UI dev.
+- **Prereqs**: Podman, git, Go toolchain, Node/npm for UI dev.
 - **Bring up the stack** (Zot + MinIO + Postgres + Redis/Kafka + control-plane + worker + UI):
   ```bash
-  podman compose -f docker-compose.control-plane.yml up
-  # or: docker compose -f docker-compose.control-plane.yml up
+  podman compose -f podman-compose.yml up
   ```
   Builds the control-plane, worker, and UI images; uses Zot for CAS and MinIO for wheelhouse.
 - **Builder image**: build once locally (`refinery-builder:latest`) before running real workers:
