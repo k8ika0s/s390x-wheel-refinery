@@ -75,8 +75,8 @@ func TestFetchArtifactUsesFetcher(t *testing.T) {
 		packPath: make(map[string]string),
 	}
 	job := runner.Job{WheelDigest: "sha256:abc", WheelAction: "reuse"}
-	if err := w.fetchArtifact(context.Background(), job); err != nil {
-		t.Fatalf("fetchArtifact: %v", err)
+	if err := w.fetchWheel(context.Background(), job); err != nil {
+		t.Fatalf("fetchWheel: %v", err)
 	}
 	if !fetched {
 		t.Fatalf("fetcher not invoked")
@@ -117,5 +117,35 @@ func TestMatchCarriesWheelDigestAndAction(t *testing.T) {
 	}
 	if len(jobs[0].PackPaths) != 0 {
 		t.Fatalf("pack paths should be empty without fetch")
+	}
+}
+
+func TestFetchRuntime(t *testing.T) {
+	dir := t.TempDir()
+	fetched := false
+	w := &Worker{
+		Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")},
+		Fetcher: cas.Fetcher{
+			BaseURL: "http://example",
+			Repo:    "artifacts",
+			Client: &http.Client{
+				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					fetched = true
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader("data")),
+						Header:     make(http.Header),
+					}, nil
+				}),
+			},
+		},
+		packPath: make(map[string]string),
+	}
+	path := w.fetchRuntime(context.Background(), "3.11")
+	if path == "" {
+		t.Fatalf("expected runtime path")
+	}
+	if !fetched {
+		t.Fatalf("fetcher not invoked for runtime")
 	}
 }

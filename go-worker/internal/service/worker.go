@@ -112,7 +112,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 		i, job := i, job
 		g.Go(func() error {
 			if job.WheelAction == "reuse" && job.WheelDigest != "" {
-				_ = w.fetchArtifact(ctx, job)
+				_ = w.fetchWheel(ctx, job)
 			}
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			results[i] = result{
@@ -236,6 +236,7 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 				WheelDigest:   wheelDigest,
 				WheelAction:   wheelAction,
 				PackPaths:     w.resolvePacks(ctx, packIDs),
+				RuntimePath:   w.fetchRuntime(ctx, firstNonEmpty(req.PythonVersion, node.PythonVersion)),
 			})
 		}
 	}
@@ -415,7 +416,7 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 	}
 }
 
-func (w *Worker) fetchArtifact(ctx context.Context, job runner.Job) error {
+func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
 	if job.WheelDigest == "" || w.Fetcher.BaseURL == "" {
 		return nil
 	}
@@ -458,4 +459,24 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID) []string {
 		paths = append(paths, destPath)
 	}
 	return paths
+}
+
+func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string) string {
+	if w.Fetcher.BaseURL == "" || pythonVersion == "" {
+		return ""
+	}
+	key := artifact.RuntimeKey{Arch: "s390x", PolicyBaseDigest: "", PythonVersion: pythonVersion}
+	id := artifact.ID{Type: artifact.RuntimeType, Digest: key.Digest()}
+	destDir := w.Cfg.LocalCASDir
+	if destDir == "" {
+		destDir = filepath.Join(w.Cfg.CacheDir, "cas")
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return ""
+	}
+	destPath := filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_")+".tar")
+	if err := w.Fetcher.Fetch(ctx, id, destPath); err != nil {
+		return ""
+	}
+	return destPath
 }
