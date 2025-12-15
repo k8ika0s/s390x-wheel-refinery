@@ -27,6 +27,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", h.health)
 	mux.HandleFunc("/api/ready", h.ready)
 	mux.HandleFunc("/api/metrics", h.metrics)
+	mux.HandleFunc("/metrics", h.promMetrics)
 	mux.HandleFunc("/api/config", h.config)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
@@ -138,6 +139,42 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		"status_counts":   sum.StatusCounts,
 		"recent_failures": sum.Failures,
 	})
+}
+
+// promMetrics exposes a simple Prometheus text exposition for quick scrapes.
+func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	sum, _ := h.Store.Summary(ctx, 10)
+	qstats, _ := h.Queue.Stats(ctx)
+	dbOK := 0
+	if pinger, ok := h.Store.(interface{ Ping(context.Context) error }); ok {
+		if err := pinger.Ping(ctx); err == nil {
+			dbOK = 1
+		}
+	}
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "# HELP refinery_queue_length Number of items in the retry/build queue.\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_queue_length gauge\n")
+	fmt.Fprintf(&buf, "refinery_queue_length{backend=%q} %d\n", h.Config.QueueBackend, qstats.Length)
+	fmt.Fprintf(&buf, "# HELP refinery_queue_oldest_seconds Age in seconds of the oldest queued item.\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_queue_oldest_seconds gauge\n")
+	fmt.Fprintf(&buf, "refinery_queue_oldest_seconds %d\n", qstats.OldestAge)
+	fmt.Fprintf(&buf, "# HELP refinery_db_up Database connectivity (1=up,0=down).\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_db_up gauge\n")
+	fmt.Fprintf(&buf, "refinery_db_up %d\n", dbOK)
+	fmt.Fprintf(&buf, "# HELP refinery_status_count Recent status counts.\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_status_count gauge\n")
+	for k, v := range sum.StatusCounts {
+		fmt.Fprintf(&buf, "refinery_status_count{status=%q} %d\n", k, v)
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (h *Handler) sessionToken(w http.ResponseWriter, r *http.Request) {

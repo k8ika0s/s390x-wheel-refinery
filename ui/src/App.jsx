@@ -69,7 +69,7 @@ function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, ico
   );
 }
 
-function Layout({ children, tokenActive, theme, onToggleTheme }) {
+function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
   const location = useLocation();
   const isActive = (path) => location.pathname === path || (path !== "/" && location.pathname.startsWith(path));
   return (
@@ -80,6 +80,14 @@ function Layout({ children, tokenActive, theme, onToggleTheme }) {
             <Link to="/" className="text-xl font-bold text-accent">s390x Wheel Refinery</Link>
             <span className="chip bg-slate-800 border-border text-xs">Env: {ENV_LABEL}</span>
             <span className="chip bg-slate-800 border-border text-xs">API: {API_BASE || "same-origin"}</span>
+            {metrics?.queue?.length !== undefined && (
+              <span className="chip bg-slate-800 border-border text-xs">Q: {metrics.queue.length}</span>
+            )}
+            {metrics?.db?.status && (
+              <span className={`chip bg-slate-800 border-border text-xs ${metrics.db.status === "ok" ? "text-emerald-300" : "text-amber-300"}`}>
+                DB: {metrics.db.status}
+              </span>
+            )}
             {tokenActive ? (
               <span className="chip bg-emerald-900 border border-emerald-600 text-xs text-emerald-100">Token active</span>
             ) : (
@@ -491,7 +499,7 @@ function PackageDetail({ token, pushToast }) {
 
 const STATUS_CHIPS = ["built", "failed", "reused", "cached", "missing", "skipped_known_failure"];
 
-function Dashboard({ token, onTokenChange, pushToast }) {
+function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const [authToken, setAuthToken] = useState(localStorage.getItem("refinery_token") || token || "");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -522,6 +530,7 @@ function Dashboard({ token, onTokenChange, pushToast }) {
       );
       const data = await fetchDashboard(authToken);
       setDashboard({ ...data, recent });
+      onMetrics?.(data.metrics);
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
       setError(msg);
@@ -923,6 +932,7 @@ export default function App() {
   const [token, setToken] = useState(localStorage.getItem("refinery_token") || "");
   const [toasts, setToasts] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem("refinery_theme") || "dark");
+  const [metrics, setMetrics] = useState(null);
 
   const dismissToast = (id) => setToasts((ts) => ts.filter((t) => t.id !== id));
   const pushToast = ({ type = "success", title, message }) => {
@@ -940,9 +950,9 @@ export default function App() {
   };
 
   return (
-    <Layout tokenActive={Boolean(token)} theme={theme} onToggleTheme={toggleTheme}>
+    <Layout tokenActive={Boolean(token)} theme={theme} onToggleTheme={toggleTheme} metrics={metrics}>
       <Routes>
-        <Route path="/" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} />} />
+        <Route path="/" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} />} />
         <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} />} />
       </Routes>
       <Toasts toasts={toasts} onDismiss={dismissToast} />
