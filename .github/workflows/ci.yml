@@ -100,7 +100,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate docker-compose files
         run: |
-          docker compose -f docker-compose.control-plane.yml config
+          docker compose -f podman-compose.yml config
 
   s390x-build:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_s390x_build == 'true'
@@ -111,9 +111,9 @@ jobs:
           with:
             platforms: all
         - uses: docker/setup-buildx-action@v3
-        - name: Build builder image for s390x (emulated)
-          run: |
-            docker buildx build --platform linux/s390x -t refinery-rocky-s390x:ci -f containers/rocky/Dockerfile --load .
+      - name: Build builder image for s390x (emulated)
+        run: |
+            docker buildx build --platform linux/s390x -t refinery-rocky-s390x:ci -f containers/rocky/Containerfile --load .
 
   smoke-dummy-run:
     runs-on: ubuntu-latest
