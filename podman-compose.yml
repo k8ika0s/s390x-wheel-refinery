@@ -61,7 +61,7 @@ services:
   control-plane:
     build:
       context: .
-      dockerfile: containers/go-control-plane/Dockerfile
+      dockerfile: containers/go-control-plane/Containerfile
     depends_on:
       - postgres
       - redis
@@ -89,7 +89,7 @@ services:
   ui:
     build:
       context: .
-      dockerfile: containers/ui/Dockerfile
+      dockerfile: containers/ui/Containerfile
       args:
         VITE_API_BASE: http://control-plane:8080
     environment:
@@ -102,7 +102,7 @@ services:
   worker:
     build:
       context: .
-      dockerfile: containers/go-worker/Dockerfile
+      dockerfile: containers/go-worker/Containerfile
     environment:
       INPUT_DIR: /input
       OUTPUT_DIR: /output

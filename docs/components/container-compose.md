@@ -3,7 +3,7 @@ Containers and compose files are the refinery’s “packaging and wiring.” Th
 **Purpose / Responsibilities**
 - Build/run the Go control-plane + Go worker containers and the UI container (static SPA served on 3000).
 - Wire volumes `/input`, `/output`, `/cache`, and pass worker token/webhook/env via compose.
-- Allow local development (`npm run dev` for UI, Go binaries for control-plane/worker), and production builds via Dockerfiles.
+- Allow local development (`npm run dev` for UI, Go binaries for control-plane/worker), and production builds via Containerfiles.
 
 **Why it matters**
 - Ensures repeatable, host-safe execution (no host pollution) and easy bring-up on s390x hosts.
@@ -14,7 +14,7 @@ Containers and compose files are the refinery’s “packaging and wiring.” Th
 - Provides environment variables for worker mode, tokens, API base, mounts.
 
 **Current status**
-- Dockerfiles for Go control-plane, Go worker, and UI exist; docker-compose includes control-plane, worker, UI, Postgres, Redis, and Redpanda.
+- Containerfiles for Go control-plane, Go worker, and UI exist; podman-compose includes control-plane, worker, UI, Postgres, Redis, and Redpanda.
 - CORS configured for SPA; mounts placeholders for input/output/cache.
 
 **Next steps / gaps**

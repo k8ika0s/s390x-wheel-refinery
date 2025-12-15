@@ -44,10 +44,10 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 6. **Publish**: Worker uploads packs/runtimes (when built), wheels, and repairs to CAS; mirrors wheels/repairs to MinIO when configured; emits manifest/events/metrics to the control-plane.
 
 ## System components
-- **Go control-plane**: APIs for manifests, logs, queue, metrics, artifact metadata, and worker triggers (`containers/go-control-plane/Dockerfile`).
-- **Go worker**: Podman-only runner plus CAS/object-store client, executes build/repair steps (`containers/go-worker/Dockerfile`).
+- **Go control-plane**: APIs for manifests, logs, queue, metrics, artifact metadata, and worker triggers (`containers/go-control-plane/Containerfile`).
+- **Go worker**: Podman-only runner plus CAS/object-store client, executes build/repair steps (`containers/go-worker/Containerfile`).
 - **Builder image**: `refinery-builder:latest` built from `containers/refinery-builder/Containerfile`; houses recipes and toolchains.
-- **UI (React)**: dashboards for queue, artifacts, metrics, events, and log viewing (`containers/ui/Dockerfile`).
+- **UI (React)**: dashboards for queue, artifacts, metrics, events, and log viewing (`containers/ui/Containerfile`).
 - **External services**: Postgres, Redis (or Kafka) for queue/history; Zot for CAS; MinIO for wheelhouse object storage.
 
 ## Artifacts, CAS, and storage
@@ -87,8 +87,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - **Prereqs**: Podman, git, Go toolchain, Node/npm for UI dev.
 - **Bring up the stack** (Zot + MinIO + Postgres + Redis/Kafka + control-plane + worker + UI):
   ```bash
-  podman compose -f docker-compose.control-plane.yml up
-  # or: docker compose -f docker-compose.control-plane.yml up
+  podman compose -f podman-compose.yml up
   ```
   Builds the control-plane, worker, and UI images; uses Zot for CAS and MinIO for wheelhouse.
 - **Builder image**: build once locally (`refinery-builder:latest`) before running real workers:

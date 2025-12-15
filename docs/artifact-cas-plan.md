@@ -21,7 +21,7 @@
 - **MinIO (optional):** wheel/object mirror.
 
 ### Local dev (compose)
-- `docker-compose.control-plane.yml` now brings up Zot on `http://localhost:5000` (repo default: `artifacts`) and MinIO on `http://localhost:9000` (console `:9001`) with credentials `minio/minio123`.
+- `podman-compose.yml` now brings up Zot on `http://localhost:5000` (repo default: `artifacts`) and MinIO on `http://localhost:9000` (console `:9001`) with credentials `minio/minio123`.
 - Plan snapshots now record CAS registry URL/repo for downstream workers/tools.
 - Worker supports CAS pushes (`CAS_PUSH_ENABLED`, `REPAIR_PUSH_ENABLED`) and MinIO mirroring; manifests/logs carry CAS/object URLs for wheel/runtime/packs/repairs.
 
