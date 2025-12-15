@@ -40,6 +40,7 @@ type result struct {
 	duration time.Duration
 	log      string
 	err      error
+	repair   artifact.ID
 	attempt  int
 }
 
@@ -116,12 +117,19 @@ func (w *Worker) Drain(ctx context.Context) error {
 				_ = w.fetchWheel(ctx, job)
 			}
 			dur, logContent, err := w.Runner.Run(ctx, job)
+			repID := artifact.ID{}
 			results[i] = result{
 				job:      job,
 				duration: dur,
 				log:      logContent,
 				err:      err,
+				repair:   repID,
 				attempt:  reqAttempts[queueKey(job.Name, job.Version)],
+			}
+			if err == nil && w.Cfg.RepairPushEnabled && job.WheelDigest != "" && w.Pusher.BaseURL != "" {
+				repKey := artifact.RepairKey{InputWheelDigest: job.WheelDigest}
+				repID = artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}
+				results[i].repair = repID
 			}
 			return nil
 		})
@@ -169,6 +177,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 			}
 			if len(urls) > 0 {
 				meta["pack_urls"] = urls
+			}
+		}
+		if res.repair.Type == artifact.RepairType && res.repair.Digest != "" {
+			meta["repair_digest"] = res.repair.Digest
+			if u := w.casURL(res.repair); u != "" {
+				meta["repair_url"] = u
 			}
 		}
 
@@ -222,6 +236,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 			}
 			if len(urls) > 0 {
 				logPayload["pack_urls"] = urls
+			}
+		}
+		if res.repair.Type == artifact.RepairType && res.repair.Digest != "" {
+			logPayload["repair_digest"] = res.repair.Digest
+			if u := w.casURL(res.repair); u != "" {
+				logPayload["repair_url"] = u
 			}
 		}
 		if w.Reporter != nil {
@@ -496,6 +516,7 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 	if store == nil {
 		return
 	}
+	var lastWheelData []byte
 	entries, err := os.ReadDir(w.Cfg.OutputDir)
 	if err != nil {
 		return
@@ -515,9 +536,14 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		}
 		key := fmt.Sprintf("%s/%s/%s", strings.ToLower(job.Name), job.Version, e.Name())
 		_ = store.Put(ctx, key, data, "application/octet-stream")
+		lastWheelData = data
 		if w.Cfg.CASPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
 			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, data, "application/octet-stream")
 		}
+	}
+	if w.Cfg.RepairPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" && lastWheelData != nil {
+		repKey := artifact.RepairKey{InputWheelDigest: job.WheelDigest}
+		_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}, lastWheelData, "application/octet-stream")
 	}
 }
 
