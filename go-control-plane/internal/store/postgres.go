@@ -16,6 +16,13 @@ type PostgresStore struct {
 	db *sql.DB
 }
 
+func (p *PostgresStore) ensureDB() error {
+	if p == nil || p.db == nil {
+		return fmt.Errorf("db not configured")
+	}
+	return nil
+}
+
 // NewPostgres creates a new store with an existing *sql.DB.
 func NewPostgres(db *sql.DB) *PostgresStore {
 	return &PostgresStore{db: db}
@@ -100,13 +107,16 @@ func RunMigrations(ctx context.Context, db *sql.DB) error {
 
 // Ping validates DB connectivity; optional for health checks.
 func (p *PostgresStore) Ping(ctx context.Context) error {
-	if p.db == nil {
-		return fmt.Errorf("db not configured")
+	if err := p.ensureDB(); err != nil {
+		return err
 	}
 	return p.db.PingContext(ctx)
 }
 
 func (p *PostgresStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]Event, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	q := `SELECT run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,extract(epoch from timestamp)::bigint,duration_ms
 	      FROM events WHERE 1=1`
 	args := []any{}
@@ -147,6 +157,9 @@ func (p *PostgresStore) Recent(ctx context.Context, limit, offset int, pkg, stat
 }
 
 func (p *PostgresStore) History(ctx context.Context, filter HistoryFilter) ([]Event, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	q := `SELECT run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,extract(epoch from timestamp)::bigint,duration_ms
 	      FROM events WHERE 1=1`
 	args := []any{}
@@ -205,8 +218,8 @@ func (p *PostgresStore) History(ctx context.Context, filter HistoryFilter) ([]Ev
 }
 
 func (p *PostgresStore) RecordEvent(ctx context.Context, evt Event) error {
-	if p.db == nil {
-		return fmt.Errorf("db not configured")
+	if err := p.ensureDB(); err != nil {
+		return err
 	}
 	metaBytes, _ := json.Marshal(evt.Metadata)
 	_, err := p.db.ExecContext(ctx, `
@@ -217,6 +230,9 @@ func (p *PostgresStore) RecordEvent(ctx context.Context, evt Event) error {
 }
 
 func (p *PostgresStore) Summary(ctx context.Context, failureLimit int) (Summary, error) {
+	if err := p.ensureDB(); err != nil {
+		return Summary{}, err
+	}
 	if failureLimit <= 0 {
 		failureLimit = 20
 	}
@@ -257,6 +273,9 @@ func (p *PostgresStore) Summary(ctx context.Context, failureLimit int) (Summary,
 }
 
 func (p *PostgresStore) PackageSummary(ctx context.Context, name string) (PackageSummary, error) {
+	if err := p.ensureDB(); err != nil {
+		return PackageSummary{}, err
+	}
 	ps := PackageSummary{Name: name, StatusCounts: map[string]int{}}
 	rows, err := p.db.QueryContext(ctx, `SELECT status, count(*) FROM events WHERE name=$1 GROUP BY status`, name)
 	if err != nil {
@@ -287,6 +306,9 @@ func (p *PostgresStore) PackageSummary(ctx context.Context, name string) (Packag
 }
 
 func (p *PostgresStore) LatestEvent(ctx context.Context, name, version string) (Event, error) {
+	if err := p.ensureDB(); err != nil {
+		return Event{}, err
+	}
 	var e Event
 	var metaRaw json.RawMessage
 	var matched pq.StringArray
@@ -303,6 +325,9 @@ func (p *PostgresStore) LatestEvent(ctx context.Context, name, version string) (
 }
 
 func (p *PostgresStore) Failures(ctx context.Context, name string, limit int) ([]Event, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -337,6 +362,9 @@ func (p *PostgresStore) Failures(ctx context.Context, name string, limit int) ([
 }
 
 func (p *PostgresStore) Variants(ctx context.Context, name string, limit int) ([]Event, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 100
 	}
@@ -364,6 +392,9 @@ func (p *PostgresStore) Variants(ctx context.Context, name string, limit int) ([
 }
 
 func (p *PostgresStore) TopFailures(ctx context.Context, limit int) ([]Stat, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 10
 	}
@@ -387,6 +418,9 @@ func (p *PostgresStore) TopFailures(ctx context.Context, limit int) ([]Stat, err
 }
 
 func (p *PostgresStore) TopSlowest(ctx context.Context, limit int) ([]Stat, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 10
 	}
@@ -411,6 +445,9 @@ func (p *PostgresStore) TopSlowest(ctx context.Context, limit int) ([]Stat, erro
 }
 
 func (p *PostgresStore) ListHints(ctx context.Context) ([]Hint, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	rows, err := p.db.QueryContext(ctx, `SELECT id,pattern,recipes,note FROM hints`)
 	if err != nil {
 		return nil, err
@@ -432,6 +469,9 @@ func (p *PostgresStore) ListHints(ctx context.Context) ([]Hint, error) {
 }
 
 func (p *PostgresStore) GetHint(ctx context.Context, id string) (Hint, error) {
+	if err := p.ensureDB(); err != nil {
+		return Hint{}, err
+	}
 	var h Hint
 	var recipes json.RawMessage
 	err := p.db.QueryRowContext(ctx, `SELECT id,pattern,recipes,note FROM hints WHERE id=$1`, id).Scan(&h.ID, &h.Pattern, &recipes, &h.Note)
@@ -445,6 +485,9 @@ func (p *PostgresStore) GetHint(ctx context.Context, id string) (Hint, error) {
 }
 
 func (p *PostgresStore) PutHint(ctx context.Context, hint Hint) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
 	recipes, _ := json.Marshal(hint.Recipes)
 	_, err := p.db.ExecContext(ctx, `
 	    INSERT INTO hints (id,pattern,recipes,note)
@@ -455,11 +498,17 @@ func (p *PostgresStore) PutHint(ctx context.Context, hint Hint) error {
 }
 
 func (p *PostgresStore) DeleteHint(ctx context.Context, id string) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
 	_, err := p.db.ExecContext(ctx, `DELETE FROM hints WHERE id=$1`, id)
 	return err
 }
 
 func (p *PostgresStore) GetLog(ctx context.Context, name, version string) (LogEntry, error) {
+	if err := p.ensureDB(); err != nil {
+		return LogEntry{}, err
+	}
 	var le LogEntry
 	err := p.db.QueryRowContext(ctx, `
 	    SELECT name,version,content,extract(epoch from timestamp)::bigint FROM logs
@@ -468,11 +517,17 @@ func (p *PostgresStore) GetLog(ctx context.Context, name, version string) (LogEn
 }
 
 func (p *PostgresStore) PutLog(ctx context.Context, entry LogEntry) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
 	_, err := p.db.ExecContext(ctx, `INSERT INTO logs (name,version,content,timestamp) VALUES ($1,$2,$3,TO_TIMESTAMP($4))`, entry.Name, entry.Version, entry.Content, entry.Timestamp)
 	return err
 }
 
 func (p *PostgresStore) SearchLogs(ctx context.Context, q string, limit int) ([]LogEntry, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -498,6 +553,9 @@ func (p *PostgresStore) SearchLogs(ctx context.Context, q string, limit int) ([]
 }
 
 func (p *PostgresStore) Manifest(ctx context.Context, limit int) ([]ManifestEntry, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 200
 	}
@@ -520,6 +578,9 @@ func (p *PostgresStore) Manifest(ctx context.Context, limit int) ([]ManifestEntr
 }
 
 func (p *PostgresStore) SaveManifest(ctx context.Context, entries []ManifestEntry) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
 	if len(entries) == 0 {
 		return nil
 	}
@@ -538,6 +599,9 @@ func (p *PostgresStore) SaveManifest(ctx context.Context, entries []ManifestEntr
 }
 
 func (p *PostgresStore) Artifacts(ctx context.Context, limit int) ([]Artifact, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	manifests, err := p.Manifest(ctx, limit)
 	if err != nil {
 		return nil, err
@@ -550,6 +614,9 @@ func (p *PostgresStore) Artifacts(ctx context.Context, limit int) ([]Artifact, e
 }
 
 func (p *PostgresStore) Plan(ctx context.Context) ([]PlanNode, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
 	rows, err := p.db.QueryContext(ctx, `SELECT plan FROM plans ORDER BY created_at DESC LIMIT 1`)
 	if err != nil {
 		return nil, err
@@ -570,6 +637,9 @@ func (p *PostgresStore) Plan(ctx context.Context) ([]PlanNode, error) {
 }
 
 func (p *PostgresStore) SavePlan(ctx context.Context, runID string, nodes []PlanNode) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
 	data, err := json.Marshal(nodes)
 	if err != nil {
 		return err
