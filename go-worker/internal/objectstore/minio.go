@@ -14,6 +14,8 @@ type MinIOStore struct {
 	Client   *minio.Client
 	Bucket   string
 	BasePath string
+	Endpoint string
+	UseSSL   bool
 }
 
 // NewMinIOStore initializes a MinIO client and ensures the bucket exists.
@@ -38,7 +40,7 @@ func NewMinIOStore(endpoint, accessKey, secretKey, bucket string, useSSL bool) (
 			return nil, err
 		}
 	}
-	return &MinIOStore{Client: client, Bucket: bucket}, nil
+	return &MinIOStore{Client: client, Bucket: bucket, Endpoint: endpoint, UseSSL: useSSL}, nil
 }
 
 // Put uploads data to bucket/key.
@@ -47,4 +49,13 @@ func (m *MinIOStore) Put(ctx context.Context, key string, data []byte, contentTy
 		ContentType: contentType,
 	})
 	return err
+}
+
+// URL returns an s3/http URL; assumes public/readable or presigned elsewhere.
+func (m *MinIOStore) URL(key string) string {
+	scheme := "http"
+	if m.UseSSL {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s/%s/%s", scheme, m.Endpoint, m.Bucket, key)
 }

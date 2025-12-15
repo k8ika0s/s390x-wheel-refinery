@@ -143,6 +143,10 @@ func (w *Worker) Drain(ctx context.Context) error {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: res.job.WheelDigest}); u != "" {
 				meta["wheel_url"] = u
+			} else if res.job.WheelDigest != "" {
+				if u := w.objectURL(res.job); u != "" {
+					meta["wheel_url"] = u
+				}
 			}
 		}
 		if res.job.WheelAction != "" {
@@ -342,6 +346,17 @@ func (w *Worker) casURL(id artifact.ID) string {
 		repo = "artifacts"
 	}
 	return fmt.Sprintf("%s/v2/%s/blobs/%s", strings.TrimRight(w.Cfg.CASRegistryURL, "/"), strings.Trim(repo, "/"), id.Digest)
+}
+
+func (w *Worker) objectURL(job runner.Job) string {
+	if w.Store == nil {
+		return ""
+	}
+	key := fmt.Sprintf("%s/%s/", strings.ToLower(job.Name), job.Version)
+	if os, ok := w.Store.(interface{ URL(string) string }); ok {
+		return os.URL(key)
+	}
+	return ""
 }
 
 // requestsFromPlan seeds work items directly from the current plan when the queue is empty.

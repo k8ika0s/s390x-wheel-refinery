@@ -25,6 +25,10 @@ func (f *fakeStore) Put(_ context.Context, key string, _ []byte, _ string) error
 	return nil
 }
 
+func (f *fakeStore) URL(key string) string {
+	return "http://minio/" + key
+}
+
 func TestUploadArtifactsFiltersWheels(t *testing.T) {
 	dir := t.TempDir()
 	output := filepath.Join(dir, "out")
@@ -125,6 +129,21 @@ func TestCasURLHelper(t *testing.T) {
 	u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: "sha256:dead"})
 	if u != "http://zot:5000/v2/artifacts/blobs/sha256:dead" {
 		t.Fatalf("unexpected url: %s", u)
+	}
+}
+
+type urlStore struct {
+	url string
+}
+
+func (u urlStore) Put(_ context.Context, _ string, _ []byte, _ string) error { return nil }
+func (u urlStore) URL(_ string) string                                       { return u.url }
+
+func TestObjectURLFallback(t *testing.T) {
+	w := &Worker{Store: urlStore{url: "http://minio/bucket/path"}}
+	u := w.objectURL(runner.Job{Name: "demo", Version: "1.0.0"})
+	if u == "" {
+		t.Fatalf("expected object url")
 	}
 }
 
