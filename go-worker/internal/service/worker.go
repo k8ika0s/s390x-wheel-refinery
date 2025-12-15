@@ -536,7 +536,6 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 	if store == nil {
 		return
 	}
-	var lastWheelData []byte
 	entries, err := os.ReadDir(w.Cfg.OutputDir)
 	if err != nil {
 		return
@@ -556,19 +555,20 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		}
 		key := fmt.Sprintf("%s/%s/%s", strings.ToLower(job.Name), job.Version, e.Name())
 		_ = store.Put(ctx, key, data, "application/octet-stream")
-		lastWheelData = data
 		if w.Cfg.CASPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
 			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, data, "application/octet-stream")
 		}
 	}
-	if lastWheelData != nil {
-		if w.Cfg.RepairPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
+	if w.Cfg.RepairPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
+		repPath := filepath.Join(w.Cfg.OutputDir, fmt.Sprintf("%s-%s-repair.whl", job.Name, job.Version))
+		repData, err := os.ReadFile(repPath)
+		if err == nil {
 			repKey := artifact.RepairKey{InputWheelDigest: job.WheelDigest}
-			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}, lastWheelData, "application/octet-stream")
-		}
-		if store != nil && job.WheelDigest != "" {
-			repairKey := fmt.Sprintf("%s/%s/repair-%s", strings.ToLower(job.Name), job.Version, job.WheelDigest)
-			_ = store.Put(ctx, repairKey, lastWheelData, "application/octet-stream")
+			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}, repData, "application/octet-stream")
+			if store != nil {
+				repairKey := fmt.Sprintf("%s/%s/repair-%s.whl", strings.ToLower(job.Name), job.Version, job.WheelDigest)
+				_ = store.Put(ctx, repairKey, repData, "application/octet-stream")
+			}
 		}
 	}
 }
