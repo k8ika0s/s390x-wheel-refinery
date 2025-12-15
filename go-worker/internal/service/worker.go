@@ -818,10 +818,11 @@ func (w *Worker) runRepair(wheelPath, repairPath string) error {
 	if wheelPath == "" {
 		return fmt.Errorf("wheel path missing for repair")
 	}
-	if w.Cfg.RepairCmd == "" {
-		return copyFile(wheelPath, repairPath)
+	cmdStr := w.Cfg.RepairCmd
+	if cmdStr == "" {
+		cmdStr = w.Cfg.DefaultRepairCmd
 	}
-	cmd := exec.Command("sh", "-c", w.Cfg.RepairCmd)
+	cmd := exec.Command("sh", "-c", cmdStr)
 	cmd.Env = append(os.Environ(),
 		"WHEEL_PATH="+wheelPath,
 		"REPAIR_OUTPUT="+repairPath,
@@ -936,7 +937,11 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		}
 	}
 	if action == "build" {
-		if err := builder.BuildRuntime(destPath, builder.RuntimeBuildOpts{Digest: rtID.Digest, PythonVersion: pythonVersion, Meta: meta, Cmd: w.Cfg.RuntimeBuilderCmd}); err == nil {
+		cmd := w.Cfg.RuntimeBuilderCmd
+		if cmd == "" {
+			cmd = w.Cfg.DefaultRuntimeCmd
+		}
+		if err := builder.BuildRuntime(destPath, builder.RuntimeBuildOpts{Digest: rtID.Digest, PythonVersion: pythonVersion, Meta: meta, Cmd: cmd}); err == nil {
 			return destPath
 		}
 	}
