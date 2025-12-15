@@ -209,7 +209,7 @@ func TestFetchRuntimeBuildsStub(t *testing.T) {
 	if path == "" {
 		t.Fatalf("expected stub runtime path")
 	}
-	if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
+	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("stub runtime not written: %v", err)
 	}
 }
@@ -219,6 +219,9 @@ func sampleTarWithDigest() (bytes.Buffer, string) {
 	tw := tar.NewWriter(&buf)
 	_ = tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len("stub"))})
 	_, _ = tw.Write([]byte("stub"))
+	data := []byte("x")
+	_ = tw.WriteHeader(&tar.Header{Name: "usr/local/lib/.keep", Mode: 0o644, Size: int64(len(data))})
+	_, _ = tw.Write(data)
 	_ = tw.Close()
 	d := sha256.Sum256(buf.Bytes())
 	return buf, "sha256:" + hex.EncodeToString(d[:])

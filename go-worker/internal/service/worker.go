@@ -1003,7 +1003,7 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		if err := w.Fetcher.Fetch(ctx, rtID, destPath); err == nil {
 			if _, err := os.Stat(destPath); err == nil {
 				if ok, err := verifyFileDigest(destPath, rtID.Digest); err == nil && ok {
-					if err := extractTar(destPath, extractDir); err == nil {
+					if err := extractTar(destPath, extractDir); err == nil && !isManifestOnly(extractDir) {
 						return extractDir
 					}
 				}
@@ -1017,7 +1017,9 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		}
 		if err := builder.BuildRuntime(destPath, builder.RuntimeBuildOpts{Digest: rtID.Digest, PythonVersion: pythonVersion, Meta: meta, Cmd: cmd}); err == nil {
 			if err := extractTar(destPath, extractDir); err == nil {
-				return extractDir
+				if !isManifestOnly(extractDir) || action == "build" {
+					return extractDir
+				}
 			}
 		}
 	}
@@ -1102,4 +1104,18 @@ func sortPacksByPriority(ids []artifact.ID, meta map[string]map[string]any) []ar
 		return order[ni] < order[nj]
 	})
 	return ids
+}
+
+func isManifestOnly(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Name() == "manifest.json" {
+			continue
+		}
+		return false
+	}
+	return true
 }
