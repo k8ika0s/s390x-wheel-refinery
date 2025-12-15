@@ -11,6 +11,7 @@ __pycache__/
 build/
 dist/
 .devcontainer/.cache
+.s390x
 .DS_Store
 *.egg-info/
 ui/node_modules/
