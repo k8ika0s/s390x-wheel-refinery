@@ -330,6 +330,8 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 				WheelDigest:       wheelDigest,
 				WheelAction:       wheelAction,
 				WheelSourceDigest: findWheelSourceDigest(snap.DAG, wheelDigest),
+				RepairToolVersion: findRepairToolVersion(snap.DAG, wheelDigest),
+				RepairPolicyHash:  findRepairPolicyHash(snap.DAG, wheelDigest),
 				PackPaths:         w.resolvePacks(ctx, packIDs),
 				RuntimePath:       w.fetchRuntime(ctx, firstNonEmpty(req.PythonVersion, node.PythonVersion), runtimeID),
 				RuntimeDigest:     runtimeID.Digest,
@@ -393,6 +395,36 @@ func findWheelSourceDigest(dag []plan.DAGNode, wheelDigest string) string {
 		}
 		if sd, ok := n.Metadata["source_digest"].(string); ok {
 			return sd
+		}
+	}
+	return ""
+}
+
+func findRepairToolVersion(dag []plan.DAGNode, wheelDigest string) string {
+	for _, n := range dag {
+		if n.Type != plan.NodeRepair {
+			continue
+		}
+		if len(n.Inputs) == 0 || n.Inputs[0].Digest != wheelDigest {
+			continue
+		}
+		if v, ok := n.Metadata["repair_tool_version"].(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+func findRepairPolicyHash(dag []plan.DAGNode, wheelDigest string) string {
+	for _, n := range dag {
+		if n.Type != plan.NodeRepair {
+			continue
+		}
+		if len(n.Inputs) == 0 || n.Inputs[0].Digest != wheelDigest {
+			continue
+		}
+		if v, ok := n.Metadata["repair_policy_digest"].(string); ok {
+			return v
 		}
 	}
 	return ""

@@ -24,6 +24,8 @@ type Job struct {
 	RuntimeDigest     string
 	PackDigests       []string
 	WheelSourceDigest string
+	RepairToolVersion string
+	RepairPolicyHash  string
 }
 
 // Runner executes build jobs.
