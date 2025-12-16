@@ -87,7 +87,7 @@ function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, ico
   );
 }
 
-function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
+function Layout({ children, tokenActive, theme, onToggleTheme, metrics, pendingInputs = [], settingsData }) {
   const location = useLocation();
   const isActive = (path) => location.pathname === path || (path !== "/" && location.pathname.startsWith(path));
   return (
@@ -107,9 +107,20 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
             {metrics?.queue?.length !== undefined && (
               <span className="chip bg-slate-800 border-border text-xs">Q: {metrics.queue.length}</span>
             )}
+            <span className="chip bg-slate-800 border-border text-xs">Pending: {pendingInputs.length}</span>
             {metrics?.db?.status && (
               <span className={`chip bg-slate-800 border-border text-xs ${metrics.db.status === "ok" ? "text-emerald-300" : "text-amber-300"}`}>
                 DB: {metrics.db.status}
+              </span>
+            )}
+            {settingsData?.auto_plan !== undefined && (
+              <span className={`chip bg-slate-800 border-border text-xs ${settingsData.auto_plan ? "text-emerald-300" : "text-amber-300"}`}>
+                Auto-plan: {settingsData.auto_plan ? "on" : "off"}
+              </span>
+            )}
+            {settingsData?.auto_build !== undefined && (
+              <span className={`chip bg-slate-800 border-border text-xs ${settingsData.auto_build ? "text-emerald-300" : "text-amber-300"}`}>
+                Auto-build: {settingsData.auto_build ? "on" : "off"}
               </span>
             )}
             {tokenActive ? (
@@ -1282,10 +1293,3 @@ export default function App() {
     </Layout>
   );
 }
-  const clearFilters = () => {
-    setPkgFilter("");
-    setStatusFilter("");
-    setSearch("");
-    setRecentLimit(25);
-    setPollMs(10000);
-  };
