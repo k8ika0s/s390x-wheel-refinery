@@ -1,14 +1,17 @@
-# Build stage
-FROM golang:1.22 AS builder
+# Build stage: UBI + distro Go, targeting s390x to avoid Docker Hub pulls.
+FROM registry.access.redhat.com/ubi9/ubi:9.3 AS builder
+RUN dnf -y update && \
+    dnf -y install golang git make gcc && \
+    dnf clean all
 WORKDIR /app
 COPY go-worker/ ./
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /go-worker ./cmd/worker
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -o /go-worker ./cmd/worker
 
-# Runtime stage with embedded podman
-FROM registry.access.redhat.com/ubi8/ubi:8.9
-RUN microdnf -y update && \
-    microdnf -y install podman fuse-overlayfs && \
-    microdnf clean all
+# Runtime stage with embedded podman (UBI9)
+FROM registry.access.redhat.com/ubi9/ubi:9.3
+RUN dnf -y update && \
+    dnf -y install podman fuse-overlayfs && \
+    dnf clean all
 
 # Configure podman storage to use vfs (safer for nested builds)
 RUN mkdir -p /etc/containers && \

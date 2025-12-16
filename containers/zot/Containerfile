@@ -1,0 +1,35 @@
+ # Build zot from source on UBI with locally installed Go to avoid Docker Hub pulls and get Go >=1.25 on s390x.
+ FROM registry.access.redhat.com/ubi9/ubi:9.3 as builder
+ RUN dnf -y update && \
+     dnf -y install golang git make gcc && \
+     dnf clean all
+ WORKDIR /src
+RUN git clone https://github.com/project-zot/zot.git .
+# Zot upstream requires Go 1.25; build statically oriented binary for s390x.
+# Optional features (metrics/search/ui/etc.) require zot build tags; enable later with:
+#   CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -tags "search ui metrics sync scrub mgmt" -o /zot ./cmd/zot
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -o /zot ./cmd/zot
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal
+# curl-minimal is preinstalled on UBI; avoid pulling full curl to sidestep conflicts on subscribed hosts.
+RUN microdnf -y update && microdnf -y install shadow-utils && microdnf clean all
+RUN useradd -r -u 1000 zot && mkdir -p /var/lib/zot && chown -R zot:zot /var/lib/zot
+COPY --from=builder /zot /usr/local/bin/zot
+COPY <<'EOF' /etc/zot/config.json
+{
+  "storage": {
+    "rootDirectory": "/var/lib/zot"
+  },
+  "http": {
+    "address": "0.0.0.0",
+    "port": "5000"
+  },
+  "log": {
+    "level": "info"
+  }
+}
+EOF
+USER zot
+EXPOSE 5000
+ENTRYPOINT ["/usr/local/bin/zot"]
+CMD ["serve", "/etc/zot/config.json"]

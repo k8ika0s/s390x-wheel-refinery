@@ -1,0 +1,39 @@
+{
+  "name": "s390x-wheel-refinery",
+  "image": "ghcr.io/k8ika0s/s390x-wheel-refinery-dev:latest",
+  "runArgs": [
+    "--privileged",
+    "--device=/dev/fuse",
+    "--security-opt=label=disable"
+  ],
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspaces/s390x-wheel-refinery,type=bind,consistency=cached"
+  ],
+  "workspaceFolder": "/workspaces/s390x-wheel-refinery",
+  "remoteUser": "vscode",
+  "postCreateCommand": "sudo chown -R vscode:vscode /workspaces/s390x-wheel-refinery && make prep-dirs || true",
+  "features": {},
+  "containerEnv": {
+    "PODMAN_USERNS": "keep-id",
+    "PODMAN_IGNORE_CGROUPSV1_WARNING": "1"
+  },
+  "forwardPorts": [8080, 3000, 5000, 9000, 9001],
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "go.toolsManagement.autoUpdate": true,
+        "files.watcherExclude": {
+          "**/node_modules": true,
+          "**/vendor": true,
+          "**/.git/**": true
+        }
+      },
+      "extensions": [
+        "ms-vscode.go",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  }
+}

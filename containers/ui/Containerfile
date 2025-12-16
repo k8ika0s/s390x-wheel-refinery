@@ -1,5 +1,8 @@
-FROM node:20-alpine AS build
+# Build stage: UBI9 nodejs-20 to avoid Docker Hub pulls and ensure s390x availability.
+FROM registry.access.redhat.com/ubi9/nodejs-20:latest AS build
 WORKDIR /app
+# npm expects writable dirs; use root for install/build in this image.
+USER 0
 ARG VITE_API_BASE=http://localhost:8000
 ENV VITE_API_BASE=${VITE_API_BASE}
 COPY ui/package.json ui/vite.config.js ui/index.html /app/
@@ -8,7 +11,18 @@ COPY ui/src/styles.css /app/src/styles.css
 RUN npm install
 RUN npm run build
 
-FROM nginx:alpine
+# Runtime: serve static assets with UBI9 nginx and custom config for SPA.
+FROM registry.access.redhat.com/ubi9/nginx-124:latest
+USER 0
+# Avoid host-provided RHEL repos that conflict with UBI content when building on subscribed hosts.
+RUN rm -f /etc/yum.repos.d/redhat.repo && \
+    dnf -y --disablerepo='rhel-*' \
+        --enablerepo='ubi-9-baseos-rpms' \
+        --enablerepo='ubi-9-appstream-rpms' \
+        --setopt=install_weak_deps=0 \
+        install shadow-utils && \
+    dnf clean all
 COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 80
+COPY containers/ui/nginx.conf /etc/nginx/nginx.conf
+EXPOSE 8080
 CMD ["nginx", "-g", "daemon off;"]
