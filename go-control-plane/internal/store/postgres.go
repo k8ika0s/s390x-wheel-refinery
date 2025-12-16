@@ -94,6 +94,27 @@ CREATE TABLE IF NOT EXISTS plans (
     plan       JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS pending_inputs (
+    id          BIGSERIAL PRIMARY KEY,
+    filename    TEXT NOT NULL,
+    digest      TEXT,
+    size_bytes  BIGINT,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    error       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS plan_metadata (
+    id             BIGSERIAL PRIMARY KEY,
+    pending_input  BIGINT REFERENCES pending_inputs(id),
+    plan_id        BIGINT REFERENCES plans(id),
+    status         TEXT NOT NULL DEFAULT 'ready_for_build',
+    summary        JSONB,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 `
 
 // RunMigrations ensures schema is present.
@@ -111,6 +132,60 @@ func (p *PostgresStore) Ping(ctx context.Context) error {
 		return err
 	}
 	return p.db.PingContext(ctx)
+}
+
+// AddPendingInput inserts a new pending input.
+func (p *PostgresStore) AddPendingInput(ctx context.Context, pi PendingInput) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	var id int64
+	err := p.db.QueryRowContext(ctx, `
+		INSERT INTO pending_inputs (filename, digest, size_bytes, status)
+		VALUES ($1,$2,$3,$4) RETURNING id
+	`, pi.Filename, pi.Digest, pi.SizeBytes, pi.Status).Scan(&id)
+	return id, err
+}
+
+// ListPendingInputs fetches pending inputs.
+func (p *PostgresStore) ListPendingInputs(ctx context.Context, status string) ([]PendingInput, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	q := `SELECT id, filename, digest, size_bytes, status, COALESCE(error,''), created_at, updated_at FROM pending_inputs`
+	args := []any{}
+	if status != "" {
+		q += ` WHERE status = $1`
+		args = append(args, status)
+	}
+	q += ` ORDER BY created_at DESC`
+	rows, err := p.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingInput
+	for rows.Next() {
+		var pi PendingInput
+		if err := rows.Scan(&pi.ID, &pi.Filename, &pi.Digest, &pi.SizeBytes, &pi.Status, &pi.Error, &pi.CreatedAt, &pi.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, pi)
+	}
+	return out, rows.Err()
+}
+
+// UpdatePendingInputStatus sets status/error.
+func (p *PostgresStore) UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
+	_, err := p.db.ExecContext(ctx, `
+		UPDATE pending_inputs
+		SET status = $1, error = $2, updated_at = NOW()
+		WHERE id = $3
+	`, status, errMsg, id)
+	return err
 }
 
 func (p *PostgresStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]Event, error) {

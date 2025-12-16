@@ -26,6 +26,7 @@ import (
 type Handler struct {
 	Store  store.Store
 	Queue  queue.Backend
+	PlanQ  queue.PlanQueueBackend
 	Config config.Config
 }
 
@@ -36,6 +37,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/metrics", h.promMetrics)
 	mux.HandleFunc("/api/config", h.config)
 	mux.HandleFunc("/api/settings", h.settings)
+	mux.HandleFunc("/api/pending-inputs", h.pendingInputs)
+	mux.HandleFunc("/api/pending-inputs/", h.pendingInputAction)
 	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
@@ -211,12 +214,15 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	currentSettings := settings.Load(h.Config.SettingsPath)
+	autoPlan := settings.BoolValue(currentSettings.AutoPlan)
+	autoBuild := settings.BoolValue(currentSettings.AutoBuild)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"http_addr":        h.Config.HTTPAddr,
 		"queue_backend":    h.Config.QueueBackend,
 		"queue_file":       h.Config.QueueFile,
 		"redis_url":        h.Config.RedisURL,
 		"redis_key":        h.Config.RedisKey,
+		"plan_redis_key":   h.Config.PlanRedisKey,
 		"kafka_brokers":    h.Config.KafkaBrokers,
 		"kafka_topic":      h.Config.KafkaTopic,
 		"db":               "postgres",
@@ -225,6 +231,8 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		"input_dir":        h.Config.InputDir,
 		"settings_path":    h.Config.SettingsPath,
 		"settings":         currentSettings,
+		"auto_plan":        autoPlan,
+		"auto_build":       autoBuild,
 	})
 }
 
@@ -302,12 +310,30 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// Record pending input and optionally enqueue planning.
+	pi := store.PendingInput{
+		Filename:  unique,
+		Digest:    fmt.Sprintf("%x", sum[:]),
+		SizeBytes: int64(len(data)),
+		Status:    "pending",
+	}
+	var pendingID int64
+	if h.Store != nil {
+		if id, err := h.Store.AddPendingInput(r.Context(), pi); err == nil {
+			pendingID = id
+			if h.Config.AutoPlan && h.PlanQ != nil {
+				_ = h.PlanQ.Enqueue(r.Context(), fmt.Sprintf("%d", pendingID))
+				_ = h.Store.UpdatePendingInputStatus(r.Context(), pendingID, "planning", "")
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"detail":     "requirements uploaded",
 		"bytes":      len(data),
 		"filename":   header.Filename,
 		"saved_path": pathUnique,
 		"canonical":  pathCanonical,
+		"pending_id": pendingID,
 	})
 }
 
@@ -328,10 +354,14 @@ func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
 		if s.PollMs < 0 {
 			s.PollMs = 0
 		}
+		s = settings.ApplyDefaults(s)
 		if err := settings.Save(h.Config.SettingsPath, s); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		// reflect auto flags into config defaults for this process lifetime
+		h.Config.AutoPlan = settings.BoolValue(s.AutoPlan)
+		h.Config.AutoBuild = settings.BoolValue(s.AutoBuild)
 		writeJSON(w, http.StatusOK, s)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -340,6 +370,53 @@ func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) notImplemented(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "not implemented"})
+}
+
+func (h *Handler) pendingInputs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	list, err := h.Store.ListPendingInputs(r.Context(), "")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
+	// URL: /api/pending-inputs/{id}/enqueue-plan
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/pending-inputs/"), "/")
+	if len(parts) < 2 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+		return
+	}
+	idStr, action := parts[0], parts[1]
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	switch action {
+	case "enqueue-plan":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		if h.PlanQ == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "plan queue not configured"})
+			return
+		}
+		if err := h.PlanQ.Enqueue(r.Context(), fmt.Sprintf("%d", id)); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		_ = h.Store.UpdatePendingInputStatus(r.Context(), id, "planning", "")
+		writeJSON(w, http.StatusOK, map[string]string{"detail": "enqueued for planning"})
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
+	}
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {

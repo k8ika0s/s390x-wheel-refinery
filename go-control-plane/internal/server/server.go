@@ -9,6 +9,7 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/api"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
 	_ "github.com/lib/pq"
 )
@@ -39,15 +40,23 @@ func (s *Service) routes() {
 	}
 	var st store.Store = store.NewPostgres(db)
 	var q queue.Backend
+	var planQ queue.PlanQueueBackend
 	switch s.cfg.QueueBackend {
 	case "redis":
 		q = queue.NewRedisQueue(s.cfg.RedisURL, s.cfg.RedisKey)
+		planQ = queue.NewPlanQueue(s.cfg.RedisURL, s.cfg.PlanRedisKey)
 	case "kafka":
 		q = queue.NewKafkaQueue(s.cfg.KafkaBrokers, s.cfg.KafkaTopic)
 	default:
 		q = queue.NewFileQueue(s.cfg.QueueFile)
 	}
-	h := &api.Handler{Store: st, Queue: q, Config: s.cfg}
+	// Load persisted settings to align auto-plan/build toggles on startup.
+	if cfgFile := s.cfg.SettingsPath; cfgFile != "" {
+		current := settings.Load(cfgFile)
+		s.cfg.AutoPlan = settings.BoolValue(current.AutoPlan)
+		s.cfg.AutoBuild = settings.BoolValue(current.AutoBuild)
+	}
+	h := &api.Handler{Store: st, Queue: q, PlanQ: planQ, Config: s.cfg}
 	h.Routes(s.mux)
 }
 

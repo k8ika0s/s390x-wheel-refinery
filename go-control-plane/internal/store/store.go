@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 )
 
 // Event represents a build event history row.
@@ -35,20 +36,32 @@ type LogEntry struct {
 	Timestamp int64
 }
 
+// PendingInput represents an uploaded requirements file awaiting planning.
+type PendingInput struct {
+	ID        int64     `json:"id"`
+	Filename  string    `json:"filename"`
+	Digest    string    `json:"digest,omitempty"`
+	SizeBytes int64     `json:"size_bytes,omitempty"`
+	Status    string    `json:"status"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // ManifestEntry tracks output wheel metadata.
 type ManifestEntry struct {
-	Name        string
-	Version     string
-	Wheel       string
-	WheelURL    string
-	RepairURL   string
+	Name         string
+	Version      string
+	Wheel        string
+	WheelURL     string
+	RepairURL    string
 	RepairDigest string
-	RuntimeURL  string
-	PackURLs    []string
-	PythonTag   string
-	PlatformTag string
-	Status      string
-	CreatedAt   int64
+	RuntimeURL   string
+	PackURLs     []string
+	PythonTag    string
+	PlatformTag  string
+	Status       string
+	CreatedAt    int64
 }
 
 // Artifact represents a downloadable/browsable build artifact.
@@ -119,6 +132,11 @@ type Store interface {
 	Manifest(ctx context.Context, limit int) ([]ManifestEntry, error)
 	SaveManifest(ctx context.Context, entries []ManifestEntry) error
 	Artifacts(ctx context.Context, limit int) ([]Artifact, error)
+
+	// Pending inputs & planning
+	AddPendingInput(ctx context.Context, pi PendingInput) (int64, error)
+	ListPendingInputs(ctx context.Context, status string) ([]PendingInput, error)
+	UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error
 }
 
 // HistoryFilter defines filters for history queries.

@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
@@ -15,8 +18,15 @@ import (
 
 // fakeStore implements only what we need for plan tests.
 type fakeStore struct {
-	lastPlan  []store.PlanNode
-	lastEvent store.Event
+	lastPlan        []store.PlanNode
+	lastEvent       store.Event
+	nextPendingID   int64
+	listPending     []store.PendingInput
+	pendingStatuses []struct {
+		id     int64
+		status string
+		errMsg string
+	}
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -87,6 +97,25 @@ func (f *fakeStore) SaveManifest(ctx context.Context, entries []store.ManifestEn
 func (f *fakeStore) Artifacts(ctx context.Context, limit int) ([]store.Artifact, error) {
 	return nil, nil
 }
+func (f *fakeStore) AddPendingInput(ctx context.Context, pi store.PendingInput) (int64, error) {
+	if f.nextPendingID == 0 {
+		f.nextPendingID = 1
+	}
+	id := f.nextPendingID
+	f.nextPendingID++
+	return id, nil
+}
+func (f *fakeStore) ListPendingInputs(ctx context.Context, status string) ([]store.PendingInput, error) {
+	return f.listPending, nil
+}
+func (f *fakeStore) UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error {
+	f.pendingStatuses = append(f.pendingStatuses, struct {
+		id     int64
+		status string
+		errMsg string
+	}{id: id, status: status, errMsg: errMsg})
+	return nil
+}
 
 // fakeQueue implements only Stats for these tests.
 type fakeQueue struct {
@@ -100,6 +129,36 @@ func (f *fakeQueue) Stats(ctx context.Context) (queue.Stats, error) {
 	return queue.Stats{Length: f.length}, nil
 }
 func (f *fakeQueue) Pop(ctx context.Context, max int) ([]queue.Request, error) { return nil, nil }
+
+type fakePlanQueue struct {
+	ids []string
+	err error
+}
+
+func (f *fakePlanQueue) Enqueue(ctx context.Context, id string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.ids = append(f.ids, id)
+	return nil
+}
+
+func mustMultipart(t *testing.T, filename, content string) (*bytes.Buffer, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte(content)); err != nil {
+		t.Fatalf("write content: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	return &buf, w.FormDataContentType()
+}
 
 func TestPlanComputeProxiesToWorker(t *testing.T) {
 	// fake worker server that returns a plan snapshot
@@ -184,5 +243,100 @@ func TestHistoryPostRecordsEvent(t *testing.T) {
 	}
 	if fs.lastEvent.Timestamp == 0 {
 		t.Fatalf("timestamp not set")
+	}
+}
+
+func TestPendingInputsList(t *testing.T) {
+	fs := &fakeStore{listPending: []store.PendingInput{{ID: 1, Filename: "requirements-123.txt", Status: "pending"}}}
+	h := &Handler{Store: fs, Queue: &fakeQueue{}, Config: config.Config{}}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/pending-inputs")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var out []store.PendingInput
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out) != 1 || out[0].Filename != "requirements-123.txt" {
+		t.Fatalf("unexpected list: %+v", out)
+	}
+}
+
+func TestPendingInputManualEnqueue(t *testing.T) {
+	fs := &fakeStore{}
+	pq := &fakePlanQueue{}
+	h := &Handler{Store: fs, Queue: &fakeQueue{}, PlanQ: pq, Config: config.Config{}}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/pending-inputs/5/enqueue-plan", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	if len(pq.ids) != 1 || pq.ids[0] != "5" {
+		t.Fatalf("expected enqueue id 5, got %+v", pq.ids)
+	}
+	if len(fs.pendingStatuses) == 0 || fs.pendingStatuses[0].status != "planning" {
+		t.Fatalf("expected status update planning, got %+v", fs.pendingStatuses)
+	}
+}
+
+func TestRequirementsUploadAutoEnqueue(t *testing.T) {
+	tmp := t.TempDir()
+	fs := &fakeStore{nextPendingID: 42}
+	pq := &fakePlanQueue{}
+	h := &Handler{
+		Store: fs, Queue: &fakeQueue{}, PlanQ: pq,
+		Config: config.Config{InputDir: tmp, AutoPlan: true},
+	}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	body, contentType := mustMultipart(t, "requirements.txt", "pkg==1.0\n")
+	resp, err := http.Post(ts.URL+"/api/requirements/upload", contentType, body)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if pending, ok := out["pending_id"].(float64); !ok || int64(pending) != 42 {
+		t.Fatalf("expected pending_id 42, got %v", out["pending_id"])
+	}
+	if len(pq.ids) != 1 || pq.ids[0] != "42" {
+		t.Fatalf("expected enqueue id 42, got %+v", pq.ids)
+	}
+	if len(fs.pendingStatuses) == 0 || fs.pendingStatuses[0].status != "planning" {
+		t.Fatalf("expected planning status update, got %+v", fs.pendingStatuses)
+	}
+	// files written
+	matches, _ := filepath.Glob(filepath.Join(tmp, "requirements-*.txt"))
+	if len(matches) == 0 {
+		t.Fatalf("expected unique requirements file written")
+	}
+	canonical := filepath.Join(tmp, "requirements.txt")
+	data, err := os.ReadFile(canonical)
+	if err != nil || string(data) != "pkg==1.0\n" {
+		t.Fatalf("unexpected canonical content: %q err=%v", string(data), err)
 	}
 }
