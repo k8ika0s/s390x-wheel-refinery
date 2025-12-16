@@ -1,8 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Link, useParams, useLocation } from "react-router-dom";
-import { API_BASE, clearQueue, enqueueRetry, fetchDashboard, fetchLog, fetchPackageDetail, fetchRecent, setCookieToken, triggerWorker } from "./api";
+import {
+  API_BASE,
+  clearQueue,
+  enqueueRetry,
+  fetchDashboard,
+  fetchLog,
+  fetchPackageDetail,
+  fetchRecent,
+  fetchSettings,
+  setCookieToken,
+  triggerWorker,
+  updateSettings,
+  uploadRequirements,
+} from "./api";
 
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
+const LOGO_SRC = "/s390x-wheel-refinery-logo.png";
+
+const toArray = (value) => (Array.isArray(value) ? value : []);
 
 function ArtifactBadges({ meta }) {
   if (!meta) return null;
@@ -73,11 +89,17 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
   const location = useLocation();
   const isActive = (path) => location.pathname === path || (path !== "/" && location.pathname.startsWith(path));
   return (
-    <div className={`min-h-screen ${theme === "light" ? "theme-light bg-slate-50 text-slate-900" : "bg-bg text-slate-100"}`}>
-      <header className="glass sticky top-0 z-40 backdrop-blur-xs border-b border-border">
+    <div className={`min-h-screen app-shell ${theme === "light" ? "theme-light" : "bg-bg text-slate-100"}`}>
+      <header className="glass sticky top-0 z-40 backdrop-blur-sm border-b border-border/70">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <Link to="/" className="text-xl font-bold text-accent">s390x Wheel Refinery</Link>
+            <Link to="/" className="brand">
+              <img src={LOGO_SRC} alt="Wheel Refinery logo" className="h-12 w-12 rounded-xl shadow-lg object-contain" />
+              <div className="flex flex-col leading-tight">
+                <span className="text-sm text-slate-400">s390x</span>
+                <span className="text-lg font-bold text-accent">Wheel Refinery</span>
+              </div>
+            </Link>
             <span className="chip bg-slate-800 border-border text-xs">Env: {ENV_LABEL}</span>
             <span className="chip bg-slate-800 border-border text-xs">API: {API_BASE || "same-origin"}</span>
             {metrics?.queue?.length !== undefined && (
@@ -96,12 +118,11 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
           </div>
           <div className="flex items-center gap-3 text-sm text-slate-200">
             <nav className="flex items-center gap-3">
-              <Link to="/" className={`hover:text-accent ${isActive("/") ? "text-accent font-semibold" : ""}`}>Dashboard</Link>
-              <span className="text-xs text-slate-500">|</span>
-              <span className="text-xs text-slate-400 hidden md:inline">Status filters: tap chips below</span>
+              <Link to="/" className={`nav-link ${isActive("/") ? "nav-link-active" : ""}`}>Dashboard</Link>
+              <span className="text-xs text-slate-500 hidden md:inline">Status filters live below</span>
             </nav>
-            <button className="btn btn-secondary px-2 py-1 text-xs" onClick={onToggleTheme}>
-              Theme: {theme === "light" ? "Light" : "Dark"}
+            <button className="btn btn-ghost px-2 py-1 text-xs" onClick={onToggleTheme} title="Toggle theme">
+              {theme === "light" ? "🌤️" : "🌙"}
             </button>
           </div>
         </div>
@@ -113,9 +134,27 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
 
 function StatCard({ title, children }) {
   return (
-    <div className="glass p-4 space-y-3">
-      <div className="text-lg font-semibold text-slate-100">{title}</div>
+    <div className="glass surface p-4 space-y-3">
+      <div className="text-lg font-semibold text-slate-100 flex items-center gap-2">
+        <span className="w-1 h-6 rounded-full bg-accent/80" aria-hidden />
+        <span>{title}</span>
+      </div>
       {children}
+    </div>
+  );
+}
+
+function StatTile({ icon, label, value, hint }) {
+  return (
+    <div className="stat-tile glass">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-xl">{icon}</span>
+          <div className="text-sm text-slate-400">{label}</div>
+        </div>
+        <div className="text-2xl font-semibold text-slate-50">{value}</div>
+      </div>
+      {hint && <div className="text-xs text-slate-500 mt-1">{hint}</div>}
     </div>
   );
 }
@@ -330,11 +369,15 @@ function PackageDetail({ token, pushToast }) {
   if (!data) return null;
 
   const { summary, variants, failures, events, hints = [] } = data;
+  const variantsArr = toArray(variants);
+  const failuresArr = toArray(failures);
+  const eventsArr = toArray(events);
+  const hintsArr = toArray(hints);
   const logDownloadHref = selectedEvent ? `${API_BASE}/api/logs/${selectedEvent.name}/${selectedEvent.version}` : null;
 
-  const variantsPaged = paged(variants, variantPage);
-  const failuresPaged = paged(failures, failurePage);
-  const hintsPaged = paged(hints, hintsPage);
+  const variantsPaged = paged(variantsArr, variantPage);
+  const failuresPaged = paged(failuresArr, failurePage);
+  const hintsPaged = paged(hintsArr, hintsPage);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -415,7 +458,7 @@ function PackageDetail({ token, pushToast }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {events.map((e) => (
+                  {eventsArr.map((e) => (
                     <tr key={`${e.name}-${e.version}-${e.timestamp}`} className="border-b border-slate-800">
                       <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
                       <td className="py-2 text-slate-200">{e.version}</td>
@@ -508,12 +551,17 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const [retryPkg, setRetryPkg] = useState("");
   const [retryVersion, setRetryVersion] = useState("latest");
   const [selectedQueue, setSelectedQueue] = useState({});
+  const [reqFile, setReqFile] = useState(null);
+  const [reqError, setReqError] = useState("");
 
   const [pkgFilter, setPkgFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [recentLimit, setRecentLimit] = useState(25);
   const [pollMs, setPollMs] = useState(10000);
   const [search, setSearch] = useState("");
+  const [settingsData, setSettingsData] = useState(null);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
 
   const load = async (opts = {}) => {
     const { packageFilter, statusFilter: status } = opts;
@@ -543,6 +591,20 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   useEffect(() => {
     load({ packageFilter: pkgFilter, statusFilter });
   }, [authToken, pkgFilter, statusFilter, recentLimit]);
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const s = await fetchSettings(authToken);
+        setSettingsData(s);
+        if (s.recent_limit) setRecentLimit(s.recent_limit);
+        if (s.poll_ms !== undefined) setPollMs(s.poll_ms || 0);
+      } catch {
+        // ignore settings load failures silently
+      }
+    };
+    loadSettings();
+  }, [authToken]);
 
   useEffect(() => {
     if (!pollMs) return;
@@ -614,6 +676,44 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
     }
   };
 
+  const lintReqFile = async (file) => {
+    if (!file) return "Pick a requirements.txt file";
+    if (file.size === 0) return "File is empty";
+    if (file.size > 128 * 1024) return "File too large (>128KB)";
+    const text = await file.text();
+    if (!text.trim()) return "File has no content";
+    const lines = text.split(/\r?\n/);
+    if (lines.length > 2000) return "Too many lines (>2000)";
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].length > 800) return `Line ${i + 1} too long`;
+    }
+    if (text.indexOf("\u0000") !== -1) return "Invalid character (null byte)";
+    return "";
+  };
+
+  const handleUploadReqs = async (trigger = false) => {
+    setReqError("");
+    const lintErr = await lintReqFile(reqFile);
+    if (lintErr) {
+      setReqError(lintErr);
+      pushToast?.({ type: "error", title: "Upload failed", message: lintErr });
+      return;
+    }
+    try {
+      const resp = await uploadRequirements(reqFile, authToken);
+      pushToast?.({ type: "success", title: "Uploaded", message: resp.detail || "requirements uploaded" });
+      if (trigger) {
+        await handleTriggerWorker();
+      } else {
+        await load();
+      }
+    } catch (e) {
+      const msg = e.message || "upload failed";
+      setReqError(msg);
+      pushToast?.({ type: "error", title: "Upload failed", message: msg });
+    }
+  };
+
   const handleSaveToken = async () => {
     localStorage.setItem("refinery_token", authToken);
     onTokenChange?.(authToken);
@@ -628,17 +728,22 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
     pushToast?.({ type: "success", title: "Token saved", message: "Worker token stored locally" });
   };
 
-  const queueLength = dashboard?.queue?.length ?? 0;
-  const workerMode = dashboard?.queue?.worker_mode || "unknown";
-  const queueItems = dashboard?.queue?.items || [];
+  const queueLength = dashboard?.queue?.length ?? (Array.isArray(dashboard?.queue) ? dashboard.queue.length : 0);
+  const workerMode =
+    dashboard?.queue?.worker_mode ||
+    dashboard?.metrics?.queue?.backend ||
+    (Array.isArray(dashboard?.queue) ? "redis" : "redis");
+  const queueItems = toArray(dashboard?.queue?.items || (Array.isArray(dashboard?.queue) ? dashboard.queue : []));
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
-  const hints = dashboard?.hints || [];
+  const hints = toArray(dashboard?.hints);
   const metrics = dashboard?.metrics;
-  const recent = dashboard?.recent || [];
+  const recent = toArray(dashboard?.recent);
   const filteredRecent = recent.filter((e) => {
     const matchPkg = search ? `${e.name} ${e.version}`.toLowerCase().includes(search.toLowerCase()) : true;
     return matchPkg;
   });
+  const failuresTop = toArray(dashboard?.failures);
+  const slowestTop = toArray(dashboard?.slowest);
 
   const toggleSelectQueue = (item) => {
     const key = `${item.package}@${item.version || "latest"}`;
@@ -654,6 +759,27 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   };
 
   const clearSelected = () => setSelectedQueue({});
+
+  const handleSaveSettings = async () => {
+    if (!settingsData) return;
+    setSettingsSaving(true);
+    try {
+      const body = {
+        python_version: settingsData.python_version,
+        platform_tag: settingsData.platform_tag,
+        poll_ms: pollMs,
+        recent_limit: recentLimit,
+      };
+      const resp = await updateSettings(body, authToken);
+      setSettingsData(resp);
+      setSettingsDirty(false);
+      pushToast?.({ type: "success", title: "Settings saved", message: "Defaults updated" });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Settings save failed", message: e.message });
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
 
   const renderLoading = () => (
     <div className="space-y-4">
@@ -685,20 +811,36 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-50">s390x Wheel Refinery</h1>
-          <div className="text-slate-400 text-sm">Data-driven control plane (React SPA)</div>
+      <div className="hero glass">
+        <div className="space-y-2">
+          <div>
+            <p className="text-xs tracking-widest text-slate-400 uppercase">Control Plane</p>
+            <h1 className="text-3xl font-extrabold text-slate-50">s390x Wheel Refinery</h1>
+          </div>
+          <p className="text-slate-400 text-sm max-w-2xl">
+            Monitor build health, steer queue execution, and surface artifacts and hints with a calmer, more intentional layout.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
+            <StatTile icon="📦" label="Queue length" value={queueLength} hint="Pending build requests" />
+            <StatTile icon="⚙️" label="Worker mode" value={workerMode} hint="Current worker strategy" />
+            <StatTile icon="🧭" label="Recent events" value={filteredRecent.length} hint="Filtered by search" />
+            <StatTile icon="🧠" label="Hints loaded" value={hints.length} hint="Recipe guidance available" />
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            className="input max-w-xs"
-            placeholder="Worker token (optional)"
-            value={authToken}
-            onChange={(e) => setAuthToken(e.target.value)}
-          />
-          <button className="btn btn-secondary" onClick={handleSaveToken}>Save token</button>
-          <button className="btn btn-secondary" onClick={() => load({ packageFilter: pkgFilter, statusFilter })} disabled={loading}>Refresh</button>
+        <div className="flex flex-col gap-3 min-w-[260px]">
+          <div className="glass subtle p-3 space-y-2">
+            <div className="text-xs text-slate-400">Worker token</div>
+            <input
+              className="input"
+              placeholder="Worker token (optional)"
+              value={authToken}
+              onChange={(e) => setAuthToken(e.target.value)}
+            />
+            <div className="flex gap-2">
+              <button className="btn btn-primary w-full" onClick={handleSaveToken}>Save</button>
+              <button className="btn btn-secondary w-full" onClick={() => load({ packageFilter: pkgFilter, statusFilter })} disabled={loading}>Refresh</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -709,6 +851,97 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
         </div>
       )}
       {message && <div className="text-green-400 text-sm">{message}</div>}
+
+      <div className="glass p-4 space-y-3 mt-2">
+        <div className="flex items-center justify-between">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Settings</span>
+            <span className="chip text-xs">⚙️</span>
+          </div>
+          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => handleSaveSettings()} disabled={settingsSaving || !settingsData}>
+            {settingsSaving ? "Saving..." : "Save defaults"}
+          </button>
+        </div>
+        <div className="grid md:grid-cols-4 gap-3 text-sm text-slate-200">
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Python version</div>
+            <input
+              className="input"
+              placeholder="e.g. 3.11"
+              value={settingsData?.python_version || ""}
+              onChange={(e) => {
+                setSettingsData((s) => ({ ...(s || {}), python_version: e.target.value }));
+                setSettingsDirty(true);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Platform tag</div>
+            <input
+              className="input"
+              placeholder="manylinux2014_s390x"
+              value={settingsData?.platform_tag || ""}
+              onChange={(e) => {
+                setSettingsData((s) => ({ ...(s || {}), platform_tag: e.target.value }));
+                setSettingsDirty(true);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Recent limit</div>
+            <input
+              className="input"
+              type="number"
+              value={recentLimit}
+              onChange={(e) => {
+                setRecentLimit(Number(e.target.value) || 25);
+                setSettingsDirty(true);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Poll (ms, 0=off)</div>
+            <input
+              className="input"
+              type="number"
+              value={pollMs}
+              onChange={(e) => {
+                setPollMs(Number(e.target.value) || 0);
+                setSettingsDirty(true);
+              }}
+            />
+          </div>
+        </div>
+        <div className="text-xs text-slate-500">
+          These defaults inform queue enqueues and UI polling limits. Worker runtime Python still follows the configured worker image/env.
+        </div>
+      </div>
+
+      <div className="glass p-4 space-y-3 mt-2">
+        <div className="text-lg font-semibold flex items-center gap-2">
+          <span>Upload requirements.txt</span>
+          <span className="chip text-xs">📄</span>
+        </div>
+        <div className="space-y-2 text-sm text-slate-200">
+          <input
+            type="file"
+            accept=".txt"
+            className="input"
+            onChange={(e) => {
+              setReqFile(e.target.files?.[0] || null);
+              setReqError("");
+            }}
+          />
+          {reqError && <div className="text-red-300 text-xs">{reqError}</div>}
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-primary" onClick={() => handleUploadReqs(false)} disabled={!reqFile}>Upload only</button>
+            <button className="btn btn-secondary" onClick={() => handleUploadReqs(true)} disabled={!reqFile}>Upload & Trigger worker</button>
+          </div>
+          <div className="text-slate-400 text-xs">
+            Lints basic text (&lt;128KB, no nulls, ≤2000 lines, ≤800 chars/line) then saves to the shared input as requirements.txt.
+          </div>
+        </div>
+      </div>
 
       <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
         <div className="space-y-4">
@@ -724,23 +957,24 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
               </div>
               <input className="input w-full" placeholder="Search recent (name/version)" value={search} onChange={(e) => setSearch(e.target.value)} />
               <div className="flex gap-2">
-                <input className="input w-1/2" placeholder="Recent limit" value={recentLimit} onChange={(e) => setRecentLimit(Number(e.target.value) || 25)} />
-                <input className="input w-1/2" placeholder="Poll ms (0=off)" value={pollMs} onChange={(e) => setPollMs(Number(e.target.value) || 0)} />
+                <input className="input w-1/2" placeholder="Recent limit" title="How many recent events to show" value={recentLimit} onChange={(e) => setRecentLimit(Number(e.target.value) || 25)} />
+                <input className="input w-1/2" placeholder="Poll ms (0=off)" title="Refresh cadence in milliseconds" value={pollMs} onChange={(e) => setPollMs(Number(e.target.value) || 0)} />
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {STATUS_CHIPS.map((s) => {
-                const active = statusFilter === s;
-                return (
-                  <button
-                    key={s}
-                    className={`chip cursor-pointer ${active ? "bg-accent text-slate-900" : "hover:bg-slate-800"}`}
-                    onClick={() => setStatusFilter(active ? "" : s)}
-                  >
-                    {s}
-                  </button>
-                );
-              })}
+              <div className="flex flex-wrap gap-2">
+                {STATUS_CHIPS.map((s) => {
+                  const active = statusFilter === s;
+                  return (
+                    <button
+                      key={s}
+                      className={`chip cursor-pointer ${active ? "chip-active" : "hover:bg-slate-800"}`}
+                      onClick={() => setStatusFilter(active ? "" : s)}
+                      title="Toggle status filter"
+                    >
+                      {s}
+                    </button>
+                  );
+                })}
               {statusFilter && (
                 <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setStatusFilter("")}>
                   Clear status filter
@@ -839,21 +1073,21 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <TopList
               title="Top failures"
-              items={dashboard?.failures || []}
+              items={failuresTop}
               render={(f) => (
-                <div key={f.name} className="flex items-center justify-between text-sm text-slate-200">
-                  <span>{f.name}</span>
-                  <span className="chip">{f.failures} failures</span>
+                <div key={f?.name || `fail-${Math.random()}`} className="flex items-center justify-between text-sm text-slate-200">
+                  <span>{f?.name || "unknown"}</span>
+                  <span className="chip">{f?.failures ?? 0} failures</span>
                 </div>
               )}
             />
             <TopList
               title="Top slow packages"
-              items={dashboard?.slowest || []}
+              items={slowestTop}
               render={(s) => (
-                <div key={s.name} className="flex items-center justify-between text-sm text-slate-200">
-                  <span>{s.name}</span>
-                  <span className="chip">{s.avg_duration}s avg</span>
+                <div key={s?.name || `slow-${Math.random()}`} className="flex items-center justify-between text-sm text-slate-200">
+                  <span>{s?.name || "unknown"}</span>
+                  <span className="chip">{s?.avg_duration ?? "?"}s avg</span>
                 </div>
               )}
             />
@@ -861,9 +1095,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
               <div className="space-y-2 max-h-52 overflow-auto text-sm text-slate-200">
                 {hints.length ? hints.map((h, idx) => (
                   <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
-                    <div className="font-semibold">Pattern: {h.pattern}</div>
-                    <div className="text-slate-400">dnf: {(h.packages?.dnf || []).join(", ") || "-"}</div>
-                    <div className="text-slate-400">apt: {(h.packages?.apt || []).join(", ") || "-"}</div>
+                    <div className="font-semibold">Pattern: {h?.pattern || "n/a"}</div>
+                    <div className="text-slate-400">dnf: {(h?.packages?.dnf || []).join(", ") || "-"}</div>
+                    <div className="text-slate-400">apt: {(h?.packages?.apt || []).join(", ") || "-"}</div>
                   </div>
                 )) : <div className="text-slate-400">No hints loaded</div>}
               </div>
@@ -903,11 +1137,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
                       </div>
                     </div>
                   )}
-                  {metrics.recent_failures && metrics.recent_failures.length > 0 && (
+                  {toArray(metrics.recent_failures).length > 0 && (
                     <div className="space-y-1">
                       <div className="text-xs text-slate-400">Recent failures</div>
                       <div className="space-y-1">
-                        {metrics.recent_failures.slice(0, 5).map((f, idx) => (
+                        {toArray(metrics.recent_failures).slice(0, 5).map((f, idx) => (
                           <div key={idx} className="flex items-center justify-between text-xs text-slate-300">
                             <span>{f.name} {f.version}</span>
                             <span className="chip">{f.status}</span>
@@ -921,7 +1155,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
             )}
           </div>
 
-          <EventsTable events={filteredRecent} />
+            <EventsTable events={filteredRecent} />
         </div>
       </div>
     </div>

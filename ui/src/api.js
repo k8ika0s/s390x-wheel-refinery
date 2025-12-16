@@ -1,4 +1,25 @@
-export const API_BASE = import.meta.env.VITE_API_BASE || "";
+const inferApiBase = () => {
+  const envBase = import.meta.env.VITE_API_BASE;
+  if (envBase) return envBase;
+  return "";
+};
+
+const normalizeBase = (base) => {
+  if (!base) return "";
+  return base.endsWith("/") ? base.slice(0, -1) : base;
+};
+
+const joinBasePath = (base, path) => {
+  const b = normalizeBase(base);
+  const p = path.startsWith("/") ? path : `/${path}`;
+  if (!b) return p;
+  if (b.endsWith("/api") && p.startsWith("/api")) {
+    return `${b}${p.replace(/^\/api/, "")}`;
+  }
+  return `${b}${p}`;
+};
+
+export const API_BASE = inferApiBase();
 
 const jsonHeaders = (token) => ({
   "Content-Type": "application/json",
@@ -6,7 +27,8 @@ const jsonHeaders = (token) => ({
 });
 
 async function request(path, options = {}, token) {
-  const resp = await fetch(`${API_BASE}${path}`, {
+  const target = joinBasePath(API_BASE, path);
+  const resp = await fetch(target, {
     ...options,
     headers: {
       ...jsonHeaders(token),
@@ -62,6 +84,32 @@ export function clearQueue(token) {
 
 export function setCookieToken(token) {
   return request(`/api/session/token?token=${encodeURIComponent(token)}`, { method: "POST" }, token);
+}
+
+export async function uploadRequirements(file, token) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const resp = await fetch(joinBasePath(API_BASE, "/api/requirements/upload"), {
+    method: "POST",
+    body: fd,
+    headers,
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    const err = new Error(text || resp.statusText);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
+export function fetchSettings(token) {
+  return request("/api/settings", {}, token);
+}
+
+export function updateSettings(body, token) {
+  return request("/api/settings", { method: "POST", body: JSON.stringify(body) }, token);
 }
 
 export function fetchPackageDetail(name, token, limit = 50) {

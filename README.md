@@ -1,5 +1,9 @@
 # s390x Wheel Refinery
 
+<p align="center">
+  <img src="ui/public/s390x-wheel-refinery-logo.png" alt="s390x Wheel Refinery logo" width="520" />
+</p>
+
 ![CI](https://github.com/k8ika0s/s390x-wheel-refinery/actions/workflows/ci.yml/badge.svg)
 
 Refinery plans and executes reproducible s390x Python wheel builds. Feed it wheels **or a `requirements.txt`**, and it resolves pins, builds what is missing, repairs wheels, and publishes everything to content-addressed storage with full provenance, metrics, and UI visibility.

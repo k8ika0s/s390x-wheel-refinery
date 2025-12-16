@@ -5,14 +5,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"crypto/sha256"
+
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
 )
 
@@ -29,6 +35,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/metrics", h.metrics)
 	mux.HandleFunc("/metrics", h.promMetrics)
 	mux.HandleFunc("/api/config", h.config)
+	mux.HandleFunc("/api/settings", h.settings)
+	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
 	mux.HandleFunc("/api/recent", h.recent)
@@ -202,6 +210,7 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	currentSettings := settings.Load(h.Config.SettingsPath)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"http_addr":        h.Config.HTTPAddr,
 		"queue_backend":    h.Config.QueueBackend,
@@ -213,7 +222,120 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		"db":               "postgres",
 		"worker_webhook":   h.Config.WorkerWebhookURL != "",
 		"worker_local_cmd": h.Config.WorkerLocalCmd != "",
+		"input_dir":        h.Config.InputDir,
+		"settings_path":    h.Config.SettingsPath,
+		"settings":         currentSettings,
 	})
+}
+
+func lintRequirements(data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("empty file")
+	}
+	if len(data) > 128*1024 {
+		return fmt.Errorf("file too large (>128KB)")
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return fmt.Errorf("file contains null bytes")
+	}
+	lines := bytes.Split(data, []byte("\n"))
+	if len(lines) > 2000 {
+		return fmt.Errorf("too many lines (>2000)")
+	}
+	for i, l := range lines {
+		if len(l) > 800 {
+			return fmt.Errorf("line %d too long (>800 chars)", i+1)
+		}
+		for _, b := range l {
+			// allow printable ASCII, tabs, and '#'/punctuation; reject control chars.
+			if b < 9 || b == 11 || b == 12 || b > 126 {
+				return fmt.Errorf("invalid character on line %d", i+1)
+			}
+		}
+	}
+	return nil
+}
+
+func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if h.Config.InputDir == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input dir not configured"})
+		return
+	}
+	if err := r.ParseMultipartForm(256 << 10); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid form"})
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file required"})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 256<<10))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read file"})
+		return
+	}
+	if err := lintRequirements(data); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := os.MkdirAll(h.Config.InputDir, 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	sum := sha256.Sum256(data)
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	unique := fmt.Sprintf("requirements-%s-%x.txt", stamp, sum[:4])
+	pathUnique := filepath.Join(h.Config.InputDir, unique)
+	if err := os.WriteFile(pathUnique, data, 0o644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	// Also refresh canonical path for backwards compatibility.
+	pathCanonical := filepath.Join(h.Config.InputDir, "requirements.txt")
+	if err := os.WriteFile(pathCanonical, data, 0o644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"detail":     "requirements uploaded",
+		"bytes":      len(data),
+		"filename":   header.Filename,
+		"saved_path": pathUnique,
+		"canonical":  pathCanonical,
+	})
+}
+
+func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, settings.Load(h.Config.SettingsPath))
+	case http.MethodPost:
+		var s settings.Settings
+		if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		// basic normalization
+		if s.RecentLimit <= 0 {
+			s.RecentLimit = 25
+		}
+		if s.PollMs < 0 {
+			s.PollMs = 0
+		}
+		if err := settings.Save(h.Config.SettingsPath, s); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, s)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
 
 func (h *Handler) notImplemented(w http.ResponseWriter, r *http.Request) {
@@ -546,7 +668,12 @@ func (h *Handler) queueList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, items)
+	resp := map[string]any{
+		"items":       items,
+		"length":      len(items),
+		"worker_mode": h.Config.QueueBackend,
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) queueStats(w http.ResponseWriter, r *http.Request) {

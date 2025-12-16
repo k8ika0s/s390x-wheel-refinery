@@ -106,14 +106,14 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_s390x_build == 'true'
     runs-on: ubuntu-latest
     steps:
-        - uses: actions/checkout@v4
-        - uses: docker/setup-qemu-action@v3
-          with:
-            platforms: all
-        - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+      - uses: docker/setup-buildx-action@v3
       - name: Build builder image for s390x (emulated)
         run: |
-            docker buildx build --platform linux/s390x -t refinery-rocky-s390x:ci -f containers/rocky/Containerfile --load .
+          docker buildx build --platform linux/s390x -t refinery-rocky-s390x:ci -f containers/rocky/Containerfile --load .
 
   smoke-dummy-run:
     runs-on: ubuntu-latest

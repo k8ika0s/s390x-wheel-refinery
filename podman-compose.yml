@@ -11,6 +11,11 @@ services:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U refinery -d refinery"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: registry.redhat.io/rhel9/redis-7
@@ -56,10 +61,14 @@ services:
       context: .
       dockerfile: containers/go-control-plane/Containerfile
     depends_on:
-      - postgres
-      - redis
-      - zot
-      - minio
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      zot:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     environment:
       HTTP_ADDR: ":8080"
       POSTGRES_DSN: postgres://refinery:refinery@postgres:5432/refinery?sslmode=disable
@@ -75,15 +84,16 @@ services:
       OBJECT_STORE_BUCKET: wheelhouse
       OBJECT_STORE_ACCESS_KEY: minio
       OBJECT_STORE_SECRET_KEY: minio123
+      INPUT_DIR: /input
     ports:
       - "8080:8080"
+    volumes:
+      - ./input:/input
 
   ui:
     build:
       context: .
       dockerfile: containers/ui/Containerfile
-      args:
-        VITE_API_BASE: http://control-plane:8080
     environment:
       NODE_ENV: production
     ports:
