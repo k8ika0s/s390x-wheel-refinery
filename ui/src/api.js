@@ -4,6 +4,21 @@ const inferApiBase = () => {
   return "";
 };
 
+const normalizeBase = (base) => {
+  if (!base) return "";
+  return base.endsWith("/") ? base.slice(0, -1) : base;
+};
+
+const joinBasePath = (base, path) => {
+  const b = normalizeBase(base);
+  const p = path.startsWith("/") ? path : `/${path}`;
+  if (!b) return p;
+  if (b.endsWith("/api") && p.startsWith("/api")) {
+    return `${b}${p.replace(/^\/api/, "")}`;
+  }
+  return `${b}${p}`;
+};
+
 export const API_BASE = inferApiBase();
 
 const jsonHeaders = (token) => ({
@@ -12,8 +27,7 @@ const jsonHeaders = (token) => ({
 });
 
 async function request(path, options = {}, token) {
-  const base = API_BASE;
-  const target = base ? `${base}${path}` : path;
+  const target = joinBasePath(API_BASE, path);
   const resp = await fetch(target, {
     ...options,
     headers: {

@@ -3,7 +3,7 @@ FROM registry.access.redhat.com/ubi9/nodejs-20:latest AS build
 WORKDIR /app
 # npm expects writable dirs; use root for install/build in this image.
 USER 0
-ARG VITE_API_BASE="/api"
+ARG VITE_API_BASE=""
 ENV VITE_API_BASE=${VITE_API_BASE}
 COPY ui/package.json ui/package-lock.json ui/vite.config.js ui/index.html /app/
 COPY ui/postcss.config.cjs ui/tailwind.config.cjs /app/
