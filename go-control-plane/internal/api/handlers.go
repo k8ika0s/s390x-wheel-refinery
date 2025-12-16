@@ -679,6 +679,21 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		if h.Config.AutoBuild && h.Queue != nil {
+			for _, node := range body.Plan {
+				if strings.ToLower(node.Action) != "build" {
+					continue
+				}
+				req := queue.Request{
+					Package:       node.Name,
+					Version:       node.Version,
+					PythonVersion: pyVersionFromTag(node.PythonTag, node.PythonVersion),
+					PythonTag:     node.PythonTag,
+					PlatformTag:   node.PlatformTag,
+				}
+				_ = h.Queue.Enqueue(r.Context(), req)
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "plan saved"})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -749,9 +764,42 @@ func (h *Handler) planCompute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(nodes) > 0 {
-		_ = h.Store.SavePlan(ctx, toString(snap["run_id"]), nodes)
+		runID := toString(snap["run_id"])
+		_ = h.Store.SavePlan(ctx, runID, nodes)
+		if h.Config.AutoBuild && h.Queue != nil {
+			for _, node := range nodes {
+				if strings.ToLower(node.Action) != "build" {
+					continue
+				}
+				req := queue.Request{
+					Package:       node.Name,
+					Version:       node.Version,
+					PythonVersion: pyVersionFromTag(node.PythonTag, node.PythonVersion),
+					PythonTag:     node.PythonTag,
+					PlatformTag:   node.PlatformTag,
+				}
+				_ = h.Queue.Enqueue(ctx, req)
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, snap)
+}
+
+func pyVersionFromTag(tag, fallback string) string {
+	if fallback != "" {
+		return fallback
+	}
+	tag = strings.TrimPrefix(tag, "cp")
+	if len(tag) == 0 {
+		return ""
+	}
+	if len(tag) == 3 {
+		return fmt.Sprintf("%s.%s", tag[:1], tag[1:])
+	}
+	if len(tag) == 4 {
+		return fmt.Sprintf("%s.%s", tag[:2], tag[2:])
+	}
+	return ""
 }
 
 func (h *Handler) artifacts(w http.ResponseWriter, r *http.Request) {

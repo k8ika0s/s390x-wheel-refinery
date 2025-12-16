@@ -120,11 +120,15 @@ func (f *fakeStore) UpdatePendingInputStatus(ctx context.Context, id int64, stat
 // fakeQueue implements only Stats for these tests.
 type fakeQueue struct {
 	length int
+	enq    []queue.Request
 }
 
-func (f *fakeQueue) Enqueue(ctx context.Context, req queue.Request) error { return nil }
-func (f *fakeQueue) List(ctx context.Context) ([]queue.Request, error)    { return nil, nil }
-func (f *fakeQueue) Clear(ctx context.Context) error                      { return nil }
+func (f *fakeQueue) Enqueue(ctx context.Context, req queue.Request) error {
+	f.enq = append(f.enq, req)
+	return nil
+}
+func (f *fakeQueue) List(ctx context.Context) ([]queue.Request, error) { return nil, nil }
+func (f *fakeQueue) Clear(ctx context.Context) error                   { return nil }
 func (f *fakeQueue) Stats(ctx context.Context) (queue.Stats, error) {
 	return queue.Stats{Length: f.length}, nil
 }
@@ -179,7 +183,8 @@ func TestPlanComputeProxiesToWorker(t *testing.T) {
 	defer worker.Close()
 
 	fs := &fakeStore{}
-	h := &Handler{Store: fs, Queue: &fakeQueue{}, Config: config.Config{WorkerPlanURL: worker.URL, WorkerToken: ""}}
+	fq := &fakeQueue{}
+	h := &Handler{Store: fs, Queue: fq, Config: config.Config{WorkerPlanURL: worker.URL, WorkerToken: "", AutoBuild: true}}
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	ts := httptest.NewServer(mux)
@@ -200,11 +205,15 @@ func TestPlanComputeProxiesToWorker(t *testing.T) {
 	if len(fs.lastPlan) == 0 {
 		t.Fatalf("plan not saved to store")
 	}
+	if len(fq.enq) != 1 || fq.enq[0].Package != "pkg" {
+		t.Fatalf("expected enqueue from plan compute, got %+v", fq.enq)
+	}
 }
 
 func TestPlanPostSavesPlan(t *testing.T) {
 	fs := &fakeStore{}
-	h := &Handler{Store: fs, Queue: &fakeQueue{}, Config: config.Config{}}
+	fq := &fakeQueue{}
+	h := &Handler{Store: fs, Queue: fq, Config: config.Config{AutoBuild: true}}
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	ts := httptest.NewServer(mux)
@@ -222,6 +231,9 @@ func TestPlanPostSavesPlan(t *testing.T) {
 	}
 	if len(fs.lastPlan) != 1 {
 		t.Fatalf("plan not saved")
+	}
+	if len(fq.enq) != 1 || fq.enq[0].Package != "pkg" {
+		t.Fatalf("expected enqueue from plan, got %+v", fq.enq)
 	}
 }
 
