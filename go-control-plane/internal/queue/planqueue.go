@@ -12,6 +12,7 @@ import (
 type PlanQueueBackend interface {
 	Enqueue(ctx context.Context, id string) error
 	Pop(ctx context.Context, max int) ([]string, error)
+	Len(ctx context.Context) (int64, error)
 }
 
 // PlanQueue is a Redis-backed queue for plan IDs.
@@ -76,4 +77,12 @@ func (p *PlanQueue) Pop(ctx context.Context, max int) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// Len returns queue length.
+func (p *PlanQueue) Len(ctx context.Context) (int64, error) {
+	if err := p.ensure(); err != nil {
+		return 0, err
+	}
+	return p.client.LLen(ctx, p.key).Val(), nil
 }

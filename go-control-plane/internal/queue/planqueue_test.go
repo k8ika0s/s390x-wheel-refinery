@@ -40,4 +40,12 @@ func TestPlanQueueEnqueueAndPop(t *testing.T) {
 	if len(items) != 0 {
 		t.Fatalf("expected empty pop, got %+v", items)
 	}
+
+	llen, err := q.Len(ctx)
+	if err != nil {
+		t.Fatalf("len: %v", err)
+	}
+	if llen != 0 {
+		t.Fatalf("expected len 0, got %d", llen)
+	}
 }

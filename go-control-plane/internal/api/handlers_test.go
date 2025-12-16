@@ -151,6 +151,9 @@ func (f *fakePlanQueue) Enqueue(ctx context.Context, id string) error {
 func (f *fakePlanQueue) Pop(ctx context.Context, max int) ([]string, error) {
 	return f.pop, f.err
 }
+func (f *fakePlanQueue) Len(ctx context.Context) (int64, error) {
+	return int64(len(f.ids) + len(f.pop)), f.err
+}
 
 func mustMultipart(t *testing.T, filename, content string) (*bytes.Buffer, string) {
 	t.Helper()

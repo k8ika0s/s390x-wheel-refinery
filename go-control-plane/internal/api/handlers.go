@@ -106,6 +106,10 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		Status string `json:"status"`
 		Error  string `json:"error,omitempty"`
 	}
+	type pendingMetrics struct {
+		Count     int `json:"count"`
+		PlanQueue int `json:"plan_queue"`
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
@@ -125,6 +129,20 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 			qm.OldestAgeSec = stats.OldestAge
 		} else {
 			qm.ConsumerState = fmt.Sprintf("stats_error: %v", err)
+		}
+	}
+
+	pm := pendingMetrics{}
+	if h.Store != nil {
+		if list, err := h.Store.ListPendingInputs(ctx, ""); err == nil {
+			pm.Count = len(list)
+		}
+	}
+	if pq, ok := h.PlanQ.(interface {
+		Len(context.Context) (int64, error)
+	}); ok && pq != nil {
+		if n, err := pq.Len(ctx); err == nil {
+			pm.PlanQueue = int(n)
 		}
 	}
 
@@ -148,9 +166,12 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 			"updated_at":  time.Now().Unix(),
 		},
 		"queue":           qm,
+		"pending":         pm,
 		"db":              dbm,
 		"status_counts":   sum.StatusCounts,
 		"recent_failures": sum.Failures,
+		"auto_plan":       h.Config.AutoPlan,
+		"auto_build":      h.Config.AutoBuild,
 	})
 }
 
