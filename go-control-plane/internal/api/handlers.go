@@ -624,7 +624,12 @@ func (h *Handler) queueList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, items)
+	resp := map[string]any{
+		"items":       items,
+		"length":      len(items),
+		"worker_mode": h.Config.QueueBackend,
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) queueStats(w http.ResponseWriter, r *http.Request) {
