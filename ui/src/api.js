@@ -86,6 +86,14 @@ export function setCookieToken(token) {
   return request(`/api/session/token?token=${encodeURIComponent(token)}`, { method: "POST" }, token);
 }
 
+export function fetchPendingInputs(token) {
+  return request("/api/pending-inputs", {}, token);
+}
+
+export function enqueuePlan(id, token) {
+  return request(`/api/pending-inputs/${id}/enqueue-plan`, { method: "POST" }, token);
+}
+
 export async function uploadRequirements(file, token) {
   const fd = new FormData();
   fd.append("file", file);

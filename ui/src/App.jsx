@@ -6,6 +6,7 @@ import {
   enqueueRetry,
   fetchDashboard,
   fetchLog,
+  fetchPendingInputs,
   fetchPackageDetail,
   fetchRecent,
   fetchSettings,
@@ -13,6 +14,7 @@ import {
   triggerWorker,
   updateSettings,
   uploadRequirements,
+  enqueuePlan,
 } from "./api";
 
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
@@ -562,6 +564,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const [settingsData, setSettingsData] = useState(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [pendingInputs, setPendingInputs] = useState([]);
 
   const load = async (opts = {}) => {
     const { packageFilter, statusFilter: status } = opts;
@@ -577,6 +580,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
         authToken,
       );
       const data = await fetchDashboard(authToken);
+      const pending = await fetchPendingInputs(authToken).catch(() => []);
+      setPendingInputs(Array.isArray(pending) ? pending : []);
       setDashboard({ ...data, recent });
       onMetrics?.(data.metrics);
     } catch (e) {
@@ -599,6 +604,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
         setSettingsData(s);
         if (s.recent_limit) setRecentLimit(s.recent_limit);
         if (s.poll_ms !== undefined) setPollMs(s.poll_ms || 0);
+        if (s.auto_plan !== undefined) {
+          setSettingsData((prev) => ({ ...(prev || s), auto_plan: !!s.auto_plan, auto_build: s.auto_build !== undefined ? !!s.auto_build : true }));
+        }
       } catch {
         // ignore settings load failures silently
       }
@@ -738,6 +746,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const hints = toArray(dashboard?.hints);
   const metrics = dashboard?.metrics;
   const recent = toArray(dashboard?.recent);
+  const pendingByStatus = pendingInputs.reduce(
+    (acc, cur) => {
+      acc[cur.status] = (acc[cur.status] || 0) + 1;
+      return acc;
+    },
+    {},
+  );
+  const pendingTotal = pendingInputs.length;
   const filteredRecent = recent.filter((e) => {
     const matchPkg = search ? `${e.name} ${e.version}`.toLowerCase().includes(search.toLowerCase()) : true;
     return matchPkg;
@@ -769,6 +785,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
         platform_tag: settingsData.platform_tag,
         poll_ms: pollMs,
         recent_limit: recentLimit,
+        auto_plan: settingsData.auto_plan,
+        auto_build: settingsData.auto_build,
       };
       const resp = await updateSettings(body, authToken);
       setSettingsData(resp);
@@ -825,6 +843,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
             <StatTile icon="⚙️" label="Worker mode" value={workerMode} hint="Current worker strategy" />
             <StatTile icon="🧭" label="Recent events" value={filteredRecent.length} hint="Filtered by search" />
             <StatTile icon="🧠" label="Hints loaded" value={hints.length} hint="Recipe guidance available" />
+            <StatTile icon="📥" label="Pending inputs" value={pendingTotal} hint={`waiting: ${pendingByStatus.pending || 0}, planning: ${pendingByStatus.planning || 0}`} />
           </div>
         </div>
         <div className="flex flex-col gap-3 min-w-[260px]">
@@ -912,6 +931,30 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
             />
           </div>
         </div>
+        <div className="grid md:grid-cols-2 gap-3 text-sm text-slate-200">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!settingsData?.auto_plan}
+              onChange={(e) => {
+                setSettingsData((s) => ({ ...(s || {}), auto_plan: e.target.checked }));
+                setSettingsDirty(true);
+              }}
+            />
+            <span>Auto-plan new uploads</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!settingsData?.auto_build}
+              onChange={(e) => {
+                setSettingsData((s) => ({ ...(s || {}), auto_build: e.target.checked }));
+                setSettingsDirty(true);
+              }}
+            />
+            <span>Auto-build planned items</span>
+          </label>
+        </div>
         <div className="text-xs text-slate-500">
           These defaults inform queue enqueues and UI polling limits. Worker runtime Python still follows the configured worker image/env.
         </div>
@@ -941,6 +984,52 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
             Lints basic text (&lt;128KB, no nulls, ≤2000 lines, ≤800 chars/line) then saves to the shared input as requirements.txt.
           </div>
         </div>
+      </div>
+
+      <div className="glass p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Pending inputs</span>
+            <span className="chip text-xs">🧾</span>
+          </div>
+          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load()}>
+            Refresh
+          </button>
+        </div>
+        {pendingInputs.length === 0 ? (
+          <EmptyState title="No pending uploads" detail="New uploads will appear here until planned." icon="✅" />
+        ) : (
+          <div className="space-y-2 text-sm text-slate-200">
+            {pendingInputs.map((pi) => (
+              <div key={pi.id} className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="font-semibold text-slate-100">{pi.filename}</div>
+                  <div className="text-xs text-slate-500 flex items-center gap-2">
+                    <span className="chip">{pi.status}</span>
+                    {pi.error && <span className="text-red-300">{pi.error}</span>}
+                    <span className="text-slate-500">id {pi.id}</span>
+                  </div>
+                </div>
+                {pi.status === "pending" && (
+                  <button
+                    className="btn btn-secondary px-2 py-1 text-xs"
+                    onClick={async () => {
+                      try {
+                        await enqueuePlan(pi.id, authToken);
+                        pushToast?.({ type: "success", title: "Enqueued for planning", message: pi.filename });
+                        await load();
+                      } catch (e) {
+                        pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
+                      }
+                    }}
+                  >
+                    Enqueue plan
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
