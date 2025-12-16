@@ -19,6 +19,7 @@ type Config struct {
 	WorkerToken      string
 	WorkerLocalCmd   string
 	SkipMigrate      bool
+	InputDir         string
 }
 
 // FromEnv loads configuration with sensible defaults.
@@ -37,6 +38,7 @@ func FromEnv() Config {
 		WorkerToken:      getenv("WORKER_TOKEN", ""),
 		WorkerLocalCmd:   getenv("WORKER_LOCAL_CMD", ""),
 		SkipMigrate:      getenv("CP_SKIP_MIGRATE", "") != "",
+		InputDir:         getenv("INPUT_DIR", "/input"),
 	}
 	return cfg
 }

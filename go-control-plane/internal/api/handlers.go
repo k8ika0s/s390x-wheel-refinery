@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +31,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/metrics", h.metrics)
 	mux.HandleFunc("/metrics", h.promMetrics)
 	mux.HandleFunc("/api/config", h.config)
+	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
 	mux.HandleFunc("/api/recent", h.recent)
@@ -213,6 +216,80 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		"db":               "postgres",
 		"worker_webhook":   h.Config.WorkerWebhookURL != "",
 		"worker_local_cmd": h.Config.WorkerLocalCmd != "",
+		"input_dir":        h.Config.InputDir,
+	})
+}
+
+func lintRequirements(data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("empty file")
+	}
+	if len(data) > 128*1024 {
+		return fmt.Errorf("file too large (>128KB)")
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return fmt.Errorf("file contains null bytes")
+	}
+	lines := bytes.Split(data, []byte("\n"))
+	if len(lines) > 2000 {
+		return fmt.Errorf("too many lines (>2000)")
+	}
+	for i, l := range lines {
+		if len(l) > 800 {
+			return fmt.Errorf("line %d too long (>800 chars)", i+1)
+		}
+		for _, b := range l {
+			// allow printable ASCII, tabs, and '#'/punctuation; reject control chars.
+			if b < 9 || b == 11 || b == 12 || b > 126 {
+				return fmt.Errorf("invalid character on line %d", i+1)
+			}
+		}
+	}
+	return nil
+}
+
+func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if h.Config.InputDir == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input dir not configured"})
+		return
+	}
+	if err := r.ParseMultipartForm(256 << 10); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid form"})
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file required"})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 256<<10))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read file"})
+		return
+	}
+	if err := lintRequirements(data); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := os.MkdirAll(h.Config.InputDir, 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	path := filepath.Join(h.Config.InputDir, "requirements.txt")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"detail":     "requirements uploaded",
+		"bytes":      len(data),
+		"filename":   header.Filename,
+		"saved_path": path,
 	})
 }
 

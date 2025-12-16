@@ -86,6 +86,24 @@ export function setCookieToken(token) {
   return request(`/api/session/token?token=${encodeURIComponent(token)}`, { method: "POST" }, token);
 }
 
+export async function uploadRequirements(file, token) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const resp = await fetch(joinBasePath(API_BASE, "/api/requirements/upload"), {
+    method: "POST",
+    body: fd,
+    headers,
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    const err = new Error(text || resp.statusText);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
 export function fetchPackageDetail(name, token, limit = 50) {
   return Promise.all([
     request(`/api/package/${encodeURIComponent(name)}`, {}, token),

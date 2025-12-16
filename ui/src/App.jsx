@@ -538,6 +538,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const [retryPkg, setRetryPkg] = useState("");
   const [retryVersion, setRetryVersion] = useState("latest");
   const [selectedQueue, setSelectedQueue] = useState({});
+  const [reqFile, setReqFile] = useState(null);
+  const [reqError, setReqError] = useState("");
 
   const [pkgFilter, setPkgFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -641,6 +643,44 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
     } catch (e) {
       setError(e.message);
       pushToast?.({ type: "error", title: "Clear queue failed", message: e.message });
+    }
+  };
+
+  const lintReqFile = async (file) => {
+    if (!file) return "Pick a requirements.txt file";
+    if (file.size === 0) return "File is empty";
+    if (file.size > 128 * 1024) return "File too large (>128KB)";
+    const text = await file.text();
+    if (!text.trim()) return "File has no content";
+    const lines = text.split(/\r?\n/);
+    if (lines.length > 2000) return "Too many lines (>2000)";
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].length > 800) return `Line ${i + 1} too long`;
+    }
+    if (text.indexOf("\u0000") !== -1) return "Invalid character (null byte)";
+    return "";
+  };
+
+  const handleUploadReqs = async (trigger = false) => {
+    setReqError("");
+    const lintErr = await lintReqFile(reqFile);
+    if (lintErr) {
+      setReqError(lintErr);
+      pushToast?.({ type: "error", title: "Upload failed", message: lintErr });
+      return;
+    }
+    try {
+      const resp = await uploadRequirements(reqFile, authToken);
+      pushToast?.({ type: "success", title: "Uploaded", message: resp.detail || "requirements uploaded" });
+      if (trigger) {
+        await handleTriggerWorker();
+      } else {
+        await load();
+      }
+    } catch (e) {
+      const msg = e.message || "upload failed";
+      setReqError(msg);
+      pushToast?.({ type: "error", title: "Upload failed", message: msg });
     }
   };
 
@@ -757,6 +797,32 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
         </div>
       )}
       {message && <div className="text-green-400 text-sm">{message}</div>}
+
+      <div className="glass p-4 space-y-3 mt-2">
+        <div className="text-lg font-semibold flex items-center gap-2">
+          <span>Upload requirements.txt</span>
+          <span className="chip text-xs">📄</span>
+        </div>
+        <div className="space-y-2 text-sm text-slate-200">
+          <input
+            type="file"
+            accept=".txt"
+            className="input"
+            onChange={(e) => {
+              setReqFile(e.target.files?.[0] || null);
+              setReqError("");
+            }}
+          />
+          {reqError && <div className="text-red-300 text-xs">{reqError}</div>}
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-primary" onClick={() => handleUploadReqs(false)} disabled={!reqFile}>Upload only</button>
+            <button className="btn btn-secondary" onClick={() => handleUploadReqs(true)} disabled={!reqFile}>Upload & Trigger worker</button>
+          </div>
+          <div className="text-slate-400 text-xs">
+            Lints basic text (&lt;128KB, no nulls, ≤2000 lines, ≤800 chars/line) then saves to the shared input as requirements.txt.
+          </div>
+        </div>
+      </div>
 
       <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
         <div className="space-y-4">
