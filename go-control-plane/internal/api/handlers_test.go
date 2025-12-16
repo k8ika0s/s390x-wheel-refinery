@@ -330,6 +330,28 @@ func TestPendingInputPop(t *testing.T) {
 	}
 }
 
+func TestPendingInputStatusUpdate(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{Store: fs, Queue: &fakeQueue{}, Config: config.Config{}}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	body := bytes.NewBufferString(`{"status":"planned","error":""}`)
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/pending-inputs/status/9", body)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	if len(fs.pendingStatuses) != 1 || fs.pendingStatuses[0].id != 9 || fs.pendingStatuses[0].status != "planned" {
+		t.Fatalf("expected planned update, got %+v", fs.pendingStatuses)
+	}
+}
+
 func TestRequirementsUploadAutoEnqueue(t *testing.T) {
 	tmp := t.TempDir()
 	fs := &fakeStore{nextPendingID: 42}

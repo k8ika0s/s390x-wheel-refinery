@@ -118,6 +118,12 @@ services:
       WORKER_TOKEN: ${WORKER_TOKEN:-}
       CONTROL_PLANE_URL: http://control-plane:8080
       CONTROL_PLANE_TOKEN: ${WORKER_TOKEN:-}
+      PLAN_POLL_ENABLED: "1"
+      PLAN_POP_URL: http://control-plane:8080/api/pending-inputs/pop
+      PLAN_STATUS_URL: http://control-plane:8080/api/pending-inputs/status
+      PLAN_LIST_URL: http://control-plane:8080/api/pending-inputs
+      PLAN_POLL_INTERVAL_SEC: 10
+      PLAN_POP_BATCH: 5
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379
       PODMAN_BIN: podman

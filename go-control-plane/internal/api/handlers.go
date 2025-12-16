@@ -40,6 +40,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/pending-inputs", h.pendingInputs)
 	mux.HandleFunc("/api/pending-inputs/", h.pendingInputAction)
 	mux.HandleFunc("/api/pending-inputs/pop", h.pendingInputPop)
+	mux.HandleFunc("/api/pending-inputs/status/", h.pendingInputStatus)
 	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
@@ -441,6 +442,40 @@ func (h *Handler) pendingInputPop(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ids": ids})
+}
+
+func (h *Handler) pendingInputStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/pending-inputs/status/"), "/")
+	if len(parts) < 1 || parts[0] == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+		return
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	var body struct {
+		Status string `json:"status"`
+		Error  string `json:"error,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if body.Status == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "status required"})
+		return
+	}
+	if err := h.Store.UpdatePendingInputStatus(r.Context(), id, body.Status, body.Error); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"detail": "status updated"})
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
