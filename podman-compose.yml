@@ -2,19 +2,18 @@ version: "3.9"
 
 services:
   postgres:
-    image: quay.io/bitnami/postgresql:16
+    image: registry.redhat.io/rhel9/postgresql-16
     environment:
-      POSTGRES_USER: refinery
-      POSTGRES_PASSWORD: refinery
-      POSTGRES_DB: refinery
+      POSTGRESQL_USER: refinery
+      POSTGRESQL_PASSWORD: refinery
+      POSTGRESQL_DATABASE: refinery
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
 
   redis:
-    image: quay.io/bitnami/redis:7
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    image: registry.redhat.io/rhel9/redis-7
     ports:
       - "6379:6379"
 
@@ -28,7 +27,7 @@ services:
     volumes:
       - zotdata:/var/lib/registry
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:5000/v2/_catalog"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:5000/v2/_catalog"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -47,7 +46,7 @@ services:
     volumes:
       - miniodata:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -88,7 +87,7 @@ services:
     environment:
       NODE_ENV: production
     ports:
-      - "3000:80"
+      - "3000:8080"
     depends_on:
       - control-plane
 

@@ -4,12 +4,14 @@
      dnf -y install golang git make gcc && \
      dnf clean all
  WORKDIR /src
- RUN git clone https://github.com/project-zot/zot.git .
- # Zot upstream requires Go 1.25; build statically oriented binary for s390x.
- RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -o /zot ./cmd/zot
+RUN git clone https://github.com/project-zot/zot.git .
+# Zot upstream requires Go 1.25; build statically oriented binary for s390x.
+# Optional features (metrics/search/ui/etc.) require zot build tags; enable later with:
+#   CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -tags "search ui metrics sync scrub mgmt" -o /zot ./cmd/zot
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -o /zot ./cmd/zot
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal
-RUN microdnf -y update && microdnf -y install shadow-utils && microdnf clean all
+RUN microdnf -y update && microdnf -y install shadow-utils curl && microdnf clean all
 RUN useradd -r -u 1000 zot && mkdir -p /var/lib/zot && chown -R zot:zot /var/lib/zot
 COPY --from=builder /zot /usr/local/bin/zot
 COPY <<'EOF' /etc/zot/config.json
