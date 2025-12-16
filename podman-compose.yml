@@ -74,6 +74,9 @@ services:
       POSTGRES_DSN: postgres://refinery:refinery@postgres:5432/refinery?sslmode=disable
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379
+      PLAN_REDIS_KEY: refinery:plan_queue
+      AUTO_PLAN: "1"
+      AUTO_BUILD: "1"
       KAFKA_BROKERS: ""
       WORKER_WEBHOOK_URL: http://worker:9000/trigger
       WORKER_PLAN_URL: http://worker:9000/plan
