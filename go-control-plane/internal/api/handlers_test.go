@@ -133,6 +133,7 @@ func (f *fakeQueue) Pop(ctx context.Context, max int) ([]queue.Request, error) {
 type fakePlanQueue struct {
 	ids []string
 	err error
+	pop []string
 }
 
 func (f *fakePlanQueue) Enqueue(ctx context.Context, id string) error {
@@ -144,8 +145,7 @@ func (f *fakePlanQueue) Enqueue(ctx context.Context, id string) error {
 }
 
 func (f *fakePlanQueue) Pop(ctx context.Context, max int) ([]string, error) {
-	// Not used in these tests.
-	return nil, nil
+	return f.pop, f.err
 }
 
 func mustMultipart(t *testing.T, filename, content string) (*bytes.Buffer, string) {
@@ -297,6 +297,36 @@ func TestPendingInputManualEnqueue(t *testing.T) {
 	}
 	if len(fs.pendingStatuses) == 0 || fs.pendingStatuses[0].status != "planning" {
 		t.Fatalf("expected status update planning, got %+v", fs.pendingStatuses)
+	}
+}
+
+func TestPendingInputPop(t *testing.T) {
+	fs := &fakeStore{}
+	pq := &fakePlanQueue{pop: []string{"7", "8"}}
+	h := &Handler{Store: fs, Queue: &fakeQueue{}, PlanQ: pq, Config: config.Config{}}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/pending-inputs/pop?max=2", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	idsAny, ok := out["ids"].([]any)
+	if !ok || len(idsAny) != 2 {
+		t.Fatalf("unexpected ids: %+v", out)
+	}
+	if len(fs.pendingStatuses) != 2 || fs.pendingStatuses[0].status != "planning" || fs.pendingStatuses[1].status != "planning" {
+		t.Fatalf("expected planning status updates, got %+v", fs.pendingStatuses)
 	}
 }
 

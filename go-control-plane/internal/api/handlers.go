@@ -39,6 +39,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings", h.settings)
 	mux.HandleFunc("/api/pending-inputs", h.pendingInputs)
 	mux.HandleFunc("/api/pending-inputs/", h.pendingInputAction)
+	mux.HandleFunc("/api/pending-inputs/pop", h.pendingInputPop)
 	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
@@ -417,6 +418,29 @@ func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
 	}
+}
+
+func (h *Handler) pendingInputPop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if h.PlanQ == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "plan queue not configured"})
+		return
+	}
+	max := parseIntDefault(r.URL.Query().Get("max"), 1, 100)
+	ids, err := h.PlanQ.Pop(r.Context(), max)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	for _, idStr := range ids {
+		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil && h.Store != nil {
+			_ = h.Store.UpdatePendingInputStatus(r.Context(), id, "planning", "")
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ids": ids})
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
