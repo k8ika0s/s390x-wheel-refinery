@@ -81,7 +81,7 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <Link to="/" className="brand">
-              <img src={LOGO_SRC} alt="Wheel Refinery logo" className="h-10 w-10 rounded-lg shadow-lg" />
+              <img src={LOGO_SRC} alt="Wheel Refinery logo" className="h-12 w-12 rounded-xl shadow-lg object-contain" />
               <div className="flex flex-col leading-tight">
                 <span className="text-sm text-slate-400">s390x</span>
                 <span className="text-lg font-bold text-accent">Wheel Refinery</span>
@@ -719,12 +719,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
       <div className="hero glass">
         <div className="space-y-2">
-          <div className="flex items-center gap-3">
-            <img src={LOGO_SRC} alt="Wheel Refinery logo" className="h-14 w-14 rounded-xl shadow-lg" />
-            <div>
-              <p className="text-xs tracking-widest text-slate-400 uppercase">Control Plane</p>
-              <h1 className="text-3xl font-extrabold text-slate-50">s390x Wheel Refinery</h1>
-            </div>
+          <div>
+            <p className="text-xs tracking-widest text-slate-400 uppercase">Control Plane</p>
+            <h1 className="text-3xl font-extrabold text-slate-50">s390x Wheel Refinery</h1>
           </div>
           <p className="text-slate-400 text-sm max-w-2xl">
             Monitor build health, steer queue execution, and surface artifacts and hints with a calmer, more intentional layout.
