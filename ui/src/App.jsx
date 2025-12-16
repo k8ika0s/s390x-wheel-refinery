@@ -859,7 +859,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
             <StatTile icon="🧭" label="Recent events" value={filteredRecent.length} hint="Filtered by search" />
             <StatTile icon="🧠" label="Hints loaded" value={hints.length} hint="Recipe guidance available" />
             <StatTile icon="📥" label="Pending inputs" value={pendingTotal} hint={`waiting: ${pendingByStatus.pending || 0}, planning: ${pendingByStatus.planning || 0}`} />
-            <StatTile icon="🗂️" label="Plan queue" value={metrics?.pending?.plan_queue ?? 0} hint="Awaiting plan pop" />
+            <StatTile icon="🗂️" label="Plan queue" value={planQueueLength} hint="Awaiting plan pop" />
           </div>
         </div>
         <div className="flex flex-col gap-3 min-w-[260px]">
