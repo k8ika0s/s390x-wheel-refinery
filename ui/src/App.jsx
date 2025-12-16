@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Link, useParams, useLocation } from "react-router-dom";
-import { API_BASE, clearQueue, enqueueRetry, fetchDashboard, fetchLog, fetchPackageDetail, fetchRecent, setCookieToken, triggerWorker } from "./api";
+import {
+  API_BASE,
+  clearQueue,
+  enqueueRetry,
+  fetchDashboard,
+  fetchLog,
+  fetchPackageDetail,
+  fetchRecent,
+  setCookieToken,
+  triggerWorker,
+  uploadRequirements,
+} from "./api";
 
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
 const LOGO_SRC = "/s390x-wheel-refinery-logo.png";
