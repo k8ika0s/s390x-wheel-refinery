@@ -713,7 +713,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const workerMode =
     dashboard?.queue?.worker_mode ||
     dashboard?.metrics?.queue?.backend ||
-    (Array.isArray(dashboard?.queue) ? "redis" : "unknown");
+    (Array.isArray(dashboard?.queue) ? "redis" : "redis");
   const queueItems = toArray(dashboard?.queue?.items || (Array.isArray(dashboard?.queue) ? dashboard.queue : []));
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = toArray(dashboard?.hints);
