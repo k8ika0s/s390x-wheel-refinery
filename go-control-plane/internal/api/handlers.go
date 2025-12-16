@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"crypto/sha256"
+
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
@@ -286,8 +288,17 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	path := filepath.Join(h.Config.InputDir, "requirements.txt")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	sum := sha256.Sum256(data)
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	unique := fmt.Sprintf("requirements-%s-%x.txt", stamp, sum[:4])
+	pathUnique := filepath.Join(h.Config.InputDir, unique)
+	if err := os.WriteFile(pathUnique, data, 0o644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	// Also refresh canonical path for backwards compatibility.
+	pathCanonical := filepath.Join(h.Config.InputDir, "requirements.txt")
+	if err := os.WriteFile(pathCanonical, data, 0o644); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -295,7 +306,8 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 		"detail":     "requirements uploaded",
 		"bytes":      len(data),
 		"filename":   header.Filename,
-		"saved_path": path,
+		"saved_path": pathUnique,
+		"canonical":  pathCanonical,
 	})
 }
 
