@@ -6,7 +6,7 @@ RUN dnf -y update && \
 WORKDIR /src
 ARG MINIO_TAG=RELEASE.2024-12-07T00-52-20Z
 RUN git clone https://github.com/minio/minio.git . && git checkout "$MINIO_TAG"
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -o /minio ./cmd/minio
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -o /minio ./cmd/minio
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal:9.3
 RUN microdnf -y update && microdnf -y install shadow-utils && microdnf clean all
