@@ -1,7 +1,7 @@
 # s390x Wheel Refinery
 
 <p align="center">
-  <img src="public/s390x-wheel-refinery-logo.png" alt="s390x Wheel Refinery logo" width="520" />
+  <img src="ui/public/s390x-wheel-refinery-logo.png" alt="s390x Wheel Refinery logo" width="520" />
 </p>
 
 ![CI](https://github.com/k8ika0s/s390x-wheel-refinery/actions/workflows/ci.yml/badge.svg)
