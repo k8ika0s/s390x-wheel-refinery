@@ -198,6 +198,20 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&buf, "# HELP refinery_queue_oldest_seconds Age in seconds of the oldest queued item.\n")
 	fmt.Fprintf(&buf, "# TYPE refinery_queue_oldest_seconds gauge\n")
 	fmt.Fprintf(&buf, "refinery_queue_oldest_seconds %d\n", qstats.OldestAge)
+	if pq, ok := h.PlanQ.(interface {
+		Len(context.Context) (int64, error)
+	}); ok && pq != nil {
+		if n, err := pq.Len(ctx); err == nil {
+			fmt.Fprintf(&buf, "# HELP refinery_plan_queue_length Items waiting for planning.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_plan_queue_length gauge\n")
+			fmt.Fprintf(&buf, "refinery_plan_queue_length %d\n", n)
+		}
+	}
+	if list, err := h.Store.ListPendingInputs(ctx, ""); err == nil {
+		fmt.Fprintf(&buf, "# HELP refinery_pending_inputs_total Pending uploads awaiting planning.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_pending_inputs_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_pending_inputs_total %d\n", len(list))
+	}
 	fmt.Fprintf(&buf, "# HELP refinery_db_up Database connectivity (1=up,0=down).\n")
 	fmt.Fprintf(&buf, "# TYPE refinery_db_up gauge\n")
 	fmt.Fprintf(&buf, "refinery_db_up %d\n", dbOK)
@@ -447,6 +461,10 @@ func (h *Handler) pendingInputPop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
 	if h.PlanQ == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "plan queue not configured"})
 		return
@@ -468,6 +486,10 @@ func (h *Handler) pendingInputPop(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) pendingInputStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/pending-inputs/status/"), "/")

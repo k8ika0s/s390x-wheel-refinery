@@ -58,3 +58,12 @@ This document tracks the staged implementation to separate planning and building
 6) Plan worker mode: consume `plan_queue`, store plans, enqueue build when configured.
 7) UI: toggles, lists (pending inputs, plans), actions (generate plan, enqueue build), status badges.
 8) Polish: metrics per queue/worker pool, error surfaces, retries/backoff, pruning old pending/plan records.
+
+## Known gaps to close
+- Build workers still consume the legacy build queue/plan.json; need a true build queue keyed by plan/DAG nodes with status updates.
+- Pending → plan → build state machine is partial: no “planned/failed planning” status surfaced, no build status transitions, and no retries/backoff.
+- Planner loop lacks dedupe/in-flight tracking and robust error handling/backoff.
+- Planner pop/status endpoints are not yet worker-token protected.
+- Prometheus metrics omit plan queue/pending gauges.
+- Settings persistence relies on a shared settings file; verify volume mounting so AutoPlan/AutoBuild survive restarts.
+- No integration test for upload → pending → plan → build; minimal coverage for planner loop error paths.
