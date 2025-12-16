@@ -1,14 +1,6 @@
 const inferApiBase = () => {
   const envBase = import.meta.env.VITE_API_BASE;
   if (envBase) return envBase;
-  if (typeof window !== "undefined") {
-    const url = new URL(window.location.href);
-    // If UI is on 3000/5173 during dev, assume API is on 8080 on the same host.
-    const apiPort = url.port && url.port !== "80" && url.port !== "443" ? url.port : "";
-    const guessPort = apiPort && (apiPort === "3000" || apiPort === "5173") ? "8080" : apiPort;
-    const portSegment = guessPort ? `:${guessPort}` : "";
-    return `${url.protocol}//${url.hostname}${portSegment}`;
-  }
   return "";
 };
 
