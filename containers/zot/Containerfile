@@ -11,7 +11,8 @@ RUN git clone https://github.com/project-zot/zot.git .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -o /zot ./cmd/zot
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal
-RUN microdnf -y update && microdnf -y install shadow-utils curl && microdnf clean all
+# curl-minimal is preinstalled on UBI; avoid pulling full curl to sidestep conflicts on subscribed hosts.
+RUN microdnf -y update && microdnf -y install shadow-utils && microdnf clean all
 RUN useradd -r -u 1000 zot && mkdir -p /var/lib/zot && chown -R zot:zot /var/lib/zot
 COPY --from=builder /zot /usr/local/bin/zot
 COPY <<'EOF' /etc/zot/config.json
