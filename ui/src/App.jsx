@@ -596,7 +596,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
       const data = await fetchDashboard(authToken);
       const pending = await fetchPendingInputs(authToken).catch(() => []);
       setPendingInputs(Array.isArray(pending) ? pending : []);
-      setDashboard({ ...data, recent });
+      setDashboard({ ...data, recent, pending });
       onMetrics?.(data.metrics);
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
@@ -755,6 +755,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
     dashboard?.queue?.worker_mode ||
     dashboard?.metrics?.queue?.backend ||
     (Array.isArray(dashboard?.queue) ? "redis" : "redis");
+  const planQueueLength = dashboard?.metrics?.pending?.plan_queue ?? 0;
   const queueItems = toArray(dashboard?.queue?.items || (Array.isArray(dashboard?.queue) ? dashboard.queue : []));
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = toArray(dashboard?.hints);

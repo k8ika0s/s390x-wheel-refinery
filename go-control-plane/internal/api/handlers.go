@@ -868,15 +868,19 @@ func (h *Handler) queueList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	items, err := h.Queue.List(r.Context())
+	ctx := r.Context()
+	items, err := h.Queue.List(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	stats, _ := h.Queue.Stats(ctx)
 	resp := map[string]any{
-		"items":       items,
-		"length":      len(items),
-		"worker_mode": h.Config.QueueBackend,
+		"items":        items,
+		"length":       len(items),
+		"worker_mode":  h.Config.QueueBackend,
+		"oldest_age_s": stats.OldestAge,
+		"auto_build":   h.Config.AutoBuild,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
