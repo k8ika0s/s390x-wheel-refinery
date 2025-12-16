@@ -108,6 +108,9 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, pendingI
               <span className="chip bg-slate-800 border-border text-xs">Q: {metrics.queue.length}</span>
             )}
             <span className="chip bg-slate-800 border-border text-xs">Pending: {pendingInputs.length}</span>
+            {metrics?.pending?.plan_queue !== undefined && (
+              <span className="chip bg-slate-800 border-border text-xs">PlanQ: {metrics.pending.plan_queue}</span>
+            )}
             {metrics?.db?.status && (
               <span className={`chip bg-slate-800 border-border text-xs ${metrics.db.status === "ok" ? "text-emerald-300" : "text-amber-300"}`}>
                 DB: {metrics.db.status}
@@ -855,6 +858,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
             <StatTile icon="🧭" label="Recent events" value={filteredRecent.length} hint="Filtered by search" />
             <StatTile icon="🧠" label="Hints loaded" value={hints.length} hint="Recipe guidance available" />
             <StatTile icon="📥" label="Pending inputs" value={pendingTotal} hint={`waiting: ${pendingByStatus.pending || 0}, planning: ${pendingByStatus.planning || 0}`} />
+            <StatTile icon="🗂️" label="Plan queue" value={metrics?.pending?.plan_queue ?? 0} hint="Awaiting plan pop" />
           </div>
         </div>
         <div className="flex flex-col gap-3 min-w-[260px]">
@@ -1099,6 +1103,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Worker mode</span>
                 <span className="chip">{workerMode}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Plan queue</span>
+                <span className="chip">{metrics?.pending?.plan_queue ?? 0}</span>
               </div>
               <button className="btn btn-primary w-full" onClick={handleTriggerWorker}>Run worker now</button>
               <div className="flex flex-wrap gap-2">
