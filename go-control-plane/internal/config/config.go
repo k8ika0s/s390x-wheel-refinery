@@ -20,6 +20,7 @@ type Config struct {
 	WorkerLocalCmd   string
 	SkipMigrate      bool
 	InputDir         string
+	SettingsPath     string
 }
 
 // FromEnv loads configuration with sensible defaults.
@@ -39,6 +40,7 @@ func FromEnv() Config {
 		WorkerLocalCmd:   getenv("WORKER_LOCAL_CMD", ""),
 		SkipMigrate:      getenv("CP_SKIP_MIGRATE", "") != "",
 		InputDir:         getenv("INPUT_DIR", "/input"),
+		SettingsPath:     getenv("SETTINGS_PATH", "/config/settings.json"),
 	}
 	return cfg
 }

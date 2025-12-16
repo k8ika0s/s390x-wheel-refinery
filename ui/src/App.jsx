@@ -8,8 +8,10 @@ import {
   fetchLog,
   fetchPackageDetail,
   fetchRecent,
+  fetchSettings,
   setCookieToken,
   triggerWorker,
+  updateSettings,
   uploadRequirements,
 } from "./api";
 
@@ -557,6 +559,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const [recentLimit, setRecentLimit] = useState(25);
   const [pollMs, setPollMs] = useState(10000);
   const [search, setSearch] = useState("");
+  const [settingsData, setSettingsData] = useState(null);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
 
   const load = async (opts = {}) => {
     const { packageFilter, statusFilter: status } = opts;
@@ -586,6 +591,20 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   useEffect(() => {
     load({ packageFilter: pkgFilter, statusFilter });
   }, [authToken, pkgFilter, statusFilter, recentLimit]);
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const s = await fetchSettings(authToken);
+        setSettingsData(s);
+        if (s.recent_limit) setRecentLimit(s.recent_limit);
+        if (s.poll_ms !== undefined) setPollMs(s.poll_ms || 0);
+      } catch {
+        // ignore settings load failures silently
+      }
+    };
+    loadSettings();
+  }, [authToken]);
 
   useEffect(() => {
     if (!pollMs) return;
@@ -741,6 +760,27 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
 
   const clearSelected = () => setSelectedQueue({});
 
+  const handleSaveSettings = async () => {
+    if (!settingsData) return;
+    setSettingsSaving(true);
+    try {
+      const body = {
+        python_version: settingsData.python_version,
+        platform_tag: settingsData.platform_tag,
+        poll_ms: pollMs,
+        recent_limit: recentLimit,
+      };
+      const resp = await updateSettings(body, authToken);
+      setSettingsData(resp);
+      setSettingsDirty(false);
+      pushToast?.({ type: "success", title: "Settings saved", message: "Defaults updated" });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Settings save failed", message: e.message });
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
   const renderLoading = () => (
     <div className="space-y-4">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -811,6 +851,71 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
         </div>
       )}
       {message && <div className="text-green-400 text-sm">{message}</div>}
+
+      <div className="glass p-4 space-y-3 mt-2">
+        <div className="flex items-center justify-between">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Settings</span>
+            <span className="chip text-xs">⚙️</span>
+          </div>
+          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => handleSaveSettings()} disabled={settingsSaving || !settingsData}>
+            {settingsSaving ? "Saving..." : "Save defaults"}
+          </button>
+        </div>
+        <div className="grid md:grid-cols-4 gap-3 text-sm text-slate-200">
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Python version</div>
+            <input
+              className="input"
+              placeholder="e.g. 3.11"
+              value={settingsData?.python_version || ""}
+              onChange={(e) => {
+                setSettingsData((s) => ({ ...(s || {}), python_version: e.target.value }));
+                setSettingsDirty(true);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Platform tag</div>
+            <input
+              className="input"
+              placeholder="manylinux2014_s390x"
+              value={settingsData?.platform_tag || ""}
+              onChange={(e) => {
+                setSettingsData((s) => ({ ...(s || {}), platform_tag: e.target.value }));
+                setSettingsDirty(true);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Recent limit</div>
+            <input
+              className="input"
+              type="number"
+              value={recentLimit}
+              onChange={(e) => {
+                setRecentLimit(Number(e.target.value) || 25);
+                setSettingsDirty(true);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Poll (ms, 0=off)</div>
+            <input
+              className="input"
+              type="number"
+              value={pollMs}
+              onChange={(e) => {
+                setPollMs(Number(e.target.value) || 0);
+                setSettingsDirty(true);
+              }}
+            />
+          </div>
+        </div>
+        <div className="text-xs text-slate-500">
+          These defaults inform queue enqueues and UI polling limits. Worker runtime Python still follows the configured worker image/env.
+        </div>
+      </div>
 
       <div className="glass p-4 space-y-3 mt-2">
         <div className="text-lg font-semibold flex items-center gap-2">

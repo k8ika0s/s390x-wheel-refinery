@@ -16,6 +16,7 @@ import (
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
 )
 
@@ -32,6 +33,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/metrics", h.metrics)
 	mux.HandleFunc("/metrics", h.promMetrics)
 	mux.HandleFunc("/api/config", h.config)
+	mux.HandleFunc("/api/settings", h.settings)
 	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
@@ -206,6 +208,7 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	currentSettings := settings.Load(h.Config.SettingsPath)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"http_addr":        h.Config.HTTPAddr,
 		"queue_backend":    h.Config.QueueBackend,
@@ -218,6 +221,8 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		"worker_webhook":   h.Config.WorkerWebhookURL != "",
 		"worker_local_cmd": h.Config.WorkerLocalCmd != "",
 		"input_dir":        h.Config.InputDir,
+		"settings_path":    h.Config.SettingsPath,
+		"settings":         currentSettings,
 	})
 }
 
@@ -292,6 +297,33 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 		"filename":   header.Filename,
 		"saved_path": path,
 	})
+}
+
+func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, settings.Load(h.Config.SettingsPath))
+	case http.MethodPost:
+		var s settings.Settings
+		if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		// basic normalization
+		if s.RecentLimit <= 0 {
+			s.RecentLimit = 25
+		}
+		if s.PollMs < 0 {
+			s.PollMs = 0
+		}
+		if err := settings.Save(h.Config.SettingsPath, s); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, s)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
 
 func (h *Handler) notImplemented(w http.ResponseWriter, r *http.Request) {

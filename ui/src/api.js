@@ -104,6 +104,14 @@ export async function uploadRequirements(file, token) {
   return resp.json();
 }
 
+export function fetchSettings(token) {
+  return request("/api/settings", {}, token);
+}
+
+export function updateSettings(body, token) {
+  return request("/api/settings", { method: "POST", body: JSON.stringify(body) }, token);
+}
+
 export function fetchPackageDetail(name, token, limit = 50) {
   return Promise.all([
     request(`/api/package/${encodeURIComponent(name)}`, {}, token),
