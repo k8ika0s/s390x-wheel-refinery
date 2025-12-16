@@ -143,6 +143,11 @@ func (f *fakePlanQueue) Enqueue(ctx context.Context, id string) error {
 	return nil
 }
 
+func (f *fakePlanQueue) Pop(ctx context.Context, max int) ([]string, error) {
+	// Not used in these tests.
+	return nil, nil
+}
+
 func mustMultipart(t *testing.T, filename, content string) (*bytes.Buffer, string) {
 	t.Helper()
 	var buf bytes.Buffer
