@@ -1228,6 +1228,20 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
                     <span className="chip">{metrics.queue?.oldest_age_seconds ?? "-"}</span>
                   </div>
                   <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Auto-build</span>
+                    <span className={`chip ${metrics.auto_build ? "bg-emerald-900" : "bg-slate-800"}`}>
+                      {metrics.auto_build ? "on" : "off"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Pending inputs</span>
+                    <span className="chip">{metrics.pending?.count ?? 0}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Plan queue</span>
+                    <span className="chip">{metrics.pending?.plan_queue ?? 0}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
                     <span className="text-slate-400">DB</span>
                     <span className={`chip ${metrics.db?.status === "ok" ? "bg-emerald-900" : "bg-slate-800"}`}>
                       {metrics.db?.status || "unknown"}
