@@ -1,12 +1,14 @@
+# Build MinIO from source on UBI to avoid Docker Hub pulls and to ensure s390x-native binary for airgapped builds.
 FROM registry.access.redhat.com/ubi9/ubi:9.3 AS builder
 RUN dnf -y update && \
     dnf -y install golang git make gcc && \
     dnf clean all
 
 WORKDIR /src
-ARG MINIO_TAG=RELEASE.2024-12-07T00-52-20Z
+ARG MINIO_TAG=RELEASE.2025-10-15T17-29-55Z
 RUN git clone https://github.com/minio/minio.git . && git checkout "$MINIO_TAG"
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -o /minio ./cmd/minio
+# MinIO repo moved the server main under ./; build the whole module with CGO off for static-ish binary on s390x.
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -o /minio .
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal:9.3
 RUN microdnf -y update && microdnf -y install shadow-utils && microdnf clean all

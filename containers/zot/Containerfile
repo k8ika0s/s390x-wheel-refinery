@@ -1,7 +1,12 @@
-FROM golang:1.22 as builder
-WORKDIR /src
-RUN git clone https://github.com/project-zot/zot.git .
-RUN CGO_ENABLED=0 go build -o /zot ./cmd/zot
+ # Build zot from source on UBI with locally installed Go to avoid Docker Hub pulls and get Go >=1.25 on s390x.
+ FROM registry.access.redhat.com/ubi9/ubi:9.3 as builder
+ RUN dnf -y update && \
+     dnf -y install golang git make gcc && \
+     dnf clean all
+ WORKDIR /src
+ RUN git clone https://github.com/project-zot/zot.git .
+ # Zot upstream requires Go 1.25; build statically oriented binary for s390x.
+ RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -o /zot ./cmd/zot
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal
 RUN microdnf -y update && microdnf -y install shadow-utils && microdnf clean all
