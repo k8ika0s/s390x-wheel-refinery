@@ -709,9 +709,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
     pushToast?.({ type: "success", title: "Token saved", message: "Worker token stored locally" });
   };
 
-  const queueLength = dashboard?.queue?.length ?? 0;
-  const workerMode = dashboard?.queue?.worker_mode || "unknown";
-  const queueItems = toArray(dashboard?.queue?.items);
+  const queueLength = dashboard?.queue?.length ?? (Array.isArray(dashboard?.queue) ? dashboard.queue.length : 0);
+  const workerMode =
+    dashboard?.queue?.worker_mode ||
+    dashboard?.metrics?.queue?.backend ||
+    (Array.isArray(dashboard?.queue) ? "redis" : "unknown");
+  const queueItems = toArray(dashboard?.queue?.items || (Array.isArray(dashboard?.queue) ? dashboard.queue : []));
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = toArray(dashboard?.hints);
   const metrics = dashboard?.metrics;
