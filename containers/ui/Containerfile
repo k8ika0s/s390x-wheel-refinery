@@ -3,12 +3,13 @@ FROM registry.access.redhat.com/ubi9/nodejs-20:latest AS build
 WORKDIR /app
 # npm expects writable dirs; use root for install/build in this image.
 USER 0
-ARG VITE_API_BASE=http://localhost:8000
+ARG VITE_API_BASE=""
 ENV VITE_API_BASE=${VITE_API_BASE}
-COPY ui/package.json ui/vite.config.js ui/index.html /app/
+COPY ui/package.json ui/package-lock.json ui/vite.config.js ui/index.html /app/
+COPY ui/postcss.config.cjs ui/tailwind.config.cjs /app/
+COPY ui/public /app/public
 COPY ui/src /app/src
-COPY ui/src/styles.css /app/src/styles.css
-RUN npm install
+RUN npm install --include=dev
 RUN npm run build
 
 # Runtime: serve static assets with UBI9 nginx and custom config for SPA.

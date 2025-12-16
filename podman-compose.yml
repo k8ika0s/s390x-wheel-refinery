@@ -82,8 +82,6 @@ services:
     build:
       context: .
       dockerfile: containers/ui/Containerfile
-      args:
-        VITE_API_BASE: http://control-plane:8080
     environment:
       NODE_ENV: production
     ports:

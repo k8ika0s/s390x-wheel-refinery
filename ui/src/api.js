@@ -1,4 +1,18 @@
-export const API_BASE = import.meta.env.VITE_API_BASE || "";
+const inferApiBase = () => {
+  const envBase = import.meta.env.VITE_API_BASE;
+  if (envBase) return envBase;
+  if (typeof window !== "undefined") {
+    const url = new URL(window.location.href);
+    // If UI is on 3000/5173 during dev, assume API is on 8080 on the same host.
+    const apiPort = url.port && url.port !== "80" && url.port !== "443" ? url.port : "";
+    const guessPort = apiPort && (apiPort === "3000" || apiPort === "5173") ? "8080" : apiPort;
+    const portSegment = guessPort ? `:${guessPort}` : "";
+    return `${url.protocol}//${url.hostname}${portSegment}`;
+  }
+  return "";
+};
+
+export const API_BASE = inferApiBase();
 
 const jsonHeaders = (token) => ({
   "Content-Type": "application/json",
@@ -6,7 +20,9 @@ const jsonHeaders = (token) => ({
 });
 
 async function request(path, options = {}, token) {
-  const resp = await fetch(`${API_BASE}${path}`, {
+  const base = API_BASE;
+  const target = base ? `${base}${path}` : path;
+  const resp = await fetch(target, {
     ...options,
     headers: {
       ...jsonHeaders(token),
