@@ -4,7 +4,7 @@
 Today the Go worker still shells out to the Python CLI to generate `plan.json` when it is missing. The goal of the Go resolver is to drop that dependency and let the Go stack (control-plane + worker) scan the input wheels, decide what can be reused, and plan exactly which packages must be rebuilt for s390x. This document describes what the resolver must do, how it fits into the system, and the work needed to implement and integrate it.
 
 ## Responsibilities
-- **Scan input wheels:** Parse wheel filenames/metadata from `/input`, classify pure/compatible wheels vs platform-specific wheels for the target Python tag and platform tag.
+- **Scan input wheels:** Parse wheel filenames/metadata from uploaded wheel objects (stored in object storage), classify pure/compatible wheels vs platform-specific wheels for the target Python tag and platform tag.
 - **Reuse vs rebuild:** Mark pure/compatible wheels as reusable; mark others for rebuild with name, version, python tag, and platform tag.
 - **Dependency expansion:** Consult package metadata (Requires-Dist) and the configured indexes to plan missing dependencies; keep depth/breadth bounded to avoid explosion.
 - **Upgrade strategy:** Support strategies:
@@ -16,11 +16,11 @@ Today the Go worker still shells out to the Python CLI to generate `plan.json` w
 
 ## Integration points
 - **Control-plane API:** Expose a resolver endpoint so the UI/API can trigger a plan and store it alongside history/manifest.
-- **Worker:** Replace the Python CLI fallback in the worker with the Go resolver; prefer `/output/plan.json`, then `/cache/plan.json`, otherwise call the Go resolver.
+- **Worker:** Replace the Python CLI fallback in the worker with the Go resolver; prefer `/output/plan.json`, then `/cache/plan.json`, otherwise plan from the control-plane pending input metadata.
 - **History/hints:** Feed the plan builder with known failures/hints to allow skip-known-failures and hint-driven retries to stay consistent with the Python flow.
 
 ## Success criteria
-- Running the Go resolver against a given `/input`, `/cache`, and target python/platform yields a `plan.json` identical (or materially equivalent) to the Python CLI for the same inputs/config.
+- Running the Go resolver against a given input set, `/cache`, and target python/platform yields a `plan.json` identical (or materially equivalent) to the Python CLI for the same inputs/config.
 - Worker no longer shells out to Python; control-plane can serve plans to the UI and worker.
 - Tests cover pure/compatible reuse, platform rebuilds, dependency expansion (bounded), and failure modes (missing pins, incompatible wheels).
 
@@ -39,4 +39,4 @@ Today the Go worker still shells out to the Python CLI to generate `plan.json` w
 No blocking gaps for current scope. Recent improvements: richer error reporting (empty input, capped deps via `MAX_DEPS`), and a basic benchmark (compute on fixture). Remaining nice-to-haves: more detailed index failure surfacing in the UI/logs and timing comparisons vs the legacy Python path on larger corpora.
 
 ## New capability: requirements.txt input
-The resolver now accepts a `requirements.txt` in `/input` (or `REQUIREMENTS_PATH`) as the seed. It resolves unpinned specs (`>=`, `~=`) via the configured index, applies overrides (`PLAN_OVERRIDES_JSON`), caps expansion via `MAX_DEPS`, and emits a plan even when no wheels are present.
+The resolver now accepts an uploaded `requirements.txt` (stored in object storage, or `REQUIREMENTS_PATH` if using a local dev path) as the seed. It resolves unpinned specs (`>=`, `~=`) via the configured index, applies overrides (`PLAN_OVERRIDES_JSON`), caps expansion via `MAX_DEPS`, and emits a plan even when no wheels are present.

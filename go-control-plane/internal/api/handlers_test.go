@@ -7,8 +7,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
@@ -22,6 +20,7 @@ type fakeStore struct {
 	lastEvent       store.Event
 	nextPendingID   int64
 	listPending     []store.PendingInput
+	lastPending     store.PendingInput
 	pendingStatuses []struct {
 		id     int64
 		status string
@@ -98,6 +97,9 @@ func (f *fakeStore) SavePlan(ctx context.Context, runID string, nodes []store.Pl
 	f.lastPlan = nodes
 	return 1, nil
 }
+func (f *fakeStore) DeletePlans(ctx context.Context, planID int64) (int64, error) {
+	return 0, nil
+}
 func (f *fakeStore) QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []store.PlanNode) error {
 	f.queuedBuilds = append(f.queuedBuilds, nodes...)
 	return nil
@@ -115,6 +117,7 @@ func (f *fakeStore) AddPendingInput(ctx context.Context, pi store.PendingInput) 
 	if f.nextPendingID == 0 {
 		f.nextPendingID = 1
 	}
+	f.lastPending = pi
 	id := f.nextPendingID
 	f.nextPendingID++
 	return id, nil
@@ -130,6 +133,15 @@ func (f *fakeStore) UpdatePendingInputStatus(ctx context.Context, id int64, stat
 	}{id: id, status: status, errMsg: errMsg})
 	return nil
 }
+func (f *fakeStore) DeletePendingInput(ctx context.Context, id int64) (store.PendingInput, error) {
+	return store.PendingInput{ID: id}, nil
+}
+func (f *fakeStore) LinkPlanToPendingInput(ctx context.Context, pendingID, planID int64) error {
+	return nil
+}
+func (f *fakeStore) UpdatePendingInputsForPlan(ctx context.Context, planID int64, status string) (int64, error) {
+	return 0, nil
+}
 func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int) ([]store.BuildStatus, error) {
 	return nil, nil
 }
@@ -138,6 +150,9 @@ func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status,
 }
 func (f *fakeStore) LeaseBuilds(ctx context.Context, max int) ([]store.BuildStatus, error) {
 	return nil, nil
+}
+func (f *fakeStore) DeleteBuilds(ctx context.Context, status string) (int64, error) {
+	return 0, nil
 }
 
 // fakeQueue implements only Stats for these tests.
@@ -176,6 +191,26 @@ func (f *fakePlanQueue) Pop(ctx context.Context, max int) ([]string, error) {
 }
 func (f *fakePlanQueue) Len(ctx context.Context) (int64, error) {
 	return int64(len(f.ids) + len(f.pop)), f.err
+}
+func (f *fakePlanQueue) Clear(ctx context.Context) ([]string, error) {
+	return f.ids, f.err
+}
+
+type fakeObjectStore struct {
+	lastKey         string
+	lastContentType string
+	lastData        []byte
+}
+
+func (f *fakeObjectStore) Put(_ context.Context, key string, data []byte, contentType string) error {
+	f.lastKey = key
+	f.lastContentType = contentType
+	f.lastData = append([]byte(nil), data...)
+	return nil
+}
+
+func (f *fakeObjectStore) URL(key string) string {
+	return "http://example/" + key
 }
 
 func mustMultipart(t *testing.T, filename, content string) (*bytes.Buffer, string) {
@@ -391,12 +426,17 @@ func TestPendingInputStatusUpdate(t *testing.T) {
 }
 
 func TestRequirementsUploadAutoEnqueue(t *testing.T) {
-	tmp := t.TempDir()
 	fs := &fakeStore{nextPendingID: 42}
 	pq := &fakePlanQueue{}
+	fo := &fakeObjectStore{}
 	h := &Handler{
-		Store: fs, Queue: &fakeQueue{}, PlanQ: pq,
-		Config: config.Config{InputDir: tmp, AutoPlan: true},
+		Store: fs, Queue: &fakeQueue{}, PlanQ: pq, InputStore: fo,
+		Config: config.Config{
+			AutoPlan:            true,
+			ObjectStoreEndpoint: "minio:9000",
+			ObjectStoreBucket:   "inputs",
+			InputObjectPrefix:   "inputs",
+		},
 	}
 	mux := http.NewServeMux()
 	h.Routes(mux)
@@ -424,14 +464,10 @@ func TestRequirementsUploadAutoEnqueue(t *testing.T) {
 	if len(fs.pendingStatuses) == 0 || fs.pendingStatuses[0].status != "planning" {
 		t.Fatalf("expected planning status update, got %+v", fs.pendingStatuses)
 	}
-	// files written
-	matches, _ := filepath.Glob(filepath.Join(tmp, "requirements-*.txt"))
-	if len(matches) == 0 {
-		t.Fatalf("expected unique requirements file written")
+	if fo.lastKey == "" || len(fo.lastData) == 0 {
+		t.Fatalf("expected object store upload, got key=%q bytes=%d", fo.lastKey, len(fo.lastData))
 	}
-	canonical := filepath.Join(tmp, "requirements.txt")
-	data, err := os.ReadFile(canonical)
-	if err != nil || string(data) != "pkg==1.0\n" {
-		t.Fatalf("unexpected canonical content: %q err=%v", string(data), err)
+	if fs.lastPending.SourceType != "requirements" {
+		t.Fatalf("expected requirements source_type, got %q", fs.lastPending.SourceType)
 	}
 }

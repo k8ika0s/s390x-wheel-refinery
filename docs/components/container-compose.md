@@ -1,8 +1,8 @@
-Containers and compose files are the refinery’s “packaging and wiring.” They define how the API/worker and UI run in isolated environments, which volumes are mounted, and how services talk to each other. For a layperson: this is the recipe that spins up the whole system with the right folders shared for input, output, and cache.
+Containers and compose files are the refinery’s “packaging and wiring.” They define how the API/worker and UI run in isolated environments, which volumes are mounted, and how services talk to each other. For a layperson: this is the recipe that spins up the whole system with the right folders shared for output and cache, while inputs live in object storage.
 
 **Purpose / Responsibilities**
 - Build/run the Go control-plane + Go worker containers and the UI container (static SPA served on 3000).
-- Wire volumes `/input`, `/output`, `/cache`, and pass worker token/webhook/env via compose.
+- Wire volumes `/output`, `/cache`, and pass worker token/webhook/env via compose (inputs are stored in MinIO/Zot instead of a shared `/input` volume).
 - Allow local development (`npm run dev` for UI, Go binaries for control-plane/worker), and production builds via Containerfiles.
 
 **Why it matters**
@@ -15,7 +15,7 @@ Containers and compose files are the refinery’s “packaging and wiring.” Th
 
 **Current status**
 - Containerfiles for Go control-plane, Go worker, and UI exist; podman-compose includes control-plane, worker, UI, Postgres, Redis, and Redpanda. Worker runs privileged to allow embedded podman.
-- CORS configured for SPA; mounts placeholders for input/output/cache.
+- CORS configured for SPA; mounts placeholders for output/cache.
 
 **Next steps / gaps**
 - Validate compose on target s390x host; document required env vars and volume permissions.

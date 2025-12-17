@@ -82,16 +82,35 @@ const defaultPyTag = import.meta.env.VITE_DEFAULT_PYTHON_TAG || "cp311";
 const defaultPlatform = import.meta.env.VITE_DEFAULT_PLATFORM_TAG || "manylinux2014_s390x";
 
 export async function fetchDashboard(token) {
-  const [summary, recent, failures, slowest, queue, hints] = await Promise.all([
+  const [summary, recent, failures, slowest, queue] = await Promise.all([
     request("/api/summary", {}, token),
     request("/api/recent?limit=25", {}, token),
     request("/api/top-failures?limit=10", {}, token),
     request("/api/top-slowest?limit=10", {}, token),
     request("/api/queue", {}, token),
-    request("/api/hints", {}, token),
   ]);
   const metrics = await request("/api/metrics", {}, token).catch(() => null);
-  return { summary, recent, failures, slowest, queue, hints, metrics };
+  return { summary, recent, failures, slowest, queue, metrics };
+}
+
+export function fetchSummary(token) {
+  return request("/api/summary", {}, token);
+}
+
+export function fetchTopFailures(limit = 10, token) {
+  return request(`/api/top-failures?limit=${limit}`, {}, token);
+}
+
+export function fetchTopSlowest(limit = 10, token) {
+  return request(`/api/top-slowest?limit=${limit}`, {}, token);
+}
+
+export function fetchQueue(token) {
+  return request("/api/queue", {}, token);
+}
+
+export function fetchMetrics(token) {
+  return request("/api/metrics", {}, token);
 }
 
 export function triggerWorker(token) {
@@ -124,6 +143,17 @@ export function enqueuePlan(id, token) {
   return request(`/api/pending-inputs/${id}/enqueue-plan`, { method: "POST" }, token);
 }
 
+export function deletePendingInput(id, token) {
+  return request(`/api/pending-inputs/${id}`, { method: "DELETE" }, token);
+}
+
+export function clearPendingInputs(status = "pending", token) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  const qs = params.toString();
+  return request(qs ? `/api/pending-inputs/clear?${qs}` : "/api/pending-inputs/clear", { method: "POST" }, token);
+}
+
 export async function uploadRequirements(file, token) {
   const fd = new FormData();
   fd.append("file", file);
@@ -139,8 +169,32 @@ export async function uploadRequirements(file, token) {
   return resp.json();
 }
 
+export async function uploadWheel(file, token) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const resp = await fetch(joinBasePath(getApiBase(), "/api/wheels/upload"), {
+    method: "POST",
+    body: fd,
+    headers,
+  });
+  if (!resp.ok) {
+    throw await parseError(resp);
+  }
+  return resp.json();
+}
+
 export function fetchSettings(token) {
   return request("/api/settings", {}, token);
+}
+
+export function fetchHints({ limit = 200, offset = 0, query = "" } = {}, token) {
+  const params = new URLSearchParams();
+  if (limit) params.set("limit", limit);
+  if (offset) params.set("offset", offset);
+  if (query) params.set("q", query);
+  const qs = params.toString();
+  return request(qs ? `/api/hints?${qs}` : "/api/hints", {}, token);
 }
 
 export function updateSettings(body, token) {
@@ -151,10 +205,21 @@ export function enqueueBuildsFromPlan(planId, token) {
   return request(`/api/plan/${planId}/enqueue-builds`, { method: "POST" }, token);
 }
 
+export function clearPlanQueue(token) {
+  return request("/api/plan-queue/clear", { method: "POST" }, token);
+}
+
 export function fetchPlans(limit = 20, token) {
   const params = new URLSearchParams();
   params.set("limit", limit);
   return request(`/api/plans?${params.toString()}`, {}, token);
+}
+
+export function deletePlans(id, token) {
+  const params = new URLSearchParams();
+  if (id) params.set("id", id);
+  const qs = params.toString();
+  return request(qs ? `/api/plans?${qs}` : "/api/plans", { method: "DELETE" }, token);
 }
 
 export function fetchPlan(planId, token) {
@@ -214,4 +279,11 @@ export function fetchBuilds({ status, limit = 200 } = {}, token) {
   if (status) params.set("status", status);
   params.set("limit", limit);
   return request(`/api/builds?${params.toString()}`, {}, token);
+}
+
+export function clearBuilds(status, token) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  const qs = params.toString();
+  return request(qs ? `/api/builds?${qs}` : "/api/builds", { method: "DELETE" }, token);
 }

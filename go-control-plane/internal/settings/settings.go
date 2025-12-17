@@ -50,22 +50,22 @@ func ApplyDefaults(s Settings) Settings {
 	if s.BuildPoolSize == 0 {
 		s.BuildPoolSize = defaultBuildPoolSize
 	}
-	// Auto modes default to true to match current behavior.
+	// Auto modes default to false so queues require explicit enablement.
 	if s.AutoPlan == nil {
-		val := true
+		val := false
 		s.AutoPlan = &val
 	}
 	if s.AutoBuild == nil {
-		val := true
+		val := false
 		s.AutoBuild = &val
 	}
 	return s
 }
 
-// BoolValue resolves a pointer bool to a concrete value (using true as the default).
+// BoolValue resolves a pointer bool to a concrete value (using false as the default).
 func BoolValue(b *bool) bool {
 	if b == nil {
-		return true
+		return false
 	}
 	return *b
 }

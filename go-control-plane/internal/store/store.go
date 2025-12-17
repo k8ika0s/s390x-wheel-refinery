@@ -48,14 +48,23 @@ type LogEntry struct {
 
 // PendingInput represents an uploaded requirements file awaiting planning.
 type PendingInput struct {
-	ID        int64     `json:"id"`
-	Filename  string    `json:"filename"`
-	Digest    string    `json:"digest,omitempty"`
-	SizeBytes int64     `json:"size_bytes,omitempty"`
-	Status    string    `json:"status"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID           int64           `json:"id"`
+	Filename     string          `json:"filename"`
+	Digest       string          `json:"digest,omitempty"`
+	SizeBytes    int64           `json:"size_bytes,omitempty"`
+	Status       string          `json:"status"`
+	Error        string          `json:"error,omitempty"`
+	SourceType   string          `json:"source_type,omitempty"`
+	ObjectBucket string          `json:"object_bucket,omitempty"`
+	ObjectKey    string          `json:"object_key,omitempty"`
+	ContentType  string          `json:"content_type,omitempty"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	LoadedAt     *time.Time      `json:"loaded_at,omitempty"`
+	PlannedAt    *time.Time      `json:"planned_at,omitempty"`
+	ProcessedAt  *time.Time      `json:"processed_at,omitempty"`
+	DeletedAt    *time.Time      `json:"deleted_at,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
 }
 
 // ManifestEntry tracks output wheel metadata.
@@ -177,6 +186,7 @@ type Store interface {
 	LatestPlanSnapshot(ctx context.Context) (PlanSnapshot, error)
 	ListPlans(ctx context.Context, limit int) ([]PlanSummary, error)
 	SavePlan(ctx context.Context, runID string, nodes []PlanNode, dag json.RawMessage) (int64, error)
+	DeletePlans(ctx context.Context, planID int64) (int64, error)
 	QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error
 	Manifest(ctx context.Context, limit int) ([]ManifestEntry, error)
 	SaveManifest(ctx context.Context, entries []ManifestEntry) error
@@ -186,11 +196,15 @@ type Store interface {
 	AddPendingInput(ctx context.Context, pi PendingInput) (int64, error)
 	ListPendingInputs(ctx context.Context, status string) ([]PendingInput, error)
 	UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error
+	DeletePendingInput(ctx context.Context, id int64) (PendingInput, error)
+	LinkPlanToPendingInput(ctx context.Context, pendingID, planID int64) error
+	UpdatePendingInputsForPlan(ctx context.Context, planID int64, status string) (int64, error)
 
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int) ([]BuildStatus, error)
 	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
+	DeleteBuilds(ctx context.Context, status string) (int64, error)
 }
 
 // HistoryFilter defines filters for history queries.

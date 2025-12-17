@@ -1,27 +1,38 @@
 import { useEffect, useRef, useState } from "react";
-import { Routes, Route, Link, Navigate, useParams, useLocation } from "react-router-dom";
+import { Routes, Route, Link, Navigate, useParams, useLocation, useNavigate } from "react-router-dom";
 import {
   getApiBase,
   clearQueue,
+  clearBuilds,
+  clearPendingInputs,
+  clearPlanQueue,
   enqueueRetry,
   createHint,
   updateHint,
   deleteHint,
   bulkUploadHints,
-  fetchDashboard,
+  fetchMetrics,
+  fetchQueue,
+  fetchSummary,
+  fetchTopFailures,
+  fetchTopSlowest,
   fetchLog,
   fetchPendingInputs,
   fetchPackageDetail,
   fetchRecent,
   fetchBuilds,
   fetchSettings,
+  fetchHints,
   setCookieToken,
   triggerWorker,
   updateSettings,
   uploadRequirements,
+  uploadWheel,
+  deletePendingInput,
   enqueuePlan,
   enqueueBuildsFromPlan,
   fetchPlans,
+  deletePlans,
   fetchPlan,
 } from "./api";
 
@@ -114,8 +125,9 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, apiBase,
   const navItems = [
     { to: "/", label: "Overview", aliases: ["/overview"] },
     { to: "/inputs", label: "Inputs" },
-    { to: "/queues", label: "Queues" },
+    { to: "/plans", label: "Plans" },
     { to: "/builds", label: "Builds" },
+    { to: "/queues", label: "Queues" },
     { to: "/hints", label: "Hints" },
     { to: "/settings", label: "Settings" },
   ];
@@ -204,13 +216,11 @@ function StatCard({ title, children }) {
 function StatTile({ icon, label, value, hint }) {
   return (
     <div className="stat-tile glass">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-xl">{icon}</span>
-          <div className="text-sm text-slate-400">{label}</div>
-        </div>
-        <div className="text-2xl font-semibold text-slate-50">{value}</div>
+      <div className="flex items-center gap-2 text-sm text-slate-400">
+        <span className="text-xl">{icon}</span>
+        <div>{label}</div>
       </div>
+      <div className="text-3xl font-semibold text-slate-50 text-center py-2">{value}</div>
       {hint && <div className="text-xs text-slate-500 mt-1">{hint}</div>}
     </div>
   );
@@ -513,7 +523,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
 
       {tab === "events" && (
         <div className="space-y-3">
-          <div className="glass p-4 space-y-3">
+          <div className="glass p-4 space-y-3 min-w-0">
             <div className="flex items-center justify-between">
               <div className="text-lg font-semibold">Events</div>
             </div>
@@ -614,6 +624,8 @@ function PackageDetail({ token, pushToast, apiBase }) {
 const STATUS_CHIPS = ["built", "failed", "retry", "reused", "cached", "missing", "skipped_known_failure"];
 
 function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, apiBase, onApiBaseChange, view = "overview" }) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [authToken, setAuthToken] = useState(localStorage.getItem("refinery_token") || token || "");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -624,6 +636,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [selectedQueue, setSelectedQueue] = useState({});
   const [reqFile, setReqFile] = useState(null);
   const [reqError, setReqError] = useState("");
+  const [wheelFile, setWheelFile] = useState(null);
+  const [wheelError, setWheelError] = useState("");
 
   const [pkgFilter, setPkgFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -637,65 +651,124 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [apiBlocked, setApiBlocked] = useState(false);
   const [pendingInputs, setPendingInputs] = useState([]);
   const [builds, setBuilds] = useState([]);
+  const [buildsLoading, setBuildsLoading] = useState(false);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
+  const [clearingBuilds, setClearingBuilds] = useState(false);
+  const [clearingPendingInputs, setClearingPendingInputs] = useState(false);
+  const [clearingPlanQueue, setClearingPlanQueue] = useState(false);
   const [planList, setPlanList] = useState([]);
   const [planListLoading, setPlanListLoading] = useState(false);
   const [planListError, setPlanListError] = useState("");
+  const [clearingPlans, setClearingPlans] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [planDetailsLoading, setPlanDetailsLoading] = useState(false);
   const [planDetailsError, setPlanDetailsError] = useState("");
   const [enqueueingBuilds, setEnqueueingBuilds] = useState(false);
   const [hintSearch, setHintSearch] = useState("");
+  const [hintPage, setHintPage] = useState(1);
+  const [hintQuery, setHintQuery] = useState("");
   const [selectedHintId, setSelectedHintId] = useState("");
   const [hintForm, setHintForm] = useState(null);
   const [hintFormError, setHintFormError] = useState("");
   const [hintSaving, setHintSaving] = useState(false);
+  const [hintsState, setHintsState] = useState([]);
+  const [hintsLoading, setHintsLoading] = useState(false);
+  const [hintsError, setHintsError] = useState("");
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkStatus, setBulkStatus] = useState(null);
   const [bulkUploading, setBulkUploading] = useState(false);
   const apiToastShown = useRef(false);
+  const viewKey = view || "overview";
+  const hintPageSize = 200;
+  const [isVisible, setIsVisible] = useState(
+    () => (typeof document !== "undefined" ? document.visibilityState === "visible" : true),
+  );
 
   const isValidDashboard = (data) => {
     if (!data || typeof data !== "object") return false;
     const isObject = (v) => v && typeof v === "object" && !Array.isArray(v);
-    if (!isObject(data.summary)) return false;
-    if (!Array.isArray(data.recent)) return false;
-    if (!Array.isArray(data.failures)) return false;
-    if (!Array.isArray(data.slowest)) return false;
-    if (!(isObject(data.queue) || Array.isArray(data.queue))) return false;
-    if (!Array.isArray(data.hints)) return false;
+    if (data.summary !== null && data.summary !== undefined && !isObject(data.summary)) return false;
+    if (data.recent !== null && data.recent !== undefined && !Array.isArray(data.recent)) return false;
+    if (data.failures !== null && data.failures !== undefined && !Array.isArray(data.failures)) return false;
+    if (data.slowest !== null && data.slowest !== undefined && !Array.isArray(data.slowest)) return false;
+    if (data.queue !== null && data.queue !== undefined && !(isObject(data.queue) || Array.isArray(data.queue))) return false;
     return true;
   };
 
   const load = async (opts = {}) => {
-    if (apiBlocked && !opts.force) {
+    if ((apiBlocked || !isVisible) && !opts.force) {
       return;
     }
-    const { packageFilter, statusFilter: status } = opts;
+    const { packageFilter, statusFilter: status, buildStatusFilter: buildStatusOverride } = opts;
+    const buildStatus = buildStatusOverride ?? buildStatusFilter;
     setLoading(true);
-    setError("");
+    const activeView = opts.view || viewKey;
+    const wantsOverview = activeView === "overview";
+    const wantsQueues = activeView === "queues";
+    const wantsInputs = activeView === "inputs";
+    const wantsBuilds = activeView === "builds";
+    const wantsRecent = wantsOverview || wantsBuilds;
+    if (wantsBuilds) {
+      setBuildsLoading(true);
+    }
     try {
-      const recent = await fetchRecent(
-        {
-          limit: recentLimit,
-          packageFilter: packageFilter ?? pkgFilter,
-          status: status ?? statusFilter,
-        },
-        authToken,
-      );
-      const data = await fetchDashboard(authToken);
+      const recentPromise = wantsRecent
+        ? fetchRecent(
+            {
+              limit: recentLimit,
+              packageFilter: packageFilter ?? pkgFilter,
+              status: status ?? statusFilter,
+            },
+            authToken,
+          )
+        : Promise.resolve(null);
+      const summaryPromise = wantsOverview ? fetchSummary(authToken) : Promise.resolve(null);
+      const failuresPromise = wantsOverview ? fetchTopFailures(10, authToken) : Promise.resolve(null);
+      const slowestPromise = wantsOverview ? fetchTopSlowest(10, authToken) : Promise.resolve(null);
+      const queuePromise = wantsOverview || wantsQueues ? fetchQueue(authToken) : Promise.resolve(null);
+      const metricsPromise = fetchMetrics(authToken).catch(() => null);
+
+      const [recent, summary, failures, slowest, queue, metrics] = await Promise.all([
+        recentPromise,
+        summaryPromise,
+        failuresPromise,
+        slowestPromise,
+        queuePromise,
+        metricsPromise,
+      ]);
+
+      const data = {
+        summary: summary ?? null,
+        recent: Array.isArray(recent) ? recent : [],
+        failures: Array.isArray(failures) ? failures : [],
+        slowest: Array.isArray(slowest) ? slowest : [],
+        queue: queue ?? null,
+        metrics: metrics || null,
+      };
       if (!isValidDashboard(data)) {
         throw new Error("API not connected: unexpected response. Check API base or proxy.");
       }
-      const pending = await fetchPendingInputs(authToken).catch(() => []);
-      setPendingInputs(Array.isArray(pending) ? pending : []);
-      const buildsList = await fetchBuilds({ status: buildStatusFilter || undefined }, authToken).catch(() => []);
-      setBuilds(Array.isArray(buildsList) ? buildsList : []);
-      setDashboard({ ...data, recent, pending, builds: buildsList });
+      if (wantsInputs || wantsOverview) {
+        const pending = await fetchPendingInputs(authToken).catch(() => []);
+        setPendingInputs(Array.isArray(pending) ? pending : []);
+      }
+      if (wantsBuilds) {
+        const buildsList = await fetchBuilds({ status: buildStatus || undefined }, authToken).catch(() => []);
+        setBuilds(Array.isArray(buildsList) ? buildsList : []);
+      }
+      setDashboard((prev) => ({
+        summary: data.summary ?? prev?.summary ?? null,
+        recent: data.recent ?? prev?.recent ?? [],
+        failures: data.failures ?? prev?.failures ?? [],
+        slowest: data.slowest ?? prev?.slowest ?? [],
+        queue: data.queue ?? prev?.queue ?? null,
+        metrics: data.metrics ?? prev?.metrics ?? null,
+      }));
       onMetrics?.(data.metrics);
       onApiStatus?.("ok");
       apiToastShown.current = false;
+      setError("");
       setApiBlocked(false);
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
@@ -712,13 +785,55 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       }
     } finally {
       setLoading(false);
+      if (wantsBuilds) {
+        setBuildsLoading(false);
+      }
+    }
+  };
+
+  const loadHints = async (opts = {}) => {
+    if ((apiBlocked || !isVisible) && !opts.force) {
+      return;
+    }
+    const nextPage = Math.max(1, opts.page ?? hintPage);
+    const nextQuery = (opts.query ?? hintQuery).trim();
+    setHintsLoading(true);
+    setHintsError("");
+    try {
+      const list = await fetchHints(
+        {
+          limit: hintPageSize,
+          offset: (nextPage - 1) * hintPageSize,
+          query: nextQuery,
+        },
+        authToken,
+      );
+      setHintsState(Array.isArray(list) ? list : []);
+      setHintPage(nextPage);
+      setHintQuery(nextQuery);
+      setHintsError("");
+    } catch (e) {
+      const msg = e.message || "Failed to load hints.";
+      setHintsError(msg);
+      pushToast?.({ type: "error", title: "Hints load failed", message: msg });
+    } finally {
+      setHintsLoading(false);
     }
   };
 
   useEffect(() => {
     if (apiBlocked) return;
-    load({ packageFilter: pkgFilter, statusFilter });
-  }, [authToken, pkgFilter, statusFilter, recentLimit, apiBlocked]);
+    if (!isVisible) return;
+    load({ packageFilter: pkgFilter, statusFilter, view: viewKey });
+  }, [authToken, pkgFilter, statusFilter, recentLimit, apiBlocked, isVisible, viewKey]);
+
+  useEffect(() => {
+    if (viewKey !== "hints") return;
+    const handle = setTimeout(() => {
+      loadHints({ force: true, page: 1, query: hintSearch });
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [viewKey, authToken, hintSearch, isVisible]);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -728,7 +843,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         if (s.recent_limit) setRecentLimit(s.recent_limit);
         if (s.poll_ms !== undefined) setPollMs(s.poll_ms || 0);
         if (s.auto_plan !== undefined) {
-          setSettingsData((prev) => ({ ...(prev || s), auto_plan: !!s.auto_plan, auto_build: s.auto_build !== undefined ? !!s.auto_build : true }));
+          setSettingsData((prev) => ({ ...(prev || s), auto_plan: !!s.auto_plan, auto_build: s.auto_build !== undefined ? !!s.auto_build : false }));
         }
         if (s.plan_pool_size !== undefined) {
           setSettingsData((prev) => ({ ...(prev || s), plan_pool_size: s.plan_pool_size }));
@@ -816,19 +931,34 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   });
 
   useEffect(() => {
-    if (!pollMs || apiBlocked) return;
-    const id = setInterval(() => load({ packageFilter: pkgFilter, statusFilter }), pollMs);
+    if (!pollMs || apiBlocked || !isVisible) return;
+    const id = setInterval(() => load({ packageFilter: pkgFilter, statusFilter, view: viewKey }), pollMs);
     return () => clearInterval(id);
-  }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit, apiBlocked]);
+  }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit, apiBlocked, isVisible, viewKey]);
 
   useEffect(() => {
-    if (view === "builds") {
+    const handleVisibility = () => {
+      if (typeof document === "undefined") return;
+      setIsVisible(document.visibilityState === "visible");
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleVisibility);
+    }
+    return () => {
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleVisibility);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (view === "plans") {
       loadPlanList();
     }
   }, [view, authToken]);
 
   useEffect(() => {
-    if (view === "builds" && selectedPlanId) {
+    if (view === "plans" && selectedPlanId) {
       loadPlanDetails(selectedPlanId);
     }
   }, [view, selectedPlanId, authToken]);
@@ -897,6 +1027,100 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
+  const handleClearPendingInputs = async () => {
+    const pendingCount = pendingInputs.filter((pi) => pi.status === "pending").length;
+    if (!pendingCount) {
+      pushToast?.({ type: "info", title: "No pending inputs", message: "Nothing to clear." });
+      return;
+    }
+    if (!window.confirm(`Clear ${pendingCount} pending input${pendingCount === 1 ? "" : "s"}?`)) return;
+    setClearingPendingInputs(true);
+    try {
+      const resp = await clearPendingInputs("pending", authToken);
+      pushToast?.({ type: "success", title: "Pending inputs cleared", message: `${resp.count ?? 0} removed` });
+      await load();
+    } catch (e) {
+      setError(e.message);
+      pushToast?.({ type: "error", title: "Clear pending inputs failed", message: e.message });
+    } finally {
+      setClearingPendingInputs(false);
+    }
+  };
+
+  const handleDeletePendingInput = async (pi) => {
+    if (!pi?.id) return;
+    if (!window.confirm(`Delete pending input ${pi.filename || pi.id}?`)) return;
+    try {
+      await deletePendingInput(pi.id, authToken);
+      pushToast?.({ type: "success", title: "Pending input deleted", message: pi.filename || `ID ${pi.id}` });
+      await load();
+    } catch (e) {
+      setError(e.message);
+      pushToast?.({ type: "error", title: "Delete pending input failed", message: e.message });
+    }
+  };
+
+  const handleClearPlanQueue = async () => {
+    if (!window.confirm("Clear all pending plan queue items? This resets their status to pending.")) return;
+    setClearingPlanQueue(true);
+    try {
+      const resp = await clearPlanQueue(authToken);
+      pushToast?.({ type: "success", title: "Plan queue cleared", message: `${resp.cleared ?? 0} item(s) removed` });
+      await load();
+    } catch (e) {
+      setError(e.message);
+      pushToast?.({ type: "error", title: "Clear plan queue failed", message: e.message });
+    } finally {
+      setClearingPlanQueue(false);
+    }
+  };
+
+  const handleClearBuilds = async () => {
+    const clearStatus = buildStatusFilter || "pending";
+    if (!window.confirm(`Clear ${clearStatus} builds from the queue?`)) return;
+    setClearingBuilds(true);
+    try {
+      const resp = await clearBuilds(clearStatus, authToken);
+      pushToast?.({ type: "success", title: "Builds cleared", message: `${resp.count ?? 0} removed (${clearStatus})` });
+      await load({ packageFilter: pkgFilter, statusFilter, buildStatusFilter });
+    } catch (e) {
+      setError(e.message);
+      pushToast?.({ type: "error", title: "Clear builds failed", message: e.message });
+    } finally {
+      setClearingBuilds(false);
+    }
+  };
+
+  const handleClearPlans = async (planId) => {
+    const label = planId ? `plan ${planId}` : "all plans";
+    if (!window.confirm(`Clear ${label}?`)) return;
+    setClearingPlans(true);
+    try {
+      const resp = await deletePlans(planId, authToken);
+      pushToast?.({ type: "success", title: "Plans cleared", message: `${resp.count ?? 0} removed` });
+      if (planId && selectedPlanId === planId) {
+        setSelectedPlanId(null);
+        setSelectedPlan(null);
+      }
+      await loadPlanList();
+    } catch (e) {
+      setError(e.message);
+      pushToast?.({ type: "error", title: "Clear plans failed", message: e.message });
+    } finally {
+      setClearingPlans(false);
+    }
+  };
+
+  const enqueuePlanForInput = async (pi, verb) => {
+    try {
+      await enqueuePlan(pi.id, authToken);
+      pushToast?.({ type: "success", title: verb, message: pi.filename });
+      await load();
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
+    }
+  };
+
   const lintReqFile = async (file) => {
     if (!file) return "Pick a requirements.txt file";
     if (file.size === 0) return "File is empty";
@@ -935,6 +1159,35 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
+  const handleUploadWheel = async (trigger = false) => {
+    setWheelError("");
+    if (!wheelFile) {
+      const msg = "Pick a wheel (.whl) file";
+      setWheelError(msg);
+      pushToast?.({ type: "error", title: "Upload failed", message: msg });
+      return;
+    }
+    if (!wheelFile.name.toLowerCase().endsWith(".whl")) {
+      const msg = "Wheel file (.whl) required";
+      setWheelError(msg);
+      pushToast?.({ type: "error", title: "Upload failed", message: msg });
+      return;
+    }
+    try {
+      const resp = await uploadWheel(wheelFile, authToken);
+      pushToast?.({ type: "success", title: "Uploaded", message: resp.detail || "wheel uploaded" });
+      if (trigger) {
+        await handleTriggerWorker();
+      } else {
+        await load();
+      }
+    } catch (e) {
+      const msg = e.message || "upload failed";
+      setWheelError(msg);
+      pushToast?.({ type: "error", title: "Upload failed", message: msg });
+    }
+  };
+
   const handleSaveToken = async () => {
     localStorage.setItem("refinery_token", authToken);
     onTokenChange?.(authToken);
@@ -957,12 +1210,48 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const planQueueLength = dashboard?.metrics?.pending?.plan_queue ?? 0;
   const buildQueueLength = dashboard?.metrics?.build?.length ?? 0;
   const buildQueueOldest = dashboard?.metrics?.build?.oldest_age_seconds ?? "-";
+  const clearBuildsLabel = buildStatusFilter ? `Clear ${buildStatusFilter} builds` : "Clear pending builds";
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
-  const hints = toArray(dashboard?.hints);
+  const hints = toArray(hintsState);
   const metrics = dashboard?.metrics;
+  const hintsCount = Number.isFinite(metrics?.hints?.count) ? metrics.hints.count : hints.length;
+  const hintTotalPages = hintQuery ? null : Math.max(1, Math.ceil(hintsCount / hintPageSize));
+  const hintNextDisabled = hintQuery ? hints.length < hintPageSize : hintPage >= hintTotalPages;
+  const hintSuggestionValues = (() => {
+    const term = hintSearch.trim().toLowerCase();
+    const pool = [];
+    for (const h of hints) {
+      if (h?.id) pool.push(h.id);
+      if (h?.pattern) pool.push(h.pattern);
+      if (Array.isArray(h?.tags)) {
+        pool.push(...h.tags);
+      }
+    }
+    const seen = new Set();
+    const out = [];
+    for (const value of pool) {
+      const val = String(value || "").trim();
+      if (!val) continue;
+      if (term && !val.toLowerCase().includes(term)) continue;
+      if (seen.has(val)) continue;
+      seen.add(val);
+      out.push(val);
+      if (out.length >= 8) break;
+    }
+    return out;
+  })();
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
+  const planPythonVersion =
+    selectedPlanNodes.find((n) => n?.python_version)?.python_version ||
+    selectedPlanNodes.find((n) => n?.python_tag)?.python_tag ||
+    settingsData?.python_version ||
+    "-";
+  const planPlatformTag =
+    selectedPlanNodes.find((n) => n?.platform_tag)?.platform_tag ||
+    settingsData?.platform_tag ||
+    "-";
   const pendingByStatus = pendingInputs.reduce(
     (acc, cur) => {
       acc[cur.status] = (acc[cur.status] || 0) + 1;
@@ -970,7 +1259,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     },
     {},
   );
-  const pendingTotal = pendingInputs.length;
+  const visiblePendingInputs = pendingInputs.filter((pi) => ["pending", "planning", "failed"].includes(pi.status));
+  const pendingTotal = visiblePendingInputs.length;
   const filteredRecent = recent.filter((e) => {
     const matchPkg = search ? `${e.name} ${e.version}`.toLowerCase().includes(search.toLowerCase()) : true;
     return matchPkg;
@@ -1004,13 +1294,24 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   });
 
   useEffect(() => {
+    if (viewKey !== "hints") return;
+    const params = new URLSearchParams(location.search);
+    const target = params.get("hint");
+    if (!target) return;
+    const match = filteredHints.find((h) => h.id === target) || hints.find((h) => h.id === target);
+    if (!match || selectedHintId === match.id) return;
+    setSelectedHintId(match.id);
+    setHintForm(normalizeHintForm(match));
+    setHintFormError("");
+  }, [viewKey, location.search, filteredHints, hints, selectedHintId]);
+
+  useEffect(() => {
     if (!selectedHintId && filteredHints.length) {
       setSelectedHintId(filteredHints[0].id);
       setHintForm(normalizeHintForm(filteredHints[0]));
     }
   }, [filteredHints, selectedHintId]);
 
-  const viewKey = view || "overview";
   const alerts = [];
   if (metrics?.db?.status && metrics.db.status !== "ok") {
     alerts.push(`Database is ${metrics.db.status}`);
@@ -1031,6 +1332,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     alerts.push("No worker token set; worker actions may be rejected.");
   }
   const failuresTop = toArray(dashboard?.failures);
+  const planListBadge = planListLoading ? "Loading..." : `${planList.length} plans`;
   const slowestTop = toArray(dashboard?.slowest);
 
   const toggleSelectQueue = (item) => {
@@ -1131,6 +1433,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         await createHint(payload, authToken);
       }
       pushToast?.({ type: "success", title: "Hint saved", message: payload.id });
+      await loadHints({ force: true });
       await load({ packageFilter: pkgFilter, statusFilter, force: true });
     } catch (e) {
       if (Array.isArray(e.details) && e.details.length) {
@@ -1150,6 +1453,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       pushToast?.({ type: "success", title: "Hint deleted", message: selectedHintId });
       setSelectedHintId("");
       setHintForm(null);
+      await loadHints({ force: true });
       await load({ packageFilter: pkgFilter, statusFilter, force: true });
     } catch (e) {
       pushToast?.({ type: "error", title: "Delete failed", message: e.message });
@@ -1165,6 +1469,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       setBulkStatus(resp);
       setBulkFile(null);
       pushToast?.({ type: "success", title: "Hints imported", message: `Loaded ${resp.loaded || 0}` });
+      await loadHints({ force: true });
       await load({ packageFilter: pkgFilter, statusFilter, force: true });
     } catch (e) {
       pushToast?.({ type: "error", title: "Import failed", message: e.message });
@@ -1239,7 +1544,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             <StatTile icon="🗂️" label="Plan queue" value={planQueueLength} hint="Awaiting plan pop" />
             <StatTile icon="🚀" label="Build queue" value={buildQueueLength} hint={`Oldest: ${buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}`} />
             <StatTile icon="🧭" label="Recent events" value={filteredRecent.length} hint="Last fetch" />
-            <StatTile icon="🧠" label="Hints loaded" value={hints.length} hint="Recipe guidance" />
+            <StatTile icon="🧠" label="Hints loaded" value={hintsCount} hint="Recipe guidance" />
           </div>
         </div>
         <div className="flex flex-col gap-3 min-w-[260px]">
@@ -1319,13 +1624,36 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         />
         <StatCard title="Hints">
           <div className="space-y-2 max-h-52 overflow-auto text-sm text-slate-200">
-            {hints.length ? hints.map((h, idx) => (
-                  <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
-                    <div className="font-semibold">Pattern: {h?.pattern || "n/a"}</div>
-                    <div className="text-slate-400">dnf: {(h?.recipes?.dnf || h?.packages?.dnf || []).join(", ") || "-"}</div>
-                    <div className="text-slate-400">apt: {(h?.recipes?.apt || h?.packages?.apt || []).join(", ") || "-"}</div>
-                  </div>
-                )) : <div className="text-slate-400">No hints loaded</div>}
+            {hintsLoading ? (
+              <div className="text-slate-400">Loading hints…</div>
+            ) : hints.length ? (
+              hints.map((h, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  className="text-left w-full text-slate-300 border border-border rounded-lg p-2 hover:bg-slate-800/40"
+                  onClick={() => {
+                    if (!h?.id) return;
+                    navigate(`/hints?hint=${encodeURIComponent(h.id)}`);
+                  }}
+                >
+                  <div className="font-semibold">Pattern: {h?.pattern || "n/a"}</div>
+                  <div className="text-slate-400">dnf: {(h?.recipes?.dnf || h?.packages?.dnf || []).join(", ") || "-"}</div>
+                  <div className="text-slate-400">apt: {(h?.recipes?.apt || h?.packages?.apt || []).join(", ") || "-"}</div>
+                </button>
+              ))
+            ) : (
+              <div className="text-slate-400">Hints load on demand in the Hints tab.</div>
+            )}
+            {hintsError && <div className="text-amber-200 text-xs">{hintsError}</div>}
+            {!hints.length && viewKey !== "hints" && (
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                onClick={() => loadHints({ force: true, page: 1, query: hintSearch })}
+              >
+                Load hints
+              </button>
+            )}
           </div>
         </StatCard>
         {metrics && (
@@ -1368,7 +1696,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         subtitle="Manage requirements uploads and watch them advance into planning."
         badge={`${pendingTotal} pending`}
       />
-      <div className="grid lg:grid-cols-2 gap-4">
+      <div className="grid lg:grid-cols-3 gap-4">
         <div className="glass p-4 space-y-3">
           <div className="text-lg font-semibold flex items-center gap-2">
             <span>Upload requirements.txt</span>
@@ -1390,7 +1718,32 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <button className="btn btn-secondary" onClick={() => handleUploadReqs(true)} disabled={!reqFile}>Upload & Trigger worker</button>
             </div>
             <div className="text-slate-400 text-xs">
-              Lints basic text (&lt;128KB, no nulls, ≤2000 lines, ≤800 chars/line) then saves to the shared input as requirements.txt.
+              Lints basic text (&lt;128KB, no nulls, ≤2000 lines, ≤800 chars/line) then stores it in object storage and registers the pending input.
+            </div>
+          </div>
+        </div>
+        <div className="glass p-4 space-y-3">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Upload wheel (.whl)</span>
+            <span className="chip text-xs">🧪</span>
+          </div>
+          <div className="space-y-2 text-sm text-slate-200">
+            <input
+              type="file"
+              accept=".whl"
+              className="input"
+              onChange={(e) => {
+                setWheelFile(e.target.files?.[0] || null);
+                setWheelError("");
+              }}
+            />
+            {wheelError && <div className="text-red-300 text-xs">{wheelError}</div>}
+            <div className="flex flex-wrap gap-2">
+              <button className="btn btn-primary" onClick={() => handleUploadWheel(false)} disabled={!wheelFile}>Upload wheel</button>
+              <button className="btn btn-secondary" onClick={() => handleUploadWheel(true)} disabled={!wheelFile}>Upload & Trigger worker</button>
+            </div>
+            <div className="text-slate-400 text-xs">
+              Parses wheel metadata on upload, stores the immutable input in object storage, and registers it for planning.
             </div>
           </div>
         </div>
@@ -1400,15 +1753,24 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <span>Pending inputs</span>
               <span className="chip text-xs">🧾</span>
             </div>
-            <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load()}>
-              Refresh
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load()}>
+                Refresh
+              </button>
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                onClick={handleClearPendingInputs}
+                disabled={clearingPendingInputs || pendingInputs.every((pi) => pi.status !== "pending")}
+              >
+                {clearingPendingInputs ? "Clearing..." : "Clear pending inputs"}
+              </button>
+            </div>
           </div>
-          {pendingInputs.length === 0 ? (
+          {visiblePendingInputs.length === 0 ? (
             <EmptyState title="No pending uploads" detail="New uploads will appear here until planned." icon="✅" />
           ) : (
             <div className="space-y-2 text-sm text-slate-200">
-              {pendingInputs.map((pi) => (
+              {visiblePendingInputs.map((pi) => (
                 <div key={pi.id} className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between gap-3">
                   <div className="space-y-1">
                     <div className="font-semibold text-slate-100">{pi.filename}</div>
@@ -1418,22 +1780,30 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                       <span className="text-slate-500">id {pi.id}</span>
                     </div>
                   </div>
-                  {pi.status === "pending" && (
+                  <div className="flex flex-col gap-2 items-end">
+                    {pi.status === "pending" && (
+                      <button
+                        className="btn btn-secondary px-2 py-1 text-xs"
+                        onClick={() => enqueuePlanForInput(pi, "Enqueued for planning")}
+                      >
+                        Enqueue plan
+                      </button>
+                    )}
+                    {pi.status === "failed" && (
+                      <button
+                        className="btn btn-secondary px-2 py-1 text-xs"
+                        onClick={() => enqueuePlanForInput(pi, "Replan queued")}
+                      >
+                        Replan
+                      </button>
+                    )}
                     <button
                       className="btn btn-secondary px-2 py-1 text-xs"
-                      onClick={async () => {
-                        try {
-                          await enqueuePlan(pi.id, authToken);
-                          pushToast?.({ type: "success", title: "Enqueued for planning", message: pi.filename });
-                          await load();
-                        } catch (e) {
-                          pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
-                        }
-                      }}
+                      onClick={() => handleDeletePendingInput(pi)}
                     >
-                      Enqueue plan
+                      Delete
                     </button>
-                  )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1468,7 +1838,16 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Plan queue</span>
-                <span className="chip">{metrics?.pending?.plan_queue ?? 0}</span>
+                <div className="flex items-center gap-2">
+                  <span className="chip">{metrics?.pending?.plan_queue ?? 0}</span>
+                  <button
+                    className="btn btn-secondary px-2 py-1 text-xs"
+                    onClick={handleClearPlanQueue}
+                    disabled={clearingPlanQueue || !planQueueLength}
+                  >
+                    {clearingPlanQueue ? "Clearing..." : "Clear plan queue"}
+                  </button>
+                </div>
               </div>
               <button className="btn btn-primary w-full" onClick={handleTriggerWorker}>Run worker now</button>
               <div className="flex flex-wrap gap-2">
@@ -1544,111 +1923,150 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     </div>
   );
 
+  const renderPlans = () => (
+    <div className="space-y-4">
+      <PageHeader
+        title="Plans"
+        subtitle="Review planned DAGs, inspect nodes, and manually enqueue builds when auto-build is off."
+        badge={planListBadge}
+      />
+      <div className="grid lg:grid-cols-[360px,1fr] gap-4 items-start">
+        <div className="glass p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Plan library</span>
+              <span className="chip text-xs">🗂️</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={loadPlanList} disabled={planListLoading}>
+                Refresh
+              </button>
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                onClick={() => handleClearPlans(0)}
+                disabled={clearingPlans || !planList.length}
+              >
+                {clearingPlans ? "Clearing..." : "Clear all"}
+              </button>
+            </div>
+          </div>
+          <div className="text-xs text-slate-400">
+            Plan queue: {planQueueLength}. Auto-build is {settingsData?.auto_build ? "on" : "off"}.
+          </div>
+          {planListLoading ? (
+            <div className="text-xs text-slate-500">Loading plans…</div>
+          ) : planList.length ? (
+            <div className="space-y-2 max-h-80 overflow-auto text-sm">
+              {planList.map((plan) => {
+                const selected = plan.id === selectedPlanId;
+                return (
+                  <button
+                    key={plan.id}
+                    className={`w-full text-left border border-border rounded-lg p-2 transition ${selected ? "bg-slate-800/60" : "hover:bg-slate-800/30"}`}
+                    onClick={() => setSelectedPlanId(plan.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-100">Plan #{plan.id}</span>
+                      <span className="text-xs text-slate-500">{formatEpoch(plan.created_at)}</span>
+                    </div>
+                    <div className="text-xs text-slate-400 flex flex-wrap gap-2 mt-1">
+                      {plan.run_id && <span className="chip">run {plan.run_id}</span>}
+                      <span className="chip">{plan.build_count ?? 0} builds</span>
+                      <span className="chip">{plan.node_count ?? 0} nodes</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500">No plans available yet.</div>
+          )}
+          {planListError && <div className="text-xs text-amber-200">{planListError}</div>}
+        </div>
+        <div className="glass subtle p-4 space-y-3">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Selected plan</span>
+            <span className="chip text-xs">📌</span>
+          </div>
+          {planDetailsLoading ? (
+            <div className="text-xs text-slate-500">Loading plan details…</div>
+          ) : selectedPlan ? (
+            <div className="space-y-2 text-sm text-slate-200">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Plan ID</span>
+                <span className="chip">{selectedPlan.id}</span>
+              </div>
+              {selectedPlan.run_id && (
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Run ID</span>
+                  <span className="chip">{selectedPlan.run_id}</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Build nodes</span>
+                <span className="chip">{selectedPlanBuilds.length}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Total nodes</span>
+                <span className="chip">{selectedPlanNodes.length}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Python version</span>
+                <span className="chip">{planPythonVersion}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Platform tag</span>
+                <span className="chip">{planPlatformTag}</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn btn-primary" onClick={handleEnqueueBuilds} disabled={enqueueingBuilds}>
+                  {enqueueingBuilds ? "Enqueueing..." : "Enqueue builds"}
+                </button>
+                <button className="btn btn-secondary" onClick={() => loadPlanDetails(selectedPlan.id)} disabled={planDetailsLoading}>
+                  Refresh details
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => handleClearPlans(selectedPlan.id)}
+                  disabled={clearingPlans}
+                >
+                  {clearingPlans ? "Clearing..." : "Clear selected"}
+                </button>
+              </div>
+              {selectedPlanNodes.length > 0 ? (
+                <div className="max-h-64 overflow-auto text-xs text-slate-300 space-y-1">
+                  {selectedPlanNodes.slice(0, 12).map((node, idx) => (
+                    <div key={`${node.name}-${node.version}-${idx}`} className="flex items-center justify-between">
+                      <span>{node.name} {node.version}</span>
+                      <span className="chip">{node.action}</span>
+                    </div>
+                  ))}
+                  {selectedPlanNodes.length > 12 && (
+                    <div className="text-slate-500">…and {selectedPlanNodes.length - 12} more</div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-xs text-slate-500">No nodes available for this plan.</div>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500">{planDetailsError || "Select a plan to review details."}</div>
+          )}
+          {planDetailsError && selectedPlan && <div className="text-xs text-amber-200">{planDetailsError}</div>}
+        </div>
+      </div>
+    </div>
+  );
+
   const renderBuilds = () => (
     <div className="space-y-4">
       <PageHeader
         title="Build queue & events"
-        subtitle="Track plan-derived builds, retries, and recent execution events."
+        subtitle="Monitor queued builds and recent execution events. Manage plan libraries on the Plans page."
         badge={`${buildQueueLength} queued`}
       />
-      <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
+      <div className="grid lg:grid-cols-[280px,1fr] gap-4 items-start min-w-0">
         <div className="space-y-4">
-          <div className="glass p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-lg font-semibold flex items-center gap-2">
-                <span>Plan library</span>
-                <span className="chip text-xs">🗂️</span>
-              </div>
-              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={loadPlanList} disabled={planListLoading}>
-                Refresh
-              </button>
-            </div>
-            <div className="text-xs text-slate-400">
-              Auto-build is {settingsData?.auto_build ? "on" : "off"}. Select a plan to enqueue builds manually.
-            </div>
-            {planListLoading ? (
-              <div className="text-xs text-slate-500">Loading plans…</div>
-            ) : planList.length ? (
-              <div className="space-y-2 max-h-52 overflow-auto text-sm">
-                {planList.map((plan) => {
-                  const selected = plan.id === selectedPlanId;
-                  return (
-                    <button
-                      key={plan.id}
-                      className={`w-full text-left border border-border rounded-lg p-2 transition ${selected ? "bg-slate-800/60" : "hover:bg-slate-800/30"}`}
-                      onClick={() => setSelectedPlanId(plan.id)}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-slate-100">Plan #{plan.id}</span>
-                        <span className="text-xs text-slate-500">{formatEpoch(plan.created_at)}</span>
-                      </div>
-                      <div className="text-xs text-slate-400 flex flex-wrap gap-2 mt-1">
-                        {plan.run_id && <span className="chip">run {plan.run_id}</span>}
-                        <span className="chip">{plan.build_count ?? 0} builds</span>
-                        <span className="chip">{plan.node_count ?? 0} nodes</span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="text-xs text-slate-500">No plans available yet.</div>
-            )}
-            {planListError && <div className="text-xs text-amber-200">{planListError}</div>}
-            <div className="glass subtle p-3 space-y-2">
-              <div className="text-sm font-semibold text-slate-100">Selected plan</div>
-              {planDetailsLoading ? (
-                <div className="text-xs text-slate-500">Loading plan details…</div>
-              ) : selectedPlan ? (
-                <div className="space-y-2 text-sm text-slate-200">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Plan ID</span>
-                    <span className="chip">{selectedPlan.id}</span>
-                  </div>
-                  {selectedPlan.run_id && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400">Run ID</span>
-                      <span className="chip">{selectedPlan.run_id}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Build nodes</span>
-                    <span className="chip">{selectedPlanBuilds.length}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Total nodes</span>
-                    <span className="chip">{selectedPlanNodes.length}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button className="btn btn-primary" onClick={handleEnqueueBuilds} disabled={enqueueingBuilds}>
-                      {enqueueingBuilds ? "Enqueueing..." : "Enqueue builds"}
-                    </button>
-                    <button className="btn btn-secondary" onClick={() => loadPlanDetails(selectedPlan.id)} disabled={planDetailsLoading}>
-                      Refresh details
-                    </button>
-                  </div>
-                  {selectedPlanNodes.length > 0 ? (
-                    <div className="max-h-36 overflow-auto text-xs text-slate-300 space-y-1">
-                      {selectedPlanNodes.slice(0, 8).map((node, idx) => (
-                        <div key={`${node.name}-${node.version}-${idx}`} className="flex items-center justify-between">
-                          <span>{node.name} {node.version}</span>
-                          <span className="chip">{node.action}</span>
-                        </div>
-                      ))}
-                      {selectedPlanNodes.length > 8 && (
-                        <div className="text-slate-500">…and {selectedPlanNodes.length - 8} more</div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-xs text-slate-500">No nodes available for this plan.</div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-xs text-slate-500">{planDetailsError || "Select a plan to review details."}</div>
-              )}
-              {planDetailsError && selectedPlan && <div className="text-xs text-amber-200">{planDetailsError}</div>}
-            </div>
-          </div>
           <div className="glass p-4 space-y-3">
             <div className="text-lg font-semibold flex items-center gap-2">
               <span>Filters</span>
@@ -1698,11 +2116,23 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             </div>
           </div>
         </div>
-        <div className="space-y-4">
+        <div className="space-y-4 min-w-0">
           <div className="glass p-4 space-y-3">
-            <div className="text-lg font-semibold flex items-center gap-2">
-              <span>Build queue</span>
-              <span className="chip text-xs">🏗️</span>
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-lg font-semibold flex items-center gap-2">
+                <span>Build queue</span>
+                <span className="chip text-xs">🏗️</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                {buildsLoading && <span className="animate-pulse">Refreshing…</span>}
+                <button
+                  className="btn btn-secondary px-2 py-1 text-xs"
+                  onClick={handleClearBuilds}
+                  disabled={clearingBuilds || !builds.length}
+                >
+                  {clearingBuilds ? "Clearing..." : clearBuildsLabel}
+                </button>
+              </div>
             </div>
             <div className="flex flex-wrap gap-2 text-sm">
               {["", "pending", "retry", "building", "failed", "built"].map((s) => (
@@ -1711,7 +2141,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                   className={`chip ${buildStatusFilter === s ? "chip-active" : "hover:bg-slate-800"}`}
                   onClick={() => {
                     setBuildStatusFilter(s);
-                    load({ packageFilter: pkgFilter, statusFilter });
+                    load({ packageFilter: pkgFilter, statusFilter, buildStatusFilter: s });
                   }}
                 >
                   {s || "all"}
@@ -1720,7 +2150,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             </div>
             <div className="text-xs text-slate-400">Oldest queued: {buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}</div>
             <div className="overflow-x-auto">
-              <table className="min-w-full text-xs border border-border rounded-lg">
+              <table className="min-w-full w-full table-fixed text-xs border border-border rounded-lg" aria-busy={buildsLoading}>
                 <thead className="bg-slate-900 text-slate-400 sticky top-0">
                   <tr>
                     <th className="text-left px-2 py-2">Package</th>
@@ -1734,7 +2164,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                 </thead>
                 <tbody>
                   {builds.length ? builds.map((b, idx) => (
-                    <tr key={`${b.package}-${b.version}-${idx}`} className="border-t border-slate-800">
+                    <tr
+                      key={`${b.package}-${b.version}-${idx}`}
+                      className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
+                      onClick={() => navigate(`/package/${encodeURIComponent(b.package)}`)}
+                      title="View package details"
+                    >
                       <td className="px-2 py-2">{b.package}</td>
                       <td className="px-2 py-2">{b.version}</td>
                       <td className="px-2 py-2"><span className="chip">{b.status}</span></td>
@@ -1922,20 +2357,52 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       <PageHeader
         title="Hint catalog"
         subtitle="Search, edit, and bulk import hint recipes for common build failures."
-        badge={`${hints.length} total`}
+        badge={`${hintsCount} total`}
       />
-      <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
-        <div className="glass p-4 space-y-3">
+      {hintsError && (
+        <div className="glass p-3 border border-amber-500/40 text-sm text-amber-200 flex items-center justify-between">
+          <span>{hintsError}</span>
+          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => loadHints({ force: true })}>Retry</button>
+        </div>
+      )}
+      <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-stretch">
+        <div className="glass p-4 space-y-3 flex flex-col min-h-[520px]">
           <div className="text-lg font-semibold flex items-center gap-2">
             <span>Hints</span>
             <span className="chip text-xs">🧠</span>
+            {hintsLoading && <span className="text-xs text-slate-400">Loading…</span>}
           </div>
           <input
             className="input"
             placeholder="Search by id, pattern, tags"
             value={hintSearch}
             onChange={(e) => setHintSearch(e.target.value)}
+            list="hint-search-suggestions"
           />
+          <datalist id="hint-search-suggestions">
+            {hintSuggestionValues.map((value) => (
+              <option key={value} value={value} />
+            ))}
+          </datalist>
+          <div className="flex items-center justify-between text-xs text-slate-400">
+            <span>{hintTotalPages ? `Page ${hintPage} / ${hintTotalPages}` : `Page ${hintPage}`}</span>
+            <div className="flex items-center gap-2">
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                disabled={hintPage === 1 || hintsLoading}
+                onClick={() => loadHints({ page: Math.max(1, hintPage - 1), query: hintSearch })}
+              >
+                Prev
+              </button>
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                disabled={hintNextDisabled || hintsLoading}
+                onClick={() => loadHints({ page: hintPage + 1, query: hintSearch })}
+              >
+                Next
+              </button>
+            </div>
+          </div>
           <button
             className="btn btn-secondary w-full"
             onClick={() => {
@@ -1946,7 +2413,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           >
             New hint
           </button>
-          <div className="space-y-2 max-h-[420px] overflow-auto text-sm">
+          <div className="space-y-2 text-sm flex-1 min-h-0 overflow-auto">
             {filteredHints.length ? filteredHints.map((h) => (
               <button
                 key={h.id}
@@ -1963,7 +2430,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             )) : <EmptyState title="No hints" detail="No hints match your search." />}
           </div>
         </div>
-        <div className="glass p-4 space-y-3">
+        <div className="glass p-4 space-y-3 flex flex-col min-h-[520px]">
           <div className="flex items-center justify-between">
             <div className="text-lg font-semibold flex items-center gap-2">
               <span>{selectedHintId ? "Edit hint" : "Create hint"}</span>
@@ -1974,9 +2441,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             )}
           </div>
           {!hintForm ? (
-            <EmptyState title="Select a hint" detail="Pick a hint from the list to edit or create a new one." />
+            <div className="flex-1 min-h-0 flex items-center">
+              <EmptyState title="Select a hint" detail="Pick a hint from the list to edit or create a new one." />
+            </div>
           ) : (
-            <div className="space-y-3 text-sm text-slate-200">
+            <div className="space-y-3 text-sm text-slate-200 flex-1 min-h-0 overflow-auto pr-1">
               <div className="grid md:grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <div className="text-xs text-slate-400">ID</div>
@@ -2119,6 +2588,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         return renderInputs();
       case "queues":
         return renderQueues();
+      case "plans":
+        return renderPlans();
       case "builds":
         return renderBuilds();
       case "hints":
@@ -2173,6 +2644,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/overview" replace />} />
         <Route path="/overview" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="overview" />} />
         <Route path="/inputs" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="inputs" />} />
+        <Route path="/plans" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="plans" />} />
         <Route path="/queues" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="queues" />} />
         <Route path="/builds" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="builds" />} />
         <Route path="/hints" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="hints" />} />

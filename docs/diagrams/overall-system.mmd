@@ -1,6 +1,6 @@
 flowchart LR
     subgraph Inputs
-        IN[Input wheels /input or requirements.txt]
+        IN[Uploaded wheels / requirements.txt]
         CFG[Config: python versions, policy, strategy]
     end
 
@@ -8,7 +8,7 @@ flowchart LR
     Q[Queue backend<br/>file / Redis / Kafka]
     subgraph CAS
         ZOT["CAS registry: Zot"]
-        MINIO["Object store: MinIO (optional)"]
+        MINIO["Object store: MinIO (inputs + wheelhouse)"]
     end
     subgraph Builder
         WKR[Go worker]
@@ -18,7 +18,8 @@ flowchart LR
     CP[Go control-plane API]
     UI[React UI]
 
-    IN --> PLAN
+    IN --> CP
+    CP --> PLAN
     CFG --> PLAN
     PLAN --> Q
     PLAN -. cache check .-> ZOT

@@ -29,6 +29,10 @@ func (f *fakeStore) Put(_ context.Context, key string, _ []byte, _ string) error
 	return nil
 }
 
+func (f *fakeStore) Get(_ context.Context, _ string) ([]byte, string, error) {
+	return nil, "", io.EOF
+}
+
 func (f *fakeStore) URL(key string) string {
 	return "http://minio/" + key
 }
@@ -141,6 +145,7 @@ type urlStore struct {
 }
 
 func (u urlStore) Put(_ context.Context, _ string, _ []byte, _ string) error { return nil }
+func (u urlStore) Get(_ context.Context, _ string) ([]byte, string, error)   { return nil, "", io.EOF }
 func (u urlStore) URL(_ string) string                                       { return u.url }
 
 func TestObjectURLFallback(t *testing.T) {

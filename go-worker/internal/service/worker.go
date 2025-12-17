@@ -65,6 +65,9 @@ func (w *Worker) LoadPlan() error {
 		path = filepath.Join(w.Cfg.CacheDir, "plan.json")
 		snap, err = plan.Load(path)
 		if err != nil {
+			if w.Cfg.InputDir == "" {
+				return fmt.Errorf("plan not found and input dir disabled")
+			}
 			// as a last resort, generate plan in Go
 			snap, err = plan.Generate(
 				w.Cfg.InputDir,

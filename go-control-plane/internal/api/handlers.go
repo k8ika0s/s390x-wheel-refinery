@@ -1,23 +1,23 @@
 package api
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"crypto/sha256"
-
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/objectstore"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
@@ -26,10 +26,11 @@ import (
 
 // Handler wires HTTP routes to store/queue backends.
 type Handler struct {
-	Store  store.Store
-	Queue  queue.Backend
-	PlanQ  queue.PlanQueueBackend
-	Config config.Config
+	Store      store.Store
+	Queue      queue.Backend
+	PlanQ      queue.PlanQueueBackend
+	InputStore objectstore.Store
+	Config     config.Config
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
@@ -40,10 +41,13 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/config", h.config)
 	mux.HandleFunc("/api/settings", h.settings)
 	mux.HandleFunc("/api/pending-inputs", h.pendingInputs)
+	mux.HandleFunc("/api/pending-inputs/clear", h.pendingInputsClear)
 	mux.HandleFunc("/api/pending-inputs/", h.pendingInputAction)
 	mux.HandleFunc("/api/pending-inputs/pop", h.pendingInputPop)
 	mux.HandleFunc("/api/pending-inputs/status/", h.pendingInputStatus)
+	mux.HandleFunc("/api/plan-queue/clear", h.planQueueClear)
 	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
+	mux.HandleFunc("/api/wheels/upload", h.wheelsUpload)
 	mux.HandleFunc("/api/builds", h.builds)
 	mux.HandleFunc("/api/builds/status", h.buildStatusUpdate)
 	mux.HandleFunc("/api/build-queue/pop", h.buildQueuePop)
@@ -125,6 +129,9 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		Pending      int   `json:"pending"`
 		Retry        int   `json:"retry"`
 	}
+	type hintMetrics struct {
+		Count int `json:"count"`
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
@@ -194,6 +201,14 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 			buildStats.OldestAgeSec = oldest
 		}
 	}
+	hm := hintMetrics{}
+	if counter, ok := h.Store.(interface {
+		HintCount(context.Context) (int, error)
+	}); ok && counter != nil {
+		if count, err := counter.HintCount(ctx); err == nil {
+			hm.Count = count
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary": map[string]any{
 			"title":       "Control-plane metrics",
@@ -203,6 +218,7 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		"queue":           qm,
 		"pending":         pm,
 		"build":           buildStats,
+		"hints":           hm,
 		"db":              dbm,
 		"status_counts":   sum.StatusCounts,
 		"recent_failures": sum.Failures,
@@ -308,13 +324,17 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		"db":               "postgres",
 		"worker_webhook":   h.Config.WorkerWebhookURL != "",
 		"worker_local_cmd": h.Config.WorkerLocalCmd != "",
-		"input_dir":        h.Config.InputDir,
-		"settings_path":    h.Config.SettingsPath,
-		"hints_dir":        h.Config.HintsDir,
-		"hints_seed":       h.Config.SeedHints,
-		"settings":         currentSettings,
-		"auto_plan":        autoPlan,
-		"auto_build":       autoBuild,
+		"input_object": map[string]any{
+			"endpoint": h.Config.ObjectStoreEndpoint,
+			"bucket":   h.Config.ObjectStoreBucket,
+			"prefix":   h.Config.InputObjectPrefix,
+		},
+		"settings_path": h.Config.SettingsPath,
+		"hints_dir":     h.Config.HintsDir,
+		"hints_seed":    h.Config.SeedHints,
+		"settings":      currentSettings,
+		"auto_plan":     autoPlan,
+		"auto_build":    autoBuild,
 	})
 }
 
@@ -346,13 +366,182 @@ func lintRequirements(data []byte) error {
 	return nil
 }
 
+type requirementSpec struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+}
+
+type wheelMeta struct {
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	PythonTag   string `json:"python_tag"`
+	AbiTag      string `json:"abi_tag"`
+	PlatformTag string `json:"platform_tag"`
+}
+
+func normalizeName(name string) string {
+	if name == "" {
+		return ""
+	}
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "_", "-"))
+}
+
+func parseRequirements(data []byte) []requirementSpec {
+	lines := strings.Split(string(data), "\n")
+	out := make([]requirementSpec, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "-c ") || strings.HasPrefix(line, "--constraint") {
+			continue
+		}
+		if idx := strings.Index(line, " #"); idx != -1 {
+			line = strings.TrimSpace(line[:idx])
+		}
+		name := line
+		version := ""
+		for _, op := range []string{"==", ">=", "~="} {
+			if idx := strings.Index(line, op); idx > 0 {
+				name = strings.TrimSpace(line[:idx])
+				version = line[idx:]
+				if op == "==" {
+					version = strings.TrimPrefix(version, "==")
+				}
+				break
+			}
+		}
+		name = normalizeName(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, requirementSpec{Name: name, Version: version})
+	}
+	return out
+}
+
+func parseWheelFilename(name string) (wheelMeta, error) {
+	base := strings.TrimSuffix(name, ".whl")
+	parts := strings.Split(base, "-")
+	if len(parts) < 5 {
+		return wheelMeta{}, fmt.Errorf("invalid wheel filename: %s", name)
+	}
+	platform := parts[len(parts)-1]
+	abi := parts[len(parts)-2]
+	py := parts[len(parts)-3]
+	version := parts[len(parts)-4]
+	pkgParts := parts[:len(parts)-4]
+	pkg := strings.ReplaceAll(strings.Join(pkgParts, "-"), "_", "-")
+	return wheelMeta{
+		Name:        pkg,
+		Version:     version,
+		PythonTag:   py,
+		AbiTag:      abi,
+		PlatformTag: platform,
+	}, nil
+}
+
+func parseRequiresDist(meta string) []requirementSpec {
+	lines := strings.Split(meta, "\n")
+	out := make([]requirementSpec, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "requires-dist:") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			val := strings.TrimSpace(parts[1])
+			if semi := strings.Index(val, ";"); semi != -1 {
+				val = strings.TrimSpace(val[:semi])
+			}
+			raw := val
+			name := val
+			version := ""
+			if idx := strings.Index(raw, "("); idx != -1 {
+				name = strings.TrimSpace(raw[:idx])
+				spec := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(raw[idx:]), "("), ")")
+				spec = strings.TrimSpace(spec)
+				if strings.HasPrefix(spec, "==") || strings.HasPrefix(spec, ">=") || strings.HasPrefix(spec, "~=") {
+					version = spec
+					if strings.HasPrefix(version, "==") {
+						version = strings.TrimPrefix(version, "==")
+					}
+				}
+			} else {
+				for _, op := range []string{"==", ">=", "~="} {
+					if idx := strings.Index(raw, op); idx > 0 {
+						name = strings.TrimSpace(raw[:idx])
+						version = strings.TrimPrefix(strings.TrimSpace(raw[idx:]), "==")
+						break
+					}
+				}
+			}
+			name = normalizeName(name)
+			if name == "" {
+				continue
+			}
+			out = append(out, requirementSpec{Name: name, Version: version})
+		}
+	}
+	return out
+}
+
+func readWheelMetadata(data []byte) ([]requirementSpec, error) {
+	reader := bytes.NewReader(data)
+	zr, err := zip.NewReader(reader, int64(len(data)))
+	if err != nil {
+		return nil, err
+	}
+	var meta []byte
+	for _, f := range zr.File {
+		if strings.HasSuffix(f.Name, "METADATA") {
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			buf := new(bytes.Buffer)
+			_, _ = buf.ReadFrom(rc)
+			rc.Close()
+			meta = buf.Bytes()
+			break
+		}
+	}
+	if len(meta) == 0 {
+		return nil, nil
+	}
+	return parseRequiresDist(string(meta)), nil
+}
+
+func inputObjectKey(prefix, digestHex, filename string) string {
+	clean := strings.TrimSpace(filename)
+	if clean == "" {
+		clean = "input"
+	}
+	clean = strings.ReplaceAll(clean, "..", "_")
+	clean = strings.ReplaceAll(clean, "/", "_")
+	base := strings.Trim(prefix, "/")
+	if base == "" {
+		return fmt.Sprintf("%s/%s", digestHex, clean)
+	}
+	return fmt.Sprintf("%s/%s/%s", base, digestHex, clean)
+}
+
 func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if h.Config.InputDir == "" {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input dir not configured"})
+	if h.Config.ObjectStoreEndpoint == "" || h.Config.ObjectStoreBucket == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input store not configured"})
+		return
+	}
+	if h.InputStore == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input store unavailable"})
+		return
+	}
+	if _, ok := h.InputStore.(objectstore.NullStore); ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input store unavailable"})
 		return
 	}
 	if err := r.ParseMultipartForm(256 << 10); err != nil {
@@ -374,30 +563,28 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := os.MkdirAll(h.Config.InputDir, 0o755); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
 	sum := sha256.Sum256(data)
-	stamp := time.Now().UTC().Format("20060102T150405Z")
-	unique := fmt.Sprintf("requirements-%s-%x.txt", stamp, sum[:4])
-	pathUnique := filepath.Join(h.Config.InputDir, unique)
-	if err := os.WriteFile(pathUnique, data, 0o644); err != nil {
+	digestHex := hex.EncodeToString(sum[:])
+	key := inputObjectKey(h.Config.InputObjectPrefix, digestHex, header.Filename)
+	if err := h.InputStore.Put(r.Context(), key, data, "text/plain"); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	// Also refresh canonical path for backwards compatibility.
-	pathCanonical := filepath.Join(h.Config.InputDir, "requirements.txt")
-	if err := os.WriteFile(pathCanonical, data, 0o644); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	meta := map[string]any{
+		"type":         "requirements",
+		"requirements": parseRequirements(data),
 	}
-	// Record pending input and optionally enqueue planning.
+	metaJSON, _ := json.Marshal(meta)
 	pi := store.PendingInput{
-		Filename:  unique,
-		Digest:    fmt.Sprintf("%x", sum[:]),
-		SizeBytes: int64(len(data)),
-		Status:    "pending",
+		Filename:     header.Filename,
+		Digest:       "sha256:" + digestHex,
+		SizeBytes:    int64(len(data)),
+		Status:       "pending",
+		SourceType:   "requirements",
+		ObjectBucket: h.Config.ObjectStoreBucket,
+		ObjectKey:    key,
+		ContentType:  "text/plain",
+		Metadata:     metaJSON,
 	}
 	var pendingID int64
 	if h.Store != nil {
@@ -413,8 +600,96 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 		"detail":     "requirements uploaded",
 		"bytes":      len(data),
 		"filename":   header.Filename,
-		"saved_path": pathUnique,
-		"canonical":  pathCanonical,
+		"object_key": key,
+		"pending_id": pendingID,
+	})
+}
+
+func (h *Handler) wheelsUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if h.Config.ObjectStoreEndpoint == "" || h.Config.ObjectStoreBucket == "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input store not configured"})
+		return
+	}
+	if h.InputStore == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input store unavailable"})
+		return
+	}
+	if _, ok := h.InputStore.(objectstore.NullStore); ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input store unavailable"})
+		return
+	}
+	if err := r.ParseMultipartForm(256 << 10); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid form"})
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file required"})
+		return
+	}
+	defer file.Close()
+	if !strings.HasSuffix(strings.ToLower(header.Filename), ".whl") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "wheel file (.whl) required"})
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(file, 256<<20))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read file"})
+		return
+	}
+	sum := sha256.Sum256(data)
+	digestHex := hex.EncodeToString(sum[:])
+	key := inputObjectKey(h.Config.InputObjectPrefix, digestHex, header.Filename)
+	if err := h.InputStore.Put(r.Context(), key, data, "application/octet-stream"); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	wmeta, err := parseWheelFilename(header.Filename)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	reqs, err := readWheelMetadata(data)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	meta := map[string]any{
+		"type":     "wheel",
+		"wheel":    wmeta,
+		"requires": reqs,
+	}
+	metaJSON, _ := json.Marshal(meta)
+	pi := store.PendingInput{
+		Filename:     header.Filename,
+		Digest:       "sha256:" + digestHex,
+		SizeBytes:    int64(len(data)),
+		Status:       "pending",
+		SourceType:   "wheel",
+		ObjectBucket: h.Config.ObjectStoreBucket,
+		ObjectKey:    key,
+		ContentType:  "application/octet-stream",
+		Metadata:     metaJSON,
+	}
+	var pendingID int64
+	if h.Store != nil {
+		if id, err := h.Store.AddPendingInput(r.Context(), pi); err == nil {
+			pendingID = id
+			if h.Config.AutoPlan && h.PlanQ != nil {
+				_ = h.PlanQ.Enqueue(r.Context(), fmt.Sprintf("%d", pendingID))
+				_ = h.Store.UpdatePendingInputStatus(r.Context(), pendingID, "planning", "")
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"detail":     "wheel uploaded",
+		"bytes":      len(data),
+		"filename":   header.Filename,
+		"object_key": key,
 		"pending_id": pendingID,
 	})
 }
@@ -467,17 +742,74 @@ func (h *Handler) pendingInputs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, list)
 }
 
+func (h *Handler) pendingInputsClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	if h.Store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store not configured"})
+		return
+	}
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		status = "pending"
+	}
+	list, err := h.Store.ListPendingInputs(r.Context(), status)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	cleared := 0
+	for _, pi := range list {
+		if _, err := h.Store.DeletePendingInput(r.Context(), pi.ID); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		cleared++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"detail": "cleared pending inputs", "count": cleared})
+}
+
 func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
 	// URL: /api/pending-inputs/{id}/enqueue-plan
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/pending-inputs/"), "/")
-	if len(parts) < 2 {
+	if len(parts) < 1 || parts[0] == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
 		return
 	}
-	idStr, action := parts[0], parts[1]
+	idStr := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+	if action == "" && r.Method == http.MethodDelete {
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		if h.Store == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store not configured"})
+			return
+		}
+		if _, err := h.Store.DeletePendingInput(r.Context(), id); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "pending input not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"detail": "deleted pending input", "id": id})
 		return
 	}
 	switch action {
@@ -566,19 +898,69 @@ func (h *Handler) pendingInputStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "status updated"})
 }
 
-func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+func (h *Handler) planQueueClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	status := r.URL.Query().Get("status")
-	limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 1000)
-	list, err := h.Store.ListBuilds(r.Context(), status, limit)
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	if h.PlanQ == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "plan queue not configured"})
+		return
+	}
+	ids, err := h.PlanQ.Clear(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, list)
+	reset := 0
+	if h.Store != nil {
+		for _, idStr := range ids {
+			id, err := strconv.ParseInt(idStr, 10, 64)
+			if err != nil {
+				continue
+			}
+			if err := h.Store.UpdatePendingInputStatus(r.Context(), id, "pending", ""); err == nil {
+				reset++
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"detail":       "plan queue cleared",
+		"cleared":      len(ids),
+		"status_reset": reset,
+	})
+}
+
+func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		status := r.URL.Query().Get("status")
+		limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 1000)
+		list, err := h.Store.ListBuilds(r.Context(), status, limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	case http.MethodDelete:
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		status := r.URL.Query().Get("status")
+		count, err := h.Store.DeleteBuilds(r.Context(), status)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"detail": "builds cleared", "count": count})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
 
 func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
@@ -838,9 +1220,10 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, res)
 	case http.MethodPost:
 		var body struct {
-			RunID string           `json:"run_id"`
-			Plan  []store.PlanNode `json:"plan"`
-			DAG   json.RawMessage  `json:"dag,omitempty"`
+			RunID          string           `json:"run_id"`
+			Plan           []store.PlanNode `json:"plan"`
+			DAG            json.RawMessage  `json:"dag,omitempty"`
+			PendingInputID int64            `json:"pending_input_id,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -855,8 +1238,18 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		if body.PendingInputID > 0 && h.Store != nil {
+			if err := h.Store.LinkPlanToPendingInput(r.Context(), body.PendingInputID, planID); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			_ = h.Store.UpdatePendingInputStatus(r.Context(), body.PendingInputID, "planned", "")
+		}
 		if h.Config.AutoBuild {
 			_ = h.Store.QueueBuildsFromPlan(r.Context(), body.RunID, planID, body.Plan)
+			if body.PendingInputID > 0 {
+				_ = h.Store.UpdatePendingInputStatus(r.Context(), body.PendingInputID, "queued", "")
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "plan saved"})
 	default:
@@ -865,17 +1258,45 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) plans(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		limit := parseIntDefault(r.URL.Query().Get("limit"), 20, 200)
+		list, err := h.Store.ListPlans(r.Context(), limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	case http.MethodDelete:
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		if h.Store == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store not configured"})
+			return
+		}
+		var planID int64
+		if idStr := r.URL.Query().Get("id"); idStr != "" {
+			id, err := strconv.ParseInt(idStr, 10, 64)
+			if err != nil || id <= 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+				return
+			}
+			planID = id
+		}
+		if h.Store != nil {
+			_, _ = h.Store.UpdatePendingInputsForPlan(r.Context(), planID, "pending")
+		}
+		count, err := h.Store.DeletePlans(r.Context(), planID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"detail": "plans cleared", "count": count})
+	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
 	}
-	limit := parseIntDefault(r.URL.Query().Get("limit"), 20, 200)
-	list, err := h.Store.ListPlans(r.Context(), limit)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, list)
 }
 
 func (h *Handler) planLatest(w http.ResponseWriter, r *http.Request) {
@@ -943,6 +1364,9 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 		if err := h.Store.QueueBuildsFromPlan(r.Context(), snap.RunID, snap.ID, snap.Plan); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
+		}
+		if h.Store != nil {
+			_, _ = h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "queued")
 		}
 		count := 0
 		for _, node := range snap.Plan {
@@ -1208,7 +1632,38 @@ func (h *Handler) workerSmoke(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		hints, err := h.Store.ListHints(r.Context())
+		q := r.URL.Query()
+		limit := parseIntDefault(q.Get("limit"), 200, 1000)
+		offset := parseIntDefault(q.Get("offset"), 0, 100_000)
+		query := strings.TrimSpace(q.Get("q"))
+		var hints []store.Hint
+		var err error
+		if pager, ok := h.Store.(interface {
+			ListHintsPaged(context.Context, int, int, string) ([]store.Hint, error)
+		}); ok {
+			hints, err = pager.ListHintsPaged(r.Context(), limit, offset, query)
+		} else {
+			hints, err = h.Store.ListHints(r.Context())
+			if err == nil {
+				if query != "" {
+					filtered := make([]store.Hint, 0, len(hints))
+					for _, h := range hints {
+						if hintMatchesQuery(h, query) {
+							filtered = append(filtered, h)
+						}
+					}
+					hints = filtered
+				}
+				if offset > 0 && offset < len(hints) {
+					hints = hints[offset:]
+				} else if offset >= len(hints) {
+					hints = []store.Hint{}
+				}
+				if limit > 0 && limit < len(hints) {
+					hints = hints[:limit]
+				}
+			}
+		}
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -1540,4 +1995,22 @@ func toString(v any) string {
 		b, _ := json.Marshal(val)
 		return string(b)
 	}
+}
+
+func hintMatchesQuery(h store.Hint, q string) bool {
+	query := strings.ToLower(strings.TrimSpace(q))
+	if query == "" {
+		return true
+	}
+	parts := []string{h.ID, h.Pattern, h.Note, h.Severity, h.Confidence}
+	parts = append(parts, h.Tags...)
+	parts = append(parts, h.Examples...)
+	for _, recipes := range h.Recipes {
+		parts = append(parts, recipes...)
+	}
+	for _, applies := range h.AppliesTo {
+		parts = append(parts, applies...)
+	}
+	joined := strings.ToLower(strings.Join(parts, " "))
+	return strings.Contains(joined, query)
 }

@@ -1,14 +1,10 @@
 package objectstore
 
-import (
-	"context"
-	"errors"
-)
+import "context"
 
-// Store uploads artifacts (e.g., wheels) to an object storage backend.
+// Store uploads artifacts (e.g., inputs) to an object storage backend.
 type Store interface {
 	Put(ctx context.Context, key string, data []byte, contentType string) error
-	Get(ctx context.Context, key string) ([]byte, string, error)
 	// URL returns a fetchable URL for the given key, if available.
 	URL(key string) string
 }
@@ -17,9 +13,5 @@ type Store interface {
 type NullStore struct{}
 
 func (NullStore) Put(_ context.Context, _ string, _ []byte, _ string) error { return nil }
-
-func (NullStore) Get(_ context.Context, _ string) ([]byte, string, error) {
-	return nil, "", errors.New("object store not configured")
-}
 
 func (NullStore) URL(_ string) string { return "" }

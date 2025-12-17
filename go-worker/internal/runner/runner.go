@@ -151,11 +151,13 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 	var depPrefixes []string
 	args := []string{
 		"run", "--rm",
-		"-v", fmt.Sprintf("%s:/input:ro", p.InputDir),
 		"-v", fmt.Sprintf("%s:/output", p.OutputDir),
 		"-v", fmt.Sprintf("%s:/cache", p.CacheDir),
 		"-e", fmt.Sprintf("JOB_NAME=%s", job.Name),
 		"-e", fmt.Sprintf("JOB_VERSION=%s", job.Version),
+	}
+	if p.InputDir != "" {
+		args = append(args, "-v", fmt.Sprintf("%s:/input:ro", p.InputDir))
 	}
 	if job.PythonVersion != "" {
 		args = append(args, "-e", fmt.Sprintf("PYTHON_VERSION=%s", job.PythonVersion))

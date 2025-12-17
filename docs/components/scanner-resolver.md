@@ -1,4 +1,4 @@
-The scanner and resolver are the refinery’s “eyes and brain” for understanding what wheels you’ve dropped into `/input`. In plain terms: it reads the wheel files like a librarian scanning barcodes, figures out which ones are safe to reuse and which ones are platform-specific, expands their dependencies, and produces a clear list of what actually needs to be rebuilt for s390x. This up-front triage keeps us from rebuilding the world and sets the stage for a predictable, pinned build plan.
+The scanner and resolver are the refinery’s “eyes and brain” for understanding the wheels you upload. In plain terms: it reads the wheel files like a librarian scanning barcodes, figures out which ones are safe to reuse and which ones are platform-specific, expands their dependencies, and produces a clear list of what actually needs to be rebuilt for s390x. This up-front triage keeps us from rebuilding the world and sets the stage for a predictable, pinned build plan.
 
 **Purpose / Responsibilities**
 - Parse input wheels, classify pure vs native, and extract metadata (name, version, python/platform tags).
