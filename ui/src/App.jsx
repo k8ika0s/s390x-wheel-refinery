@@ -564,8 +564,8 @@ function PackageDetail({ token, pushToast, apiBase }) {
             {hintsPaged.slice.length ? hintsPaged.slice.map((h, idx) => (
               <div key={idx} className="border border-border rounded-lg p-3 space-y-1 text-sm text-slate-200">
                 <div className="font-semibold text-slate-100">Pattern: {h.pattern}</div>
-                <div className="text-slate-400">dnf: {(h.packages?.dnf || []).join(", ") || "-"}</div>
-                <div className="text-slate-400">apt: {(h.packages?.apt || []).join(", ") || "-"}</div>
+                <div className="text-slate-400">dnf: {(h.recipes?.dnf || h.packages?.dnf || []).join(", ") || "-"}</div>
+                <div className="text-slate-400">apt: {(h.recipes?.apt || h.packages?.apt || []).join(", ") || "-"}</div>
                 {h.note && <div className="text-slate-400">note: {h.note}</div>}
               </div>
             )) : <EmptyState title="No hints" detail="No hint recipes recorded for this package." />}
@@ -1049,12 +1049,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         <StatCard title="Hints">
           <div className="space-y-2 max-h-52 overflow-auto text-sm text-slate-200">
             {hints.length ? hints.map((h, idx) => (
-              <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
-                <div className="font-semibold">Pattern: {h?.pattern || "n/a"}</div>
-                <div className="text-slate-400">dnf: {(h?.packages?.dnf || []).join(", ") || "-"}</div>
-                <div className="text-slate-400">apt: {(h?.packages?.apt || []).join(", ") || "-"}</div>
-              </div>
-            )) : <div className="text-slate-400">No hints loaded</div>}
+                  <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
+                    <div className="font-semibold">Pattern: {h?.pattern || "n/a"}</div>
+                    <div className="text-slate-400">dnf: {(h?.recipes?.dnf || h?.packages?.dnf || []).join(", ") || "-"}</div>
+                    <div className="text-slate-400">apt: {(h?.recipes?.apt || h?.packages?.apt || []).join(", ") || "-"}</div>
+                  </div>
+                )) : <div className="text-slate-400">No hints loaded</div>}
           </div>
         </StatCard>
         {metrics && (

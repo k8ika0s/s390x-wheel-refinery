@@ -22,10 +22,15 @@ type Event struct {
 
 // Hint represents a hint catalog entry.
 type Hint struct {
-	ID      string
-	Pattern string
-	Recipes map[string][]string
-	Note    string
+	ID         string              `json:"id"`
+	Pattern    string              `json:"pattern"`
+	Recipes    map[string][]string `json:"recipes,omitempty"`
+	Note       string              `json:"note,omitempty"`
+	Tags       []string            `json:"tags,omitempty"`
+	Severity   string              `json:"severity,omitempty"`
+	AppliesTo  map[string][]string `json:"applies_to,omitempty"`
+	Confidence string              `json:"confidence,omitempty"`
+	Examples   []string            `json:"examples,omitempty"`
 }
 
 // LogEntry represents stored log metadata/content.

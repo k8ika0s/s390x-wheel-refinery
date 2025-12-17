@@ -52,8 +52,19 @@ CREATE TABLE IF NOT EXISTS hints (
     id       TEXT PRIMARY KEY,
     pattern  TEXT NOT NULL,
     recipes  JSONB,
-    note     TEXT
+    note     TEXT,
+    tags     JSONB,
+    severity TEXT,
+    applies_to JSONB,
+    confidence TEXT,
+    examples JSONB
 );
+
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS tags JSONB;
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS severity TEXT;
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS applies_to JSONB;
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS confidence TEXT;
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS examples JSONB;
 
 CREATE TABLE IF NOT EXISTS logs (
     id         BIGSERIAL PRIMARY KEY,
@@ -601,7 +612,7 @@ func (p *PostgresStore) ListHints(ctx context.Context) ([]Hint, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT id,pattern,recipes,note FROM hints`)
+	rows, err := p.db.QueryContext(ctx, `SELECT id,pattern,recipes,note,tags,severity,applies_to,confidence,examples FROM hints`)
 	if err != nil {
 		return nil, err
 	}
@@ -610,11 +621,23 @@ func (p *PostgresStore) ListHints(ctx context.Context) ([]Hint, error) {
 	for rows.Next() {
 		var h Hint
 		var recipes json.RawMessage
-		if err := rows.Scan(&h.ID, &h.Pattern, &recipes, &h.Note); err != nil {
+		var tags json.RawMessage
+		var applies json.RawMessage
+		var examples json.RawMessage
+		if err := rows.Scan(&h.ID, &h.Pattern, &recipes, &h.Note, &tags, &h.Severity, &applies, &h.Confidence, &examples); err != nil {
 			return nil, err
 		}
 		if len(recipes) > 0 {
 			_ = json.Unmarshal(recipes, &h.Recipes)
+		}
+		if len(tags) > 0 {
+			_ = json.Unmarshal(tags, &h.Tags)
+		}
+		if len(applies) > 0 {
+			_ = json.Unmarshal(applies, &h.AppliesTo)
+		}
+		if len(examples) > 0 {
+			_ = json.Unmarshal(examples, &h.Examples)
 		}
 		out = append(out, h)
 	}
@@ -627,12 +650,25 @@ func (p *PostgresStore) GetHint(ctx context.Context, id string) (Hint, error) {
 	}
 	var h Hint
 	var recipes json.RawMessage
-	err := p.db.QueryRowContext(ctx, `SELECT id,pattern,recipes,note FROM hints WHERE id=$1`, id).Scan(&h.ID, &h.Pattern, &recipes, &h.Note)
+	var tags json.RawMessage
+	var applies json.RawMessage
+	var examples json.RawMessage
+	err := p.db.QueryRowContext(ctx, `SELECT id,pattern,recipes,note,tags,severity,applies_to,confidence,examples FROM hints WHERE id=$1`, id).
+		Scan(&h.ID, &h.Pattern, &recipes, &h.Note, &tags, &h.Severity, &applies, &h.Confidence, &examples)
 	if err != nil {
 		return Hint{}, err
 	}
 	if len(recipes) > 0 {
 		_ = json.Unmarshal(recipes, &h.Recipes)
+	}
+	if len(tags) > 0 {
+		_ = json.Unmarshal(tags, &h.Tags)
+	}
+	if len(applies) > 0 {
+		_ = json.Unmarshal(applies, &h.AppliesTo)
+	}
+	if len(examples) > 0 {
+		_ = json.Unmarshal(examples, &h.Examples)
 	}
 	return h, nil
 }
@@ -642,11 +678,22 @@ func (p *PostgresStore) PutHint(ctx context.Context, hint Hint) error {
 		return err
 	}
 	recipes, _ := json.Marshal(hint.Recipes)
+	tags, _ := json.Marshal(hint.Tags)
+	applies, _ := json.Marshal(hint.AppliesTo)
+	examples, _ := json.Marshal(hint.Examples)
 	_, err := p.db.ExecContext(ctx, `
-	    INSERT INTO hints (id,pattern,recipes,note)
-	    VALUES ($1,$2,$3,$4)
-	    ON CONFLICT (id) DO UPDATE SET pattern=EXCLUDED.pattern, recipes=EXCLUDED.recipes, note=EXCLUDED.note`,
-		hint.ID, hint.Pattern, recipes, hint.Note)
+	    INSERT INTO hints (id,pattern,recipes,note,tags,severity,applies_to,confidence,examples)
+	    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	    ON CONFLICT (id) DO UPDATE
+	    SET pattern=EXCLUDED.pattern,
+	        recipes=EXCLUDED.recipes,
+	        note=EXCLUDED.note,
+	        tags=EXCLUDED.tags,
+	        severity=EXCLUDED.severity,
+	        applies_to=EXCLUDED.applies_to,
+	        confidence=EXCLUDED.confidence,
+	        examples=EXCLUDED.examples`,
+		hint.ID, hint.Pattern, recipes, hint.Note, tags, hint.Severity, applies, hint.Confidence, examples)
 	return err
 }
 
