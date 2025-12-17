@@ -200,6 +200,7 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	sum, _ := h.Store.Summary(ctx, 10)
 	qstats, _ := h.Queue.Stats(ctx)
+	buildStats, _ := h.Queue.Stats(ctx)
 	dbOK := 0
 	if pinger, ok := h.Store.(interface{ Ping(context.Context) error }); ok {
 		if err := pinger.Ping(ctx); err == nil {
@@ -213,6 +214,12 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&buf, "# HELP refinery_queue_oldest_seconds Age in seconds of the oldest queued item.\n")
 	fmt.Fprintf(&buf, "# TYPE refinery_queue_oldest_seconds gauge\n")
 	fmt.Fprintf(&buf, "refinery_queue_oldest_seconds %d\n", qstats.OldestAge)
+	fmt.Fprintf(&buf, "# HELP refinery_build_queue_length Build queue length.\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_build_queue_length gauge\n")
+	fmt.Fprintf(&buf, "refinery_build_queue_length %d\n", buildStats.Length)
+	fmt.Fprintf(&buf, "# HELP refinery_build_queue_oldest_seconds Age in seconds of the oldest build item.\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_build_queue_oldest_seconds gauge\n")
+	fmt.Fprintf(&buf, "refinery_build_queue_oldest_seconds %d\n", buildStats.OldestAge)
 	if pq, ok := h.PlanQ.(interface {
 		Len(context.Context) (int64, error)
 	}); ok && pq != nil {
