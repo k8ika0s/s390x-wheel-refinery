@@ -125,6 +125,9 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		Pending      int   `json:"pending"`
 		Retry        int   `json:"retry"`
 	}
+	type hintMetrics struct {
+		Count int `json:"count"`
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
@@ -194,6 +197,14 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 			buildStats.OldestAgeSec = oldest
 		}
 	}
+	hm := hintMetrics{}
+	if counter, ok := h.Store.(interface {
+		HintCount(context.Context) (int, error)
+	}); ok && counter != nil {
+		if count, err := counter.HintCount(ctx); err == nil {
+			hm.Count = count
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary": map[string]any{
 			"title":       "Control-plane metrics",
@@ -203,6 +214,7 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		"queue":           qm,
 		"pending":         pm,
 		"build":           buildStats,
+		"hints":           hm,
 		"db":              dbm,
 		"status_counts":   sum.StatusCounts,
 		"recent_failures": sum.Failures,

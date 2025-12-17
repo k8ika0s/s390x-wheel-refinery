@@ -82,16 +82,15 @@ const defaultPyTag = import.meta.env.VITE_DEFAULT_PYTHON_TAG || "cp311";
 const defaultPlatform = import.meta.env.VITE_DEFAULT_PLATFORM_TAG || "manylinux2014_s390x";
 
 export async function fetchDashboard(token) {
-  const [summary, recent, failures, slowest, queue, hints] = await Promise.all([
+  const [summary, recent, failures, slowest, queue] = await Promise.all([
     request("/api/summary", {}, token),
     request("/api/recent?limit=25", {}, token),
     request("/api/top-failures?limit=10", {}, token),
     request("/api/top-slowest?limit=10", {}, token),
     request("/api/queue", {}, token),
-    request("/api/hints", {}, token),
   ]);
   const metrics = await request("/api/metrics", {}, token).catch(() => null);
-  return { summary, recent, failures, slowest, queue, hints, metrics };
+  return { summary, recent, failures, slowest, queue, metrics };
 }
 
 export function triggerWorker(token) {
@@ -141,6 +140,10 @@ export async function uploadRequirements(file, token) {
 
 export function fetchSettings(token) {
   return request("/api/settings", {}, token);
+}
+
+export function fetchHints(token) {
+  return request("/api/hints", {}, token);
 }
 
 export function updateSettings(body, token) {

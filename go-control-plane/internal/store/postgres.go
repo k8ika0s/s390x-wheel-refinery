@@ -648,6 +648,18 @@ func (p *PostgresStore) ListHints(ctx context.Context) ([]Hint, error) {
 	return out, rows.Err()
 }
 
+// HintCount returns the total number of hint entries.
+func (p *PostgresStore) HintCount(ctx context.Context) (int, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	var count int
+	if err := p.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM hints`).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (p *PostgresStore) GetHint(ctx context.Context, id string) (Hint, error) {
 	if err := p.ensureDB(); err != nil {
 		return Hint{}, err

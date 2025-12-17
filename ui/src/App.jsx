@@ -15,6 +15,7 @@ import {
   fetchRecent,
   fetchBuilds,
   fetchSettings,
+  fetchHints,
   setCookieToken,
   triggerWorker,
   updateSettings,
@@ -651,10 +652,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [hintForm, setHintForm] = useState(null);
   const [hintFormError, setHintFormError] = useState("");
   const [hintSaving, setHintSaving] = useState(false);
+  const [hintsState, setHintsState] = useState([]);
+  const [hintsLoading, setHintsLoading] = useState(false);
+  const [hintsError, setHintsError] = useState("");
   const [bulkFile, setBulkFile] = useState(null);
   const [bulkStatus, setBulkStatus] = useState(null);
   const [bulkUploading, setBulkUploading] = useState(false);
   const apiToastShown = useRef(false);
+  const viewKey = view || "overview";
 
   const isValidDashboard = (data) => {
     if (!data || typeof data !== "object") return false;
@@ -664,7 +669,6 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     if (!Array.isArray(data.failures)) return false;
     if (!Array.isArray(data.slowest)) return false;
     if (!(isObject(data.queue) || Array.isArray(data.queue))) return false;
-    if (!Array.isArray(data.hints)) return false;
     return true;
   };
 
@@ -674,7 +678,6 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
     const { packageFilter, statusFilter: status } = opts;
     setLoading(true);
-    setError("");
     try {
       const recent = await fetchRecent(
         {
@@ -696,6 +699,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       onMetrics?.(data.metrics);
       onApiStatus?.("ok");
       apiToastShown.current = false;
+      setError("");
       setApiBlocked(false);
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
@@ -715,10 +719,34 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
+  const loadHints = async (opts = {}) => {
+    if (apiBlocked && !opts.force) {
+      return;
+    }
+    setHintsLoading(true);
+    setHintsError("");
+    try {
+      const list = await fetchHints(authToken);
+      setHintsState(Array.isArray(list) ? list : []);
+      setHintsError("");
+    } catch (e) {
+      const msg = e.message || "Failed to load hints.";
+      setHintsError(msg);
+      pushToast?.({ type: "error", title: "Hints load failed", message: msg });
+    } finally {
+      setHintsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (apiBlocked) return;
     load({ packageFilter: pkgFilter, statusFilter });
   }, [authToken, pkgFilter, statusFilter, recentLimit, apiBlocked]);
+
+  useEffect(() => {
+    if (viewKey !== "hints") return;
+    loadHints({ force: true });
+  }, [viewKey, authToken]);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -958,8 +986,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const buildQueueLength = dashboard?.metrics?.build?.length ?? 0;
   const buildQueueOldest = dashboard?.metrics?.build?.oldest_age_seconds ?? "-";
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
-  const hints = toArray(dashboard?.hints);
+  const hints = toArray(hintsState);
   const metrics = dashboard?.metrics;
+  const hintsCount = Number.isFinite(metrics?.hints?.count) ? metrics.hints.count : hints.length;
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
@@ -1010,7 +1039,6 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   }, [filteredHints, selectedHintId]);
 
-  const viewKey = view || "overview";
   const alerts = [];
   if (metrics?.db?.status && metrics.db.status !== "ok") {
     alerts.push(`Database is ${metrics.db.status}`);
@@ -1131,6 +1159,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         await createHint(payload, authToken);
       }
       pushToast?.({ type: "success", title: "Hint saved", message: payload.id });
+      await loadHints({ force: true });
       await load({ packageFilter: pkgFilter, statusFilter, force: true });
     } catch (e) {
       if (Array.isArray(e.details) && e.details.length) {
@@ -1150,6 +1179,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       pushToast?.({ type: "success", title: "Hint deleted", message: selectedHintId });
       setSelectedHintId("");
       setHintForm(null);
+      await loadHints({ force: true });
       await load({ packageFilter: pkgFilter, statusFilter, force: true });
     } catch (e) {
       pushToast?.({ type: "error", title: "Delete failed", message: e.message });
@@ -1165,6 +1195,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       setBulkStatus(resp);
       setBulkFile(null);
       pushToast?.({ type: "success", title: "Hints imported", message: `Loaded ${resp.loaded || 0}` });
+      await loadHints({ force: true });
       await load({ packageFilter: pkgFilter, statusFilter, force: true });
     } catch (e) {
       pushToast?.({ type: "error", title: "Import failed", message: e.message });
@@ -1239,7 +1270,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             <StatTile icon="🗂️" label="Plan queue" value={planQueueLength} hint="Awaiting plan pop" />
             <StatTile icon="🚀" label="Build queue" value={buildQueueLength} hint={`Oldest: ${buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}`} />
             <StatTile icon="🧭" label="Recent events" value={filteredRecent.length} hint="Last fetch" />
-            <StatTile icon="🧠" label="Hints loaded" value={hints.length} hint="Recipe guidance" />
+            <StatTile icon="🧠" label="Hints loaded" value={hintsCount} hint="Recipe guidance" />
           </div>
         </div>
         <div className="flex flex-col gap-3 min-w-[260px]">
@@ -1319,13 +1350,25 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         />
         <StatCard title="Hints">
           <div className="space-y-2 max-h-52 overflow-auto text-sm text-slate-200">
-            {hints.length ? hints.map((h, idx) => (
-                  <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
-                    <div className="font-semibold">Pattern: {h?.pattern || "n/a"}</div>
-                    <div className="text-slate-400">dnf: {(h?.recipes?.dnf || h?.packages?.dnf || []).join(", ") || "-"}</div>
-                    <div className="text-slate-400">apt: {(h?.recipes?.apt || h?.packages?.apt || []).join(", ") || "-"}</div>
-                  </div>
-                )) : <div className="text-slate-400">No hints loaded</div>}
+            {hintsLoading ? (
+              <div className="text-slate-400">Loading hints…</div>
+            ) : hints.length ? (
+              hints.map((h, idx) => (
+                <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
+                  <div className="font-semibold">Pattern: {h?.pattern || "n/a"}</div>
+                  <div className="text-slate-400">dnf: {(h?.recipes?.dnf || h?.packages?.dnf || []).join(", ") || "-"}</div>
+                  <div className="text-slate-400">apt: {(h?.recipes?.apt || h?.packages?.apt || []).join(", ") || "-"}</div>
+                </div>
+              ))
+            ) : (
+              <div className="text-slate-400">Hints load on demand in the Hints tab.</div>
+            )}
+            {hintsError && <div className="text-amber-200 text-xs">{hintsError}</div>}
+            {!hints.length && viewKey !== "hints" && (
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => loadHints({ force: true })}>
+                Load hints
+              </button>
+            )}
           </div>
         </StatCard>
         {metrics && (
@@ -1922,13 +1965,20 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       <PageHeader
         title="Hint catalog"
         subtitle="Search, edit, and bulk import hint recipes for common build failures."
-        badge={`${hints.length} total`}
+        badge={`${hintsCount} total`}
       />
+      {hintsError && (
+        <div className="glass p-3 border border-amber-500/40 text-sm text-amber-200 flex items-center justify-between">
+          <span>{hintsError}</span>
+          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => loadHints({ force: true })}>Retry</button>
+        </div>
+      )}
       <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
         <div className="glass p-4 space-y-3">
           <div className="text-lg font-semibold flex items-center gap-2">
             <span>Hints</span>
             <span className="chip text-xs">🧠</span>
+            {hintsLoading && <span className="text-xs text-slate-400">Loading…</span>}
           </div>
           <input
             className="input"
