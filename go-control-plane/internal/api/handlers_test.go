@@ -88,6 +88,9 @@ func (f *fakeStore) Plan(ctx context.Context) ([]store.PlanNode, error) {
 func (f *fakeStore) PlanSnapshot(ctx context.Context, planID int64) (store.PlanSnapshot, error) {
 	return store.PlanSnapshot{ID: planID, RunID: "test", Plan: f.lastPlan}, nil
 }
+func (f *fakeStore) LatestPlanSnapshot(ctx context.Context) (store.PlanSnapshot, error) {
+	return store.PlanSnapshot{ID: 1, RunID: "latest", Plan: f.lastPlan}, nil
+}
 func (f *fakeStore) SavePlan(ctx context.Context, runID string, nodes []store.PlanNode, dag json.RawMessage) (int64, error) {
 	f.lastPlan = nodes
 	return 1, nil

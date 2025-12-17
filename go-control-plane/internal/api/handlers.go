@@ -58,6 +58,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/top-failures", h.topFailures)
 	mux.HandleFunc("/api/top-slowest", h.topSlowest)
 	mux.HandleFunc("/api/plan", h.plan)
+	mux.HandleFunc("/api/plan/latest", h.planLatest)
 	mux.HandleFunc("/api/plan/", h.planByID)
 	mux.HandleFunc("/api/plan/compute", h.planCompute)
 	mux.HandleFunc("/api/manifest", h.manifest)
@@ -862,22 +863,12 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) planLatest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/plan/")
-	if idStr == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "plan id required"})
-		return
-	}
-	planID, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid plan id"})
-		return
-	}
-	snap, err := h.Store.PlanSnapshot(r.Context(), planID)
+	snap, err := h.Store.LatestPlanSnapshot(r.Context())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "plan not found"})
@@ -887,6 +878,72 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, snap)
+}
+
+func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/plan/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "plan id required"})
+		return
+	}
+	planID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid plan id"})
+		return
+	}
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if action != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
+			return
+		}
+		snap, err := h.Store.PlanSnapshot(r.Context(), planID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "plan not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, snap)
+	case http.MethodPost:
+		if action != "enqueue-builds" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
+			return
+		}
+		snap, err := h.Store.PlanSnapshot(r.Context(), planID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "plan not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := h.Store.QueueBuildsFromPlan(r.Context(), snap.RunID, snap.ID, snap.Plan); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		count := 0
+		for _, node := range snap.Plan {
+			if strings.EqualFold(node.Action, "build") {
+				count++
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"detail":   "builds enqueued",
+			"plan_id":  snap.ID,
+			"run_id":   snap.RunID,
+			"enqueued": count,
+		})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
 
 func (h *Handler) manifest(w http.ResponseWriter, r *http.Request) {

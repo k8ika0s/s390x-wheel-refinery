@@ -20,6 +20,8 @@ import {
   updateSettings,
   uploadRequirements,
   enqueuePlan,
+  fetchLatestPlan,
+  enqueueBuildsFromPlan,
 } from "./api";
 
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
@@ -630,6 +632,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [pendingInputs, setPendingInputs] = useState([]);
   const [builds, setBuilds] = useState([]);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
+  const [latestPlan, setLatestPlan] = useState(null);
+  const [latestPlanLoading, setLatestPlanLoading] = useState(false);
+  const [latestPlanError, setLatestPlanError] = useState("");
+  const [enqueueingBuilds, setEnqueueingBuilds] = useState(false);
   const [hintSearch, setHintSearch] = useState("");
   const [selectedHintId, setSelectedHintId] = useState("");
   const [hintForm, setHintForm] = useState(null);
@@ -732,6 +738,24 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     setApiBaseInput(apiBase || getApiBase());
   }, [apiBase]);
 
+  const loadLatestPlan = async () => {
+    setLatestPlanLoading(true);
+    setLatestPlanError("");
+    try {
+      const plan = await fetchLatestPlan(authToken);
+      setLatestPlan(plan);
+    } catch (e) {
+      if (e.status === 404) {
+        setLatestPlan(null);
+        setLatestPlanError("No plan available yet.");
+      } else {
+        setLatestPlanError(e.message || "Failed to load plan.");
+      }
+    } finally {
+      setLatestPlanLoading(false);
+    }
+  };
+
   const parseLines = (value) =>
     (value || "")
       .split(/\r?\n/)
@@ -766,6 +790,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     const id = setInterval(() => load({ packageFilter: pkgFilter, statusFilter }), pollMs);
     return () => clearInterval(id);
   }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit, apiBlocked]);
+
+  useEffect(() => {
+    if (view === "builds") {
+      loadLatestPlan();
+    }
+  }, [view, authToken]);
 
   const handleTriggerWorker = async () => {
     setMessage("");
@@ -1102,6 +1132,27 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       pushToast?.({ type: "error", title: "Import failed", message: e.message });
     } finally {
       setBulkUploading(false);
+    }
+  };
+
+  const handleEnqueueBuilds = async () => {
+    if (!latestPlan?.id) {
+      setLatestPlanError("No plan loaded.");
+      return;
+    }
+    setEnqueueingBuilds(true);
+    try {
+      const resp = await enqueueBuildsFromPlan(latestPlan.id, authToken);
+      pushToast?.({
+        type: "success",
+        title: "Builds enqueued",
+        message: `${resp.enqueued ?? 0} builds queued`,
+      });
+      await load({ packageFilter: pkgFilter, statusFilter, force: true });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
+    } finally {
+      setEnqueueingBuilds(false);
     }
   };
 
@@ -1464,6 +1515,46 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       />
       <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
         <div className="space-y-4">
+          <div className="glass p-4 space-y-3">
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Manual build enqueue</span>
+              <span className="chip text-xs">🧪</span>
+            </div>
+            <div className="text-xs text-slate-400">
+              Auto-build is {settingsData?.auto_build ? "on" : "off"}. Use this to enqueue builds from the latest plan.
+            </div>
+            {latestPlanLoading ? (
+              <div className="text-xs text-slate-500">Loading latest plan…</div>
+            ) : latestPlan ? (
+              <div className="space-y-1 text-sm text-slate-200">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Plan ID</span>
+                  <span className="chip">{latestPlan.id}</span>
+                </div>
+                {latestPlan.run_id && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Run ID</span>
+                    <span className="chip">{latestPlan.run_id}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Nodes</span>
+                  <span className="chip">{latestPlan.plan?.length || 0}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-amber-200">{latestPlanError || "No plan loaded."}</div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <button className="btn btn-primary" onClick={handleEnqueueBuilds} disabled={!latestPlan || enqueueingBuilds}>
+                {enqueueingBuilds ? "Enqueueing..." : "Enqueue builds"}
+              </button>
+              <button className="btn btn-secondary" onClick={loadLatestPlan} disabled={latestPlanLoading}>
+                Refresh plan
+              </button>
+            </div>
+            {latestPlanError && latestPlan && <div className="text-xs text-amber-200">{latestPlanError}</div>}
+          </div>
           <div className="glass p-4 space-y-3">
             <div className="text-lg font-semibold flex items-center gap-2">
               <span>Filters</span>

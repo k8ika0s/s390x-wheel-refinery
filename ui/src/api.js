@@ -147,6 +147,14 @@ export function updateSettings(body, token) {
   return request("/api/settings", { method: "POST", body: JSON.stringify(body) }, token);
 }
 
+export function fetchLatestPlan(token) {
+  return request("/api/plan/latest", {}, token);
+}
+
+export function enqueueBuildsFromPlan(planId, token) {
+  return request(`/api/plan/${planId}/enqueue-builds`, { method: "POST" }, token);
+}
+
 export function createHint(hint, token) {
   return request("/api/hints", { method: "POST", body: JSON.stringify(hint) }, token);
 }

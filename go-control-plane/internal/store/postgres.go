@@ -879,6 +879,30 @@ func (p *PostgresStore) PlanSnapshot(ctx context.Context, planID int64) (PlanSna
 	return snap, nil
 }
 
+// LatestPlanSnapshot returns the newest plan snapshot.
+func (p *PostgresStore) LatestPlanSnapshot(ctx context.Context) (PlanSnapshot, error) {
+	if err := p.ensureDB(); err != nil {
+		return PlanSnapshot{}, err
+	}
+	var snap PlanSnapshot
+	var planRaw json.RawMessage
+	var dagRaw json.RawMessage
+	row := p.db.QueryRowContext(ctx, `SELECT id, run_id, plan, dag FROM plans ORDER BY created_at DESC LIMIT 1`)
+	if err := row.Scan(&snap.ID, &snap.RunID, &planRaw, &dagRaw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PlanSnapshot{}, ErrNotFound
+		}
+		return PlanSnapshot{}, err
+	}
+	if err := json.Unmarshal(planRaw, &snap.Plan); err != nil {
+		return PlanSnapshot{}, err
+	}
+	if len(dagRaw) > 0 {
+		snap.DAG = dagRaw
+	}
+	return snap, nil
+}
+
 // QueueBuildsFromPlan seeds build_status rows for build nodes in a plan.
 func (p *PostgresStore) QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error {
 	if err := p.ensureDB(); err != nil {

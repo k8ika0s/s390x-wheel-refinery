@@ -165,6 +165,7 @@ type Store interface {
 	// Plan/Manifest/Artifacts
 	Plan(ctx context.Context) ([]PlanNode, error)
 	PlanSnapshot(ctx context.Context, planID int64) (PlanSnapshot, error)
+	LatestPlanSnapshot(ctx context.Context) (PlanSnapshot, error)
 	SavePlan(ctx context.Context, runID string, nodes []PlanNode, dag json.RawMessage) (int64, error)
 	QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error
 	Manifest(ctx context.Context, limit int) ([]ManifestEntry, error)
