@@ -1757,8 +1757,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         </div>
         <div className="glass p-4 space-y-3">
           <div className="flex items-center justify-between gap-2">
-            <div className="text-lg font-semibold flex items-center gap-2 whitespace-nowrap">
-              <span className="whitespace-nowrap">Pending inputs</span>
+            <div className="text-lg font-semibold flex items-center gap-2 whitespace-nowrap" style={{ whiteSpace: "nowrap" }}>
+              <span>Pending inputs</span>
               <span className="chip text-xs">🧾</span>
             </div>
             <div className="flex gap-2 whitespace-nowrap">
