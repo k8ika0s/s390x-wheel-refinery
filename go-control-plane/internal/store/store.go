@@ -146,7 +146,8 @@ type Store interface {
 
 	// Plan/Manifest/Artifacts
 	Plan(ctx context.Context) ([]PlanNode, error)
-	SavePlan(ctx context.Context, runID string, nodes []PlanNode) error
+	SavePlan(ctx context.Context, runID string, nodes []PlanNode) (int64, error)
+	QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error
 	Manifest(ctx context.Context, limit int) ([]ManifestEntry, error)
 	SaveManifest(ctx context.Context, entries []ManifestEntry) error
 	Artifacts(ctx context.Context, limit int) ([]Artifact, error)
@@ -159,6 +160,7 @@ type Store interface {
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int) ([]BuildStatus, error)
 	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error
+	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
 }
 
 // HistoryFilter defines filters for history queries.

@@ -27,6 +27,7 @@ type fakeStore struct {
 		status string
 		errMsg string
 	}
+	queuedBuilds []store.PlanNode
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -84,8 +85,12 @@ func (f *fakeStore) PutLog(ctx context.Context, entry store.LogEntry) error {
 func (f *fakeStore) Plan(ctx context.Context) ([]store.PlanNode, error) {
 	return f.lastPlan, nil
 }
-func (f *fakeStore) SavePlan(ctx context.Context, runID string, nodes []store.PlanNode) error {
+func (f *fakeStore) SavePlan(ctx context.Context, runID string, nodes []store.PlanNode) (int64, error) {
 	f.lastPlan = nodes
+	return 1, nil
+}
+func (f *fakeStore) QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []store.PlanNode) error {
+	f.queuedBuilds = append(f.queuedBuilds, nodes...)
 	return nil
 }
 func (f *fakeStore) Manifest(ctx context.Context, limit int) ([]store.ManifestEntry, error) {
@@ -121,6 +126,9 @@ func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int) ([
 }
 func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error {
 	return nil
+}
+func (f *fakeStore) LeaseBuilds(ctx context.Context, max int) ([]store.BuildStatus, error) {
+	return nil, nil
 }
 
 // fakeQueue implements only Stats for these tests.
@@ -214,8 +222,8 @@ func TestPlanComputeProxiesToWorker(t *testing.T) {
 	if len(fs.lastPlan) == 0 {
 		t.Fatalf("plan not saved to store")
 	}
-	if len(fq.enq) != 1 || fq.enq[0].Package != "pkg" {
-		t.Fatalf("expected enqueue from plan compute, got %+v", fq.enq)
+	if len(fs.queuedBuilds) != 1 || fs.queuedBuilds[0].Name != "pkg" {
+		t.Fatalf("expected enqueue from plan compute, got %+v", fs.queuedBuilds)
 	}
 }
 
@@ -241,8 +249,8 @@ func TestPlanPostSavesPlan(t *testing.T) {
 	if len(fs.lastPlan) != 1 {
 		t.Fatalf("plan not saved")
 	}
-	if len(fq.enq) != 1 || fq.enq[0].Package != "pkg" {
-		t.Fatalf("expected enqueue from plan, got %+v", fq.enq)
+	if len(fs.queuedBuilds) != 1 || fs.queuedBuilds[0].Name != "pkg" {
+		t.Fatalf("expected enqueue from plan, got %+v", fs.queuedBuilds)
 	}
 }
 

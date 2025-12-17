@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -788,16 +789,105 @@ func (p *PostgresStore) Plan(ctx context.Context) ([]PlanNode, error) {
 	return []PlanNode{}, nil
 }
 
-func (p *PostgresStore) SavePlan(ctx context.Context, runID string, nodes []PlanNode) error {
+func (p *PostgresStore) SavePlan(ctx context.Context, runID string, nodes []PlanNode) (int64, error) {
 	if err := p.ensureDB(); err != nil {
-		return err
+		return 0, err
 	}
 	data, err := json.Marshal(nodes)
 	if err != nil {
+		return 0, err
+	}
+	var id int64
+	if err := p.db.QueryRowContext(ctx, `INSERT INTO plans (run_id, plan) VALUES ($1, $2) RETURNING id`, runID, data).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// QueueBuildsFromPlan seeds build_status rows for build nodes in a plan.
+func (p *PostgresStore) QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error {
+	if err := p.ensureDB(); err != nil {
 		return err
 	}
-	_, err = p.db.ExecContext(ctx, `INSERT INTO plans (run_id, plan) VALUES ($1, $2)`, runID, data)
-	return err
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt := `
+		INSERT INTO build_status (package, version, python_tag, platform_tag, status, attempts, run_id, plan_id, backoff_until, last_error)
+		VALUES ($1,$2,$3,$4,'pending',0,$5,$6,NULL,'')
+		ON CONFLICT (package, version) DO UPDATE
+		SET python_tag = EXCLUDED.python_tag,
+		    platform_tag = EXCLUDED.platform_tag,
+		    run_id = EXCLUDED.run_id,
+		    plan_id = EXCLUDED.plan_id,
+		    status = 'pending',
+		    attempts = 0,
+		    backoff_until = NULL,
+		    last_error = ''
+	`
+	for _, n := range nodes {
+		if strings.ToLower(n.Action) != "build" || n.Name == "" || n.Version == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, stmt, n.Name, n.Version, n.PythonTag, n.PlatformTag, runID, planID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// LeaseBuilds returns ready builds and marks them building with attempt increment.
+func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	if max <= 0 {
+		max = 1
+	}
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `
+		WITH cte AS (
+			SELECT id
+			FROM build_status
+			WHERE status IN ('pending','retry')
+			  AND (backoff_until IS NULL OR backoff_until <= NOW())
+			ORDER BY created_at ASC
+			FOR UPDATE SKIP LOCKED
+			LIMIT $1
+		)
+		UPDATE build_status b
+		SET status = 'building',
+		    attempts = b.attempts + 1,
+		    updated_at = NOW()
+		FROM cte
+		WHERE b.id = cte.id
+		RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts, COALESCE(b.last_error,''), b.run_id, b.plan_id, COALESCE(extract(epoch from b.backoff_until),0)::bigint, extract(epoch from b.created_at)::bigint, extract(epoch from b.updated_at)::bigint
+	`, max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BuildStatus
+	for rows.Next() {
+		var bs BuildStatus
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.CreatedAt, &bs.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, bs)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Helpers for pq string arrays without importing driver types in interface.

@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -96,7 +97,13 @@ func (w *Worker) Drain(ctx context.Context) error {
 	if err := w.LoadPlan(); err != nil {
 		return fmt.Errorf("load plan: %w", err)
 	}
-	reqs, err := w.Queue.Pop(ctx, w.Cfg.BatchSize)
+	var reqs []queue.Request
+	var err error
+	if w.Cfg.BuildPopURL != "" {
+		reqs, err = w.popBuildQueue(ctx)
+	} else {
+		reqs, err = w.Queue.Pop(ctx, w.Cfg.BatchSize)
+	}
 	if err != nil {
 		return err
 	}
@@ -155,10 +162,13 @@ func (w *Worker) Drain(ctx context.Context) error {
 			if firstErr == nil {
 				firstErr = res.err
 			}
+			if w.shouldRequeue(reqAttempts, res.job) {
+				status = "retry"
+			}
 		}
 		// report build status to control-plane
 		backoffUntil := int64(0)
-		if res.err != nil {
+		if status == "retry" {
 			backoffUntil = backoffTime(res.attempt)
 		}
 		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, res.attempt, backoffUntil)
@@ -306,18 +316,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 			})
 		}
 
-		if res.err != nil && w.shouldRequeue(reqAttempts, res.job) {
-			_ = w.Queue.Enqueue(ctx, queue.Request{
-				Package:       res.job.Name,
-				Version:       res.job.Version,
-				PythonVersion: res.job.PythonVersion,
-				PythonTag:     res.job.PythonTag,
-				PlatformTag:   res.job.PlatformTag,
-				Recipes:       res.job.Recipes,
-				Attempts:      res.attempt + 1,
-				EnqueuedAt:    time.Now().Unix(),
-			})
-		} else if res.err == nil {
+		if res.err == nil {
 			w.uploadArtifacts(ctx, res.job)
 		}
 	}
@@ -583,8 +582,22 @@ func pyTagFromVersion(ver string) string {
 	return trimmed
 }
 
+func pyVersionFromTag(tag string) string {
+	tag = strings.TrimPrefix(tag, "cp")
+	if len(tag) == 3 {
+		return fmt.Sprintf("%s.%s", tag[:1], tag[1:])
+	}
+	if len(tag) == 4 {
+		return fmt.Sprintf("%s.%s", tag[:2], tag[2:])
+	}
+	return ""
+}
+
 // BuildWorker constructs a worker from config.
 func BuildWorker(cfg Config) (*Worker, error) {
+	if cfg.BuildPopURL == "" && cfg.ControlPlaneURL != "" {
+		cfg.BuildPopURL = strings.TrimRight(cfg.ControlPlaneURL, "/") + "/api/build-queue/pop"
+	}
 	var q queue.Backend
 	switch cfg.QueueBackend {
 	case "redis":
@@ -640,6 +653,63 @@ func (w *Worker) shouldRequeue(reqAttempts map[string]int, job runner.Job) bool 
 		return false
 	}
 	return true
+}
+
+// popBuildQueue pulls ready builds from control-plane build queue (if configured).
+func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
+	url := w.Cfg.BuildPopURL
+	if url == "" && w.Cfg.ControlPlaneURL != "" {
+		url = strings.TrimRight(w.Cfg.ControlPlaneURL, "/") + "/api/build-queue/pop"
+	}
+	if url == "" {
+		return nil, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if w.Cfg.BatchSize > 0 {
+		q := req.URL.Query()
+		q.Set("max", strconv.Itoa(w.Cfg.BatchSize))
+		req.URL.RawQuery = q.Encode()
+	}
+	if w.Cfg.ControlPlaneToken != "" {
+		req.Header.Set("X-Worker-Token", w.Cfg.ControlPlaneToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("build queue pop: status %d: %s", resp.StatusCode, string(b))
+	}
+	var payload struct {
+		Builds []struct {
+			Package     string `json:"package"`
+			Version     string `json:"version"`
+			PythonTag   string `json:"python_tag"`
+			PlatformTag string `json:"platform_tag"`
+			Attempts    int    `json:"attempts"`
+		} `json:"builds"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	var out []queue.Request
+	for _, b := range payload.Builds {
+		out = append(out, queue.Request{
+			Package:       b.Package,
+			Version:       b.Version,
+			PythonTag:     b.PythonTag,
+			PythonVersion: pyVersionFromTag(b.PythonTag),
+			PlatformTag:   b.PlatformTag,
+			Attempts:      b.Attempts,
+		})
+	}
+	return out, nil
 }
 
 // backoffTime returns a Unix timestamp for the next retry using capped exponential backoff with jitter.

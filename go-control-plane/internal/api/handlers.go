@@ -44,6 +44,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
 	mux.HandleFunc("/api/builds", h.builds)
 	mux.HandleFunc("/api/builds/status", h.buildStatusUpdate)
+	mux.HandleFunc("/api/build-queue/pop", h.buildQueuePop)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
 	mux.HandleFunc("/api/recent", h.recent)
@@ -590,6 +591,45 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "build status updated"})
 }
 
+func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	max := parseIntDefault(r.URL.Query().Get("max"), 5, 100)
+	builds, err := h.Store.LeaseBuilds(r.Context(), max)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	type job struct {
+		Package     string `json:"package"`
+		Version     string `json:"version"`
+		PythonTag   string `json:"python_tag"`
+		PlatformTag string `json:"platform_tag"`
+		Attempts    int    `json:"attempts"`
+		RunID       string `json:"run_id,omitempty"`
+		PlanID      int64  `json:"plan_id,omitempty"`
+	}
+	var out []job
+	for _, b := range builds {
+		out = append(out, job{
+			Package:     b.Package,
+			Version:     b.Version,
+			PythonTag:   b.PythonTag,
+			PlatformTag: b.PlatformTag,
+			Attempts:    b.Attempts,
+			RunID:       b.RunID,
+			PlanID:      b.PlanID,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"builds": out})
+}
+
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -787,24 +827,13 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "plan required"})
 			return
 		}
-		if err := h.Store.SavePlan(r.Context(), body.RunID, body.Plan); err != nil {
+		planID, err := h.Store.SavePlan(r.Context(), body.RunID, body.Plan)
+		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		if h.Config.AutoBuild && h.Queue != nil {
-			for _, node := range body.Plan {
-				if strings.ToLower(node.Action) != "build" {
-					continue
-				}
-				req := queue.Request{
-					Package:       node.Name,
-					Version:       node.Version,
-					PythonVersion: pyVersionFromTag(node.PythonTag, node.PythonVersion),
-					PythonTag:     node.PythonTag,
-					PlatformTag:   node.PlatformTag,
-				}
-				_ = h.Queue.Enqueue(r.Context(), req)
-			}
+		if h.Config.AutoBuild {
+			_ = h.Store.QueueBuildsFromPlan(r.Context(), body.RunID, planID, body.Plan)
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "plan saved"})
 	default:
@@ -877,21 +906,9 @@ func (h *Handler) planCompute(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(nodes) > 0 {
 		runID := toString(snap["run_id"])
-		_ = h.Store.SavePlan(ctx, runID, nodes)
-		if h.Config.AutoBuild && h.Queue != nil {
-			for _, node := range nodes {
-				if strings.ToLower(node.Action) != "build" {
-					continue
-				}
-				req := queue.Request{
-					Package:       node.Name,
-					Version:       node.Version,
-					PythonVersion: pyVersionFromTag(node.PythonTag, node.PythonVersion),
-					PythonTag:     node.PythonTag,
-					PlatformTag:   node.PlatformTag,
-				}
-				_ = h.Queue.Enqueue(ctx, req)
-			}
+		planID, _ := h.Store.SavePlan(ctx, runID, nodes)
+		if h.Config.AutoBuild {
+			_ = h.Store.QueueBuildsFromPlan(ctx, runID, planID, nodes)
 		}
 	}
 	writeJSON(w, http.StatusOK, snap)
