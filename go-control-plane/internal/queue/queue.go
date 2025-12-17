@@ -4,13 +4,14 @@ import "context"
 
 // Request is a retry/build request stored in the queue.
 type Request struct {
-	Package     string
-	Version     string
-	PythonVersion string
-	PythonTag   string
-	PlatformTag string
-	Recipes     []string
-	EnqueuedAt  int64
+	Package       string   `json:"package"`
+	Version       string   `json:"version"`
+	PythonVersion string   `json:"python_version,omitempty"`
+	PythonTag     string   `json:"python_tag,omitempty"`
+	PlatformTag   string   `json:"platform_tag,omitempty"`
+	Recipes       []string `json:"recipes,omitempty"`
+	EnqueuedAt    int64    `json:"enqueued_at,omitempty"`
+	Attempts      int      `json:"attempts,omitempty"`
 }
 
 // Backend defines operations for the queue.

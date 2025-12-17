@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -12,6 +14,7 @@
 
 body {
   @apply bg-bg text-slate-100 antialiased;
+  font-family: "Space Grotesk", "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 
 .app-shell {
@@ -155,6 +158,14 @@ input:focus-visible {
 }
 .brand-mark {
   @apply w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-cyan-400 text-slate-900 font-black grid place-items-center shadow-lg;
+}
+.status-rail {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+.status-chip {
+  @apply flex items-center justify-between gap-3;
 }
 
 .nav-link {

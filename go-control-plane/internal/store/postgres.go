@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -51,8 +53,19 @@ CREATE TABLE IF NOT EXISTS hints (
     id       TEXT PRIMARY KEY,
     pattern  TEXT NOT NULL,
     recipes  JSONB,
-    note     TEXT
+    note     TEXT,
+    tags     JSONB,
+    severity TEXT,
+    applies_to JSONB,
+    confidence TEXT,
+    examples JSONB
 );
+
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS tags JSONB;
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS severity TEXT;
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS applies_to JSONB;
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS confidence TEXT;
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS examples JSONB;
 
 CREATE TABLE IF NOT EXISTS logs (
     id         BIGSERIAL PRIMARY KEY,
@@ -92,7 +105,49 @@ CREATE TABLE IF NOT EXISTS plans (
     id         BIGSERIAL PRIMARY KEY,
     run_id     TEXT,
     plan       JSONB NOT NULL,
+    dag        JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS dag JSONB;
+
+CREATE TABLE IF NOT EXISTS build_status (
+    id            BIGSERIAL PRIMARY KEY,
+    package       TEXT NOT NULL,
+    version       TEXT NOT NULL,
+    python_tag    TEXT,
+    platform_tag  TEXT,
+    status        TEXT NOT NULL DEFAULT 'queued',
+    attempts      INT NOT NULL DEFAULT 0,
+    backoff_until TIMESTAMPTZ,
+    last_error    TEXT,
+    run_id        TEXT,
+    plan_id       BIGINT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_build_status_pkg ON build_status(package, version);
+CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
+
+CREATE TABLE IF NOT EXISTS pending_inputs (
+    id          BIGSERIAL PRIMARY KEY,
+    filename    TEXT NOT NULL,
+    digest      TEXT,
+    size_bytes  BIGINT,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    error       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS plan_metadata (
+    id             BIGSERIAL PRIMARY KEY,
+    pending_input  BIGINT REFERENCES pending_inputs(id),
+    plan_id        BIGINT REFERENCES plans(id),
+    status         TEXT NOT NULL DEFAULT 'ready_for_build',
+    summary        JSONB,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 `
 
@@ -111,6 +166,119 @@ func (p *PostgresStore) Ping(ctx context.Context) error {
 		return err
 	}
 	return p.db.PingContext(ctx)
+}
+
+// AddPendingInput inserts a new pending input.
+func (p *PostgresStore) AddPendingInput(ctx context.Context, pi PendingInput) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	var id int64
+	err := p.db.QueryRowContext(ctx, `
+		INSERT INTO pending_inputs (filename, digest, size_bytes, status)
+		VALUES ($1,$2,$3,$4) RETURNING id
+	`, pi.Filename, pi.Digest, pi.SizeBytes, pi.Status).Scan(&id)
+	return id, err
+}
+
+// ListPendingInputs fetches pending inputs.
+func (p *PostgresStore) ListPendingInputs(ctx context.Context, status string) ([]PendingInput, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	q := `SELECT id, filename, digest, size_bytes, status, COALESCE(error,''), created_at, updated_at FROM pending_inputs`
+	args := []any{}
+	if status != "" {
+		q += ` WHERE status = $1`
+		args = append(args, status)
+	}
+	q += ` ORDER BY created_at DESC`
+	rows, err := p.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingInput
+	for rows.Next() {
+		var pi PendingInput
+		if err := rows.Scan(&pi.ID, &pi.Filename, &pi.Digest, &pi.SizeBytes, &pi.Status, &pi.Error, &pi.CreatedAt, &pi.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, pi)
+	}
+	return out, rows.Err()
+}
+
+// UpdatePendingInputStatus sets status/error.
+func (p *PostgresStore) UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
+	_, err := p.db.ExecContext(ctx, `
+		UPDATE pending_inputs
+		SET status = $1, error = $2, updated_at = NOW()
+		WHERE id = $3
+	`, status, errMsg, id)
+	return err
+}
+
+// ListBuilds returns build status rows filtered by status if provided.
+func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int) ([]BuildStatus, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	q := `SELECT id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), run_id, plan_id, extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint, COALESCE(extract(epoch from backoff_until),0)::bigint FROM build_status`
+	args := []any{}
+	if status != "" {
+		q += ` WHERE status = $1`
+		args = append(args, status)
+	}
+	q += ` ORDER BY created_at ASC`
+	if limit > 0 {
+		q += ` LIMIT $2`
+		if status == "" {
+			args = append(args, limit)
+		}
+	}
+	rows, err := p.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BuildStatus
+	for rows.Next() {
+		var bs BuildStatus
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.RunID, &bs.PlanID, &bs.OldestAgeSec, &bs.CreatedAt, &bs.UpdatedAt, &bs.BackoffUntil); err != nil {
+			return nil, err
+		}
+		out = append(out, bs)
+	}
+	return out, rows.Err()
+}
+
+// UpdateBuildStatus upserts build status by package/version.
+func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
+	if attempts < 0 {
+		attempts = 0
+	}
+	var backoff any
+	if backoffUntil > 0 {
+		backoff = time.Unix(backoffUntil, 0)
+	}
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO build_status (package, version, status, last_error, attempts, backoff_until)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (package, version) DO UPDATE
+		SET status = EXCLUDED.status,
+		    last_error = EXCLUDED.last_error,
+		    attempts = EXCLUDED.attempts,
+		    backoff_until = EXCLUDED.backoff_until,
+		    updated_at = NOW()
+	`, pkg, version, status, errMsg, attempts, backoff)
+	return err
 }
 
 func (p *PostgresStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]Event, error) {
@@ -448,7 +616,7 @@ func (p *PostgresStore) ListHints(ctx context.Context) ([]Hint, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT id,pattern,recipes,note FROM hints`)
+	rows, err := p.db.QueryContext(ctx, `SELECT id,pattern,recipes,note,tags,severity,applies_to,confidence,examples FROM hints`)
 	if err != nil {
 		return nil, err
 	}
@@ -457,11 +625,23 @@ func (p *PostgresStore) ListHints(ctx context.Context) ([]Hint, error) {
 	for rows.Next() {
 		var h Hint
 		var recipes json.RawMessage
-		if err := rows.Scan(&h.ID, &h.Pattern, &recipes, &h.Note); err != nil {
+		var tags json.RawMessage
+		var applies json.RawMessage
+		var examples json.RawMessage
+		if err := rows.Scan(&h.ID, &h.Pattern, &recipes, &h.Note, &tags, &h.Severity, &applies, &h.Confidence, &examples); err != nil {
 			return nil, err
 		}
 		if len(recipes) > 0 {
 			_ = json.Unmarshal(recipes, &h.Recipes)
+		}
+		if len(tags) > 0 {
+			_ = json.Unmarshal(tags, &h.Tags)
+		}
+		if len(applies) > 0 {
+			_ = json.Unmarshal(applies, &h.AppliesTo)
+		}
+		if len(examples) > 0 {
+			_ = json.Unmarshal(examples, &h.Examples)
 		}
 		out = append(out, h)
 	}
@@ -474,12 +654,25 @@ func (p *PostgresStore) GetHint(ctx context.Context, id string) (Hint, error) {
 	}
 	var h Hint
 	var recipes json.RawMessage
-	err := p.db.QueryRowContext(ctx, `SELECT id,pattern,recipes,note FROM hints WHERE id=$1`, id).Scan(&h.ID, &h.Pattern, &recipes, &h.Note)
+	var tags json.RawMessage
+	var applies json.RawMessage
+	var examples json.RawMessage
+	err := p.db.QueryRowContext(ctx, `SELECT id,pattern,recipes,note,tags,severity,applies_to,confidence,examples FROM hints WHERE id=$1`, id).
+		Scan(&h.ID, &h.Pattern, &recipes, &h.Note, &tags, &h.Severity, &applies, &h.Confidence, &examples)
 	if err != nil {
 		return Hint{}, err
 	}
 	if len(recipes) > 0 {
 		_ = json.Unmarshal(recipes, &h.Recipes)
+	}
+	if len(tags) > 0 {
+		_ = json.Unmarshal(tags, &h.Tags)
+	}
+	if len(applies) > 0 {
+		_ = json.Unmarshal(applies, &h.AppliesTo)
+	}
+	if len(examples) > 0 {
+		_ = json.Unmarshal(examples, &h.Examples)
 	}
 	return h, nil
 }
@@ -489,11 +682,22 @@ func (p *PostgresStore) PutHint(ctx context.Context, hint Hint) error {
 		return err
 	}
 	recipes, _ := json.Marshal(hint.Recipes)
+	tags, _ := json.Marshal(hint.Tags)
+	applies, _ := json.Marshal(hint.AppliesTo)
+	examples, _ := json.Marshal(hint.Examples)
 	_, err := p.db.ExecContext(ctx, `
-	    INSERT INTO hints (id,pattern,recipes,note)
-	    VALUES ($1,$2,$3,$4)
-	    ON CONFLICT (id) DO UPDATE SET pattern=EXCLUDED.pattern, recipes=EXCLUDED.recipes, note=EXCLUDED.note`,
-		hint.ID, hint.Pattern, recipes, hint.Note)
+	    INSERT INTO hints (id,pattern,recipes,note,tags,severity,applies_to,confidence,examples)
+	    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	    ON CONFLICT (id) DO UPDATE
+	    SET pattern=EXCLUDED.pattern,
+	        recipes=EXCLUDED.recipes,
+	        note=EXCLUDED.note,
+	        tags=EXCLUDED.tags,
+	        severity=EXCLUDED.severity,
+	        applies_to=EXCLUDED.applies_to,
+	        confidence=EXCLUDED.confidence,
+	        examples=EXCLUDED.examples`,
+		hint.ID, hint.Pattern, recipes, hint.Note, tags, hint.Severity, applies, hint.Confidence, examples)
 	return err
 }
 
@@ -636,16 +840,191 @@ func (p *PostgresStore) Plan(ctx context.Context) ([]PlanNode, error) {
 	return []PlanNode{}, nil
 }
 
-func (p *PostgresStore) SavePlan(ctx context.Context, runID string, nodes []PlanNode) error {
+func (p *PostgresStore) SavePlan(ctx context.Context, runID string, nodes []PlanNode, dag json.RawMessage) (int64, error) {
 	if err := p.ensureDB(); err != nil {
-		return err
+		return 0, err
 	}
 	data, err := json.Marshal(nodes)
 	if err != nil {
+		return 0, err
+	}
+	var id int64
+	if err := p.db.QueryRowContext(ctx, `INSERT INTO plans (run_id, plan, dag) VALUES ($1, $2, $3) RETURNING id`, runID, data, dag).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// PlanSnapshot returns a stored plan snapshot by id.
+func (p *PostgresStore) PlanSnapshot(ctx context.Context, planID int64) (PlanSnapshot, error) {
+	if err := p.ensureDB(); err != nil {
+		return PlanSnapshot{}, err
+	}
+	var snap PlanSnapshot
+	var planRaw json.RawMessage
+	var dagRaw json.RawMessage
+	row := p.db.QueryRowContext(ctx, `SELECT id, run_id, plan, dag FROM plans WHERE id = $1`, planID)
+	if err := row.Scan(&snap.ID, &snap.RunID, &planRaw, &dagRaw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PlanSnapshot{}, ErrNotFound
+		}
+		return PlanSnapshot{}, err
+	}
+	if err := json.Unmarshal(planRaw, &snap.Plan); err != nil {
+		return PlanSnapshot{}, err
+	}
+	if len(dagRaw) > 0 {
+		snap.DAG = dagRaw
+	}
+	return snap, nil
+}
+
+// LatestPlanSnapshot returns the newest plan snapshot.
+func (p *PostgresStore) LatestPlanSnapshot(ctx context.Context) (PlanSnapshot, error) {
+	if err := p.ensureDB(); err != nil {
+		return PlanSnapshot{}, err
+	}
+	var snap PlanSnapshot
+	var planRaw json.RawMessage
+	var dagRaw json.RawMessage
+	row := p.db.QueryRowContext(ctx, `SELECT id, run_id, plan, dag FROM plans ORDER BY created_at DESC LIMIT 1`)
+	if err := row.Scan(&snap.ID, &snap.RunID, &planRaw, &dagRaw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PlanSnapshot{}, ErrNotFound
+		}
+		return PlanSnapshot{}, err
+	}
+	if err := json.Unmarshal(planRaw, &snap.Plan); err != nil {
+		return PlanSnapshot{}, err
+	}
+	if len(dagRaw) > 0 {
+		snap.DAG = dagRaw
+	}
+	return snap, nil
+}
+
+// ListPlans returns recent plan summaries.
+func (p *PostgresStore) ListPlans(ctx context.Context, limit int) ([]PlanSummary, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id,
+		       run_id,
+		       EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at,
+		       CASE WHEN jsonb_typeof(plan) = 'array' THEN jsonb_array_length(plan) ELSE 0 END AS node_count,
+		       CASE WHEN jsonb_typeof(plan) = 'array'
+		            THEN (SELECT COUNT(*) FROM jsonb_array_elements(plan) elem WHERE lower(elem->>'action') = 'build')
+		            ELSE 0 END AS build_count
+		FROM plans
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlanSummary
+	for rows.Next() {
+		var entry PlanSummary
+		if err := rows.Scan(&entry.ID, &entry.RunID, &entry.CreatedAt, &entry.NodeCount, &entry.BuildCount); err != nil {
+			return nil, err
+		}
+		out = append(out, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// QueueBuildsFromPlan seeds build_status rows for build nodes in a plan.
+func (p *PostgresStore) QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error {
+	if err := p.ensureDB(); err != nil {
 		return err
 	}
-	_, err = p.db.ExecContext(ctx, `INSERT INTO plans (run_id, plan) VALUES ($1, $2)`, runID, data)
-	return err
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt := `
+		INSERT INTO build_status (package, version, python_tag, platform_tag, status, attempts, run_id, plan_id, backoff_until, last_error)
+		VALUES ($1,$2,$3,$4,'pending',0,$5,$6,NULL,'')
+		ON CONFLICT (package, version) DO UPDATE
+		SET python_tag = EXCLUDED.python_tag,
+		    platform_tag = EXCLUDED.platform_tag,
+		    run_id = EXCLUDED.run_id,
+		    plan_id = EXCLUDED.plan_id,
+		    status = 'pending',
+		    attempts = 0,
+		    backoff_until = NULL,
+		    last_error = ''
+	`
+	for _, n := range nodes {
+		if strings.ToLower(n.Action) != "build" || n.Name == "" || n.Version == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, stmt, n.Name, n.Version, n.PythonTag, n.PlatformTag, runID, planID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// LeaseBuilds returns ready builds and marks them building with attempt increment.
+func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	if max <= 0 {
+		max = 1
+	}
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `
+		WITH cte AS (
+			SELECT id
+			FROM build_status
+			WHERE status IN ('pending','retry')
+			  AND (backoff_until IS NULL OR backoff_until <= NOW())
+			ORDER BY created_at ASC
+			FOR UPDATE SKIP LOCKED
+			LIMIT $1
+		)
+		UPDATE build_status b
+		SET status = 'building',
+		    attempts = b.attempts + 1,
+		    updated_at = NOW()
+		FROM cte
+		WHERE b.id = cte.id
+		RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts, COALESCE(b.last_error,''), b.run_id, b.plan_id, COALESCE(extract(epoch from b.backoff_until),0)::bigint, extract(epoch from b.created_at)::bigint, extract(epoch from b.updated_at)::bigint
+	`, max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BuildStatus
+	for rows.Next() {
+		var bs BuildStatus
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.CreatedAt, &bs.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, bs)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Helpers for pq string arrays without importing driver types in interface.

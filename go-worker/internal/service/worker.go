@@ -11,10 +11,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -91,18 +94,19 @@ func (w *Worker) LoadPlan() error {
 
 // Drain pops from queue and executes matched jobs.
 func (w *Worker) Drain(ctx context.Context) error {
-	if err := w.LoadPlan(); err != nil {
-		return fmt.Errorf("load plan: %w", err)
+	var reqs []queue.Request
+	var err error
+	usingBuildQueue := w.Cfg.BuildPopURL != ""
+	if usingBuildQueue {
+		reqs, err = w.popBuildQueue(ctx)
+	} else {
+		if err := w.LoadPlan(); err != nil {
+			return fmt.Errorf("load plan: %w", err)
+		}
+		reqs, err = w.Queue.Pop(ctx, w.Cfg.BatchSize)
 	}
-	reqs, err := w.Queue.Pop(ctx, w.Cfg.BatchSize)
 	if err != nil {
 		return err
-	}
-	if len(reqs) == 0 {
-		reqs = w.requestsFromPlan()
-		if w.Cfg.BatchSize > 0 && len(reqs) > w.Cfg.BatchSize {
-			reqs = reqs[:w.Cfg.BatchSize]
-		}
 	}
 	if len(reqs) == 0 {
 		return nil
@@ -116,12 +120,24 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 	}
 
-	jobs := w.match(ctx, reqs)
+	var jobs []runner.Job
+	if usingBuildQueue {
+		jobs, err = w.jobsFromBuildQueue(ctx, reqs)
+		if err != nil {
+			return err
+		}
+	} else {
+		w.mu.Lock()
+		snap := w.planSnap
+		w.mu.Unlock()
+		jobs = w.match(ctx, snap, reqs)
+	}
 	results := make([]result, len(jobs))
 	g, ctx := errgroup.WithContext(ctx)
 	for i, job := range jobs {
 		i, job := i, job
 		g.Go(func() error {
+			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, reqAttempts[queueKey(job.Name, job.Version)], 0)
 			if job.WheelAction == "reuse" && job.WheelDigest != "" {
 				if err := w.fetchWheel(ctx, job); err != nil {
 					return fmt.Errorf("fetch wheel %s: %w", job.WheelDigest, err)
@@ -158,7 +174,16 @@ func (w *Worker) Drain(ctx context.Context) error {
 			if firstErr == nil {
 				firstErr = res.err
 			}
+			if w.shouldRequeue(reqAttempts, res.job) {
+				status = "retry"
+			}
 		}
+		// report build status to control-plane
+		backoffUntil := int64(0)
+		if status == "retry" {
+			backoffUntil = backoffTime(res.attempt)
+		}
+		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, res.attempt, backoffUntil)
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
@@ -303,18 +328,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 			})
 		}
 
-		if res.err != nil && w.shouldRequeue(reqAttempts, res.job) {
-			_ = w.Queue.Enqueue(ctx, queue.Request{
-				Package:       res.job.Name,
-				Version:       res.job.Version,
-				PythonVersion: res.job.PythonVersion,
-				PythonTag:     res.job.PythonTag,
-				PlatformTag:   res.job.PlatformTag,
-				Recipes:       res.job.Recipes,
-				Attempts:      res.attempt + 1,
-				EnqueuedAt:    time.Now().Unix(),
-			})
-		} else if res.err == nil {
+		if res.err == nil {
 			w.uploadArtifacts(ctx, res.job)
 		}
 	}
@@ -325,11 +339,41 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
-	w.mu.Lock()
-	snap := w.planSnap
-	w.mu.Unlock()
+func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, attempts int, backoffUntil int64) {
+	if w.Cfg.ControlPlaneURL == "" {
+		return
+	}
+	url := strings.TrimRight(w.Cfg.ControlPlaneURL, "/") + "/api/builds/status"
+	body := map[string]any{
+		"package":  pkg,
+		"version":  version,
+		"status":   status,
+		"attempts": attempts,
+	}
+	if err != nil {
+		body["error"] = err.Error()
+	}
+	if backoffUntil > 0 {
+		body["backoff_until"] = backoffUntil
+	}
+	data, _ := json.Marshal(body)
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if reqErr != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if w.Cfg.ControlPlaneToken != "" {
+		req.Header.Set("X-Worker-Token", w.Cfg.ControlPlaneToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, doErr := client.Do(req)
+	if doErr != nil {
+		return
+	}
+	resp.Body.Close()
+}
 
+func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Request) []runner.Job {
 	packActions := map[string]string{}
 	packMeta := map[string]map[string]any{}
 	runtimeActions := map[string]string{}
@@ -379,6 +423,27 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 		}
 	}
 	return jobs
+}
+
+func (w *Worker) jobsFromBuildQueue(ctx context.Context, reqs []queue.Request) ([]runner.Job, error) {
+	grouped := make(map[int64][]queue.Request)
+	for _, req := range reqs {
+		if req.PlanID == 0 {
+			log.Printf("build queue item missing plan_id: %s@%s", req.Package, req.Version)
+			continue
+		}
+		grouped[req.PlanID] = append(grouped[req.PlanID], req)
+	}
+	var jobs []runner.Job
+	for planID, group := range grouped {
+		snap, err := w.fetchPlanSnapshot(ctx, planID)
+		if err != nil {
+			log.Printf("build queue plan fetch failed id=%d: %v", planID, err)
+			continue
+		}
+		jobs = append(jobs, w.match(ctx, snap, group)...)
+	}
+	return jobs, nil
 }
 
 func equalsIgnoreCase(a, b string) bool {
@@ -497,6 +562,7 @@ func (w *Worker) objectURL(job runner.Job, kind string) string {
 
 // requestsFromPlan seeds work items directly from the current plan when the queue is empty.
 func (w *Worker) requestsFromPlan() []queue.Request {
+	// Legacy helper retained for backward compatibility; unused in Drain.
 	w.mu.Lock()
 	snap := w.planSnap
 	w.mu.Unlock()
@@ -545,8 +611,22 @@ func pyTagFromVersion(ver string) string {
 	return trimmed
 }
 
+func pyVersionFromTag(tag string) string {
+	tag = strings.TrimPrefix(tag, "cp")
+	if len(tag) == 3 {
+		return fmt.Sprintf("%s.%s", tag[:1], tag[1:])
+	}
+	if len(tag) == 4 {
+		return fmt.Sprintf("%s.%s", tag[:2], tag[2:])
+	}
+	return ""
+}
+
 // BuildWorker constructs a worker from config.
 func BuildWorker(cfg Config) (*Worker, error) {
+	if cfg.BuildPopURL == "" && cfg.ControlPlaneURL != "" {
+		cfg.BuildPopURL = strings.TrimRight(cfg.ControlPlaneURL, "/") + "/api/build-queue/pop"
+	}
 	var q queue.Backend
 	switch cfg.QueueBackend {
 	case "redis":
@@ -602,6 +682,116 @@ func (w *Worker) shouldRequeue(reqAttempts map[string]int, job runner.Job) bool 
 		return false
 	}
 	return true
+}
+
+// popBuildQueue pulls ready builds from control-plane build queue (if configured).
+func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
+	url := w.Cfg.BuildPopURL
+	if url == "" && w.Cfg.ControlPlaneURL != "" {
+		url = strings.TrimRight(w.Cfg.ControlPlaneURL, "/") + "/api/build-queue/pop"
+	}
+	if url == "" {
+		return nil, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if w.Cfg.BatchSize > 0 {
+		q := req.URL.Query()
+		q.Set("max", strconv.Itoa(w.Cfg.BatchSize))
+		req.URL.RawQuery = q.Encode()
+	}
+	if w.Cfg.ControlPlaneToken != "" {
+		req.Header.Set("X-Worker-Token", w.Cfg.ControlPlaneToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("build queue pop: status %d: %s", resp.StatusCode, string(b))
+	}
+	var payload struct {
+		Builds []struct {
+			Package     string `json:"package"`
+			Version     string `json:"version"`
+			PythonTag   string `json:"python_tag"`
+			PlatformTag string `json:"platform_tag"`
+			Attempts    int    `json:"attempts"`
+			RunID       string `json:"run_id,omitempty"`
+			PlanID      int64  `json:"plan_id,omitempty"`
+		} `json:"builds"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	var out []queue.Request
+	for _, b := range payload.Builds {
+		out = append(out, queue.Request{
+			Package:       b.Package,
+			Version:       b.Version,
+			PythonTag:     b.PythonTag,
+			PythonVersion: pyVersionFromTag(b.PythonTag),
+			PlatformTag:   b.PlatformTag,
+			Attempts:      b.Attempts,
+			RunID:         b.RunID,
+			PlanID:        b.PlanID,
+		})
+	}
+	return out, nil
+}
+
+func (w *Worker) fetchPlanSnapshot(ctx context.Context, planID int64) (plan.Snapshot, error) {
+	if w.Cfg.ControlPlaneURL == "" {
+		return plan.Snapshot{}, fmt.Errorf("control plane URL not set")
+	}
+	url := strings.TrimRight(w.Cfg.ControlPlaneURL, "/") + "/api/plan/" + strconv.FormatInt(planID, 10)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return plan.Snapshot{}, err
+	}
+	if w.Cfg.ControlPlaneToken != "" {
+		req.Header.Set("X-Worker-Token", w.Cfg.ControlPlaneToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return plan.Snapshot{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return plan.Snapshot{}, fmt.Errorf("plan fetch status %d: %s", resp.StatusCode, string(b))
+	}
+	var payload struct {
+		RunID string          `json:"run_id"`
+		Plan  []plan.FlatNode `json:"plan"`
+		DAG   []plan.DAGNode  `json:"dag,omitempty"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return plan.Snapshot{}, err
+	}
+	return plan.Snapshot{RunID: payload.RunID, Plan: payload.Plan, DAG: payload.DAG}, nil
+}
+
+// backoffTime returns a Unix timestamp for the next retry using capped exponential backoff with jitter.
+func backoffTime(attempt int) int64 {
+	if attempt < 1 {
+		attempt = 1
+	}
+	base := 5 * time.Second
+	max := 10 * time.Minute
+	d := base * time.Duration(1<<(attempt-1))
+	if d > max {
+		d = max
+	}
+	// Add up to 1s jitter to avoid thundering herd.
+	jitter := time.Duration(rand.Int63n(int64(time.Second)))
+	return time.Now().Add(d + jitter).Unix()
 }
 
 // writeManifest writes manifest.json locally (best effort).

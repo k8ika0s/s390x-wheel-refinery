@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
@@ -17,6 +18,23 @@ func Run() error {
 	w, err := BuildWorker(cfg)
 	if err != nil {
 		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if cfg.PlanPollEnabled && cfg.ControlPlaneURL != "" {
+		popURL := cfg.PlanPopURL
+		if popURL == "" {
+			popURL = strings.TrimRight(cfg.ControlPlaneURL, "/") + "/api/pending-inputs/pop"
+		}
+		statusURL := cfg.PlanStatusURL
+		if statusURL == "" {
+			statusURL = strings.TrimRight(cfg.ControlPlaneURL, "/") + "/api/pending-inputs/status"
+		}
+		listURL := cfg.PlanListURL
+		if listURL == "" {
+			listURL = strings.TrimRight(cfg.ControlPlaneURL, "/") + "/api/pending-inputs"
+		}
+		go plannerLoop(ctx, cfg, popURL, statusURL, listURL)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(wr http.ResponseWriter, r *http.Request) {

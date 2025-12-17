@@ -111,9 +111,9 @@ func TestMatchCarriesWheelDigestAndAction(t *testing.T) {
 			},
 		},
 	}
-	w := &Worker{Cfg: Config{}, planSnap: snap}
+	w := &Worker{Cfg: Config{}}
 	reqs := []queue.Request{{Package: "demo", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x"}}
-	jobs := w.match(context.Background(), reqs)
+	jobs := w.match(context.Background(), snap, reqs)
 	if len(jobs) != 1 {
 		t.Fatalf("expected 1 job, got %d", len(jobs))
 	}

@@ -74,6 +74,9 @@ services:
       POSTGRES_DSN: postgres://refinery:refinery@postgres:5432/refinery?sslmode=disable
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379
+      PLAN_REDIS_KEY: refinery:plan_queue
+      AUTO_PLAN: "1"
+      AUTO_BUILD: "1"
       KAFKA_BROKERS: ""
       WORKER_WEBHOOK_URL: http://worker:9000/trigger
       WORKER_PLAN_URL: http://worker:9000/plan
@@ -85,10 +88,13 @@ services:
       OBJECT_STORE_ACCESS_KEY: minio
       OBJECT_STORE_SECRET_KEY: minio123
       INPUT_DIR: /input
+      HINTS_DIR: /hints
+      HINTS_SEED: "1"
     ports:
       - "8080:8080"
     volumes:
       - ./input:/input
+      - ./hints:/hints:ro
 
   ui:
     build:
@@ -115,6 +121,12 @@ services:
       WORKER_TOKEN: ${WORKER_TOKEN:-}
       CONTROL_PLANE_URL: http://control-plane:8080
       CONTROL_PLANE_TOKEN: ${WORKER_TOKEN:-}
+      PLAN_POLL_ENABLED: "1"
+      PLAN_POP_URL: http://control-plane:8080/api/pending-inputs/pop
+      PLAN_STATUS_URL: http://control-plane:8080/api/pending-inputs/status
+      PLAN_LIST_URL: http://control-plane:8080/api/pending-inputs
+      PLAN_POLL_INTERVAL_SEC: 10
+      PLAN_POP_BATCH: 5
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379
       PODMAN_BIN: podman

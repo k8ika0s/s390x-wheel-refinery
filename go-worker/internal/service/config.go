@@ -17,6 +17,15 @@ type Config struct {
 	QueueFile           string
 	RedisURL            string
 	RedisKey            string
+	PlanPopURL          string
+	PlanStatusURL       string
+	PlanListURL         string
+	PlanPollEnabled     bool
+	PlanPollIntervalSec int
+	PlanPopBatch        int
+	AutoBuild           bool
+	BuildPopURL         string
+	BuildStatusURL      string
 	KafkaBrokers        string
 	KafkaTopic          string
 	InputDir            string
@@ -74,6 +83,15 @@ func fromEnv() Config {
 		QueueFile:           getenv("QUEUE_FILE", "/tmp/refinery/retry_queue.json"),
 		RedisURL:            getenv("REDIS_URL", ""),
 		RedisKey:            getenv("REDIS_KEY", "refinery:queue"),
+		PlanPopURL:          getenv("PLAN_POP_URL", ""),
+		PlanStatusURL:       getenv("PLAN_STATUS_URL", ""),
+		PlanListURL:         getenv("PLAN_LIST_URL", ""),
+		PlanPollEnabled:     getenvBool("PLAN_POLL_ENABLED", false),
+		PlanPollIntervalSec: getenvInt("PLAN_POLL_INTERVAL_SEC", 15),
+		PlanPopBatch:        getenvInt("PLAN_POP_BATCH", 5),
+		AutoBuild:           getenvBool("AUTO_BUILD", true),
+		BuildPopURL:         getenv("BUILD_POP_URL", ""),
+		BuildStatusURL:      getenv("BUILD_STATUS_URL", ""),
 		KafkaBrokers:        getenv("KAFKA_BROKERS", ""),
 		KafkaTopic:          getenv("KAFKA_TOPIC", "refinery.queue"),
 		InputDir:            getenv("INPUT_DIR", "/input"),

@@ -24,6 +24,7 @@ const mockData = {
   "/api/logs/pkg/1.0": { content: "build log" },
   "/api/queue/enqueue": { detail: "enqueued" },
   "/api/worker/trigger": { detail: "ok" },
+  "/api/pending-inputs": [],
 };
 
 beforeEach(() => {
@@ -59,9 +60,10 @@ describe("App dashboard", () => {
         <App />
       </MemoryRouter>,
     );
-    await waitFor(() => screen.getByText(/Queue length/i));
+    await waitFor(() => expect(screen.getAllByText(/Queue length/i).length).toBeGreaterThan(0));
     fireEvent.change(screen.getByPlaceholderText(/package name/i), { target: { value: "pkg" } });
-    fireEvent.click(screen.getAllByText(/Enqueue/i)[1]);
+    const enqueueBtn = screen.getAllByText(/^Enqueue$/i)[0];
+    fireEvent.click(enqueueBtn);
     await waitFor(() => {
       const called = (global.fetch.mock.calls || []).some(([url, opts]) => url.includes("/api/queue/enqueue") && opts?.body?.includes("\"pkg\""));
       expect(called).toBe(true);

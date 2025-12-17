@@ -19,15 +19,48 @@ const joinBasePath = (base, path) => {
   return `${b}${p}`;
 };
 
-export const API_BASE = inferApiBase();
+export const API_BASE_DEFAULT = inferApiBase();
+
+export const getApiBase = () => {
+  if (typeof window !== "undefined") {
+    const stored = window.localStorage.getItem("refinery_api_base");
+    if (stored) return stored;
+  }
+  return API_BASE_DEFAULT;
+};
 
 const jsonHeaders = (token) => ({
   "Content-Type": "application/json",
   ...(token ? { "X-Worker-Token": token } : {}),
 });
 
+const parseError = async (resp) => {
+  const text = await resp.text();
+  let message = text || resp.statusText;
+  let details;
+  if (text) {
+    try {
+      const data = JSON.parse(text);
+      if (data?.error) {
+        message = data.error;
+      }
+      if (data?.details) {
+        details = data.details;
+      }
+    } catch {
+      // ignore non-json error payloads
+    }
+  }
+  const err = new Error(message);
+  err.status = resp.status;
+  if (details) {
+    err.details = details;
+  }
+  return err;
+};
+
 async function request(path, options = {}, token) {
-  const target = joinBasePath(API_BASE, path);
+  const target = joinBasePath(getApiBase(), path);
   const resp = await fetch(target, {
     ...options,
     headers: {
@@ -36,10 +69,7 @@ async function request(path, options = {}, token) {
     },
   });
   if (!resp.ok) {
-    const text = await resp.text();
-    const err = new Error(text || resp.statusText);
-    err.status = resp.status;
-    throw err;
+    throw await parseError(resp);
   }
   const ct = resp.headers.get("content-type") || "";
   if (ct.includes("application/json")) {
@@ -86,20 +116,25 @@ export function setCookieToken(token) {
   return request(`/api/session/token?token=${encodeURIComponent(token)}`, { method: "POST" }, token);
 }
 
+export function fetchPendingInputs(token) {
+  return request("/api/pending-inputs", {}, token);
+}
+
+export function enqueuePlan(id, token) {
+  return request(`/api/pending-inputs/${id}/enqueue-plan`, { method: "POST" }, token);
+}
+
 export async function uploadRequirements(file, token) {
   const fd = new FormData();
   fd.append("file", file);
   const headers = token ? { "X-Worker-Token": token } : undefined;
-  const resp = await fetch(joinBasePath(API_BASE, "/api/requirements/upload"), {
+  const resp = await fetch(joinBasePath(getApiBase(), "/api/requirements/upload"), {
     method: "POST",
     body: fd,
     headers,
   });
   if (!resp.ok) {
-    const text = await resp.text();
-    const err = new Error(text || resp.statusText);
-    err.status = resp.status;
-    throw err;
+    throw await parseError(resp);
   }
   return resp.json();
 }
@@ -110,6 +145,47 @@ export function fetchSettings(token) {
 
 export function updateSettings(body, token) {
   return request("/api/settings", { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+export function enqueueBuildsFromPlan(planId, token) {
+  return request(`/api/plan/${planId}/enqueue-builds`, { method: "POST" }, token);
+}
+
+export function fetchPlans(limit = 20, token) {
+  const params = new URLSearchParams();
+  params.set("limit", limit);
+  return request(`/api/plans?${params.toString()}`, {}, token);
+}
+
+export function fetchPlan(planId, token) {
+  return request(`/api/plan/${planId}`, {}, token);
+}
+
+export function createHint(hint, token) {
+  return request("/api/hints", { method: "POST", body: JSON.stringify(hint) }, token);
+}
+
+export function updateHint(id, hint, token) {
+  return request(`/api/hints/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(hint) }, token);
+}
+
+export function deleteHint(id, token) {
+  return request(`/api/hints/${encodeURIComponent(id)}`, { method: "DELETE" }, token);
+}
+
+export async function bulkUploadHints(file, token) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const resp = await fetch(joinBasePath(getApiBase(), "/api/hints/bulk"), {
+    method: "POST",
+    body: fd,
+    headers,
+  });
+  if (!resp.ok) {
+    throw await parseError(resp);
+  }
+  return resp.json();
 }
 
 export function fetchPackageDetail(name, token, limit = 50) {
@@ -131,4 +207,11 @@ export function fetchRecent({ limit = 25, packageFilter, status }, token) {
   if (packageFilter) params.set("package", packageFilter);
   if (status) params.set("status", status);
   return request(`/api/recent?${params.toString()}`, {}, token);
+}
+
+export function fetchBuilds({ status, limit = 200 } = {}, token) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  params.set("limit", limit);
+  return request(`/api/builds?${params.toString()}`, {}, token);
 }
