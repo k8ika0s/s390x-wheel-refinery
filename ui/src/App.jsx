@@ -1130,6 +1130,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
                       <th className="text-left px-2 py-2">Python</th>
                       <th className="text-left px-2 py-2">Platform</th>
                       <th className="text-left px-2 py-2">Recipes</th>
+                      <th className="text-left px-2 py-2">Attempts</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1146,6 +1147,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
                         <td className="px-2 py-2 text-slate-400">{q.python_tag || "-"}</td>
                         <td className="px-2 py-2 text-slate-400">{q.platform_tag || "-"}</td>
                         <td className="px-2 py-2 text-slate-400 truncate">{(q.recipes || []).join(", ") || "-"}</td>
+                        <td className="px-2 py-2 text-slate-400">{q.attempts ?? 0}</td>
                       </tr>
                     )})}
                   </tbody>
