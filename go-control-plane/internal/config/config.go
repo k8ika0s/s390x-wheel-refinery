@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"strconv"
+	"strings"
 )
 
 // Config holds runtime settings for the Go control plane.
@@ -26,6 +28,11 @@ type Config struct {
 	AutoBuild        bool
 	HintsDir         string
 	SeedHints        bool
+	CORSOrigins      []string
+	CORSHeaders      []string
+	CORSMethods      []string
+	CORSCredentials  bool
+	CORSMaxAge       int
 }
 
 // FromEnv loads configuration with sensible defaults.
@@ -51,6 +58,11 @@ func FromEnv() Config {
 		AutoBuild:        getenv("AUTO_BUILD", "1") != "0",
 		HintsDir:         getenv("HINTS_DIR", "/hints"),
 		SeedHints:        getenv("HINTS_SEED", "1") != "0",
+		CORSOrigins:      parseCSV(getenv("CORS_ORIGINS", "")),
+		CORSHeaders:      parseCSV(getenv("CORS_HEADERS", "Content-Type,Authorization,X-Worker-Token")),
+		CORSMethods:      parseCSV(getenv("CORS_METHODS", "GET,POST,PUT,DELETE,OPTIONS")),
+		CORSCredentials:  getenvBool("CORS_CREDENTIALS", false),
+		CORSMaxAge:       getenvInt("CORS_MAX_AGE", 600),
 	}
 	return cfg
 }
@@ -60,4 +72,42 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func getenvBool(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		switch v {
+		case "1", "true", "TRUE", "yes", "YES", "on", "ON":
+			return true
+		case "0", "false", "FALSE", "no", "NO", "off", "OFF":
+			return false
+		default:
+			return def
+		}
+	}
+	return def
+}
+
+func getenvInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func parseCSV(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }

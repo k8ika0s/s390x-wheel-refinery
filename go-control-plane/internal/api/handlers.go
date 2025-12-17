@@ -1220,7 +1220,38 @@ func (h *Handler) workerSmoke(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		hints, err := h.Store.ListHints(r.Context())
+		q := r.URL.Query()
+		limit := parseIntDefault(q.Get("limit"), 200, 1000)
+		offset := parseIntDefault(q.Get("offset"), 0, 100_000)
+		query := strings.TrimSpace(q.Get("q"))
+		var hints []store.Hint
+		var err error
+		if pager, ok := h.Store.(interface {
+			ListHintsPaged(context.Context, int, int, string) ([]store.Hint, error)
+		}); ok {
+			hints, err = pager.ListHintsPaged(r.Context(), limit, offset, query)
+		} else {
+			hints, err = h.Store.ListHints(r.Context())
+			if err == nil {
+				if query != "" {
+					filtered := make([]store.Hint, 0, len(hints))
+					for _, h := range hints {
+						if hintMatchesQuery(h, query) {
+							filtered = append(filtered, h)
+						}
+					}
+					hints = filtered
+				}
+				if offset > 0 && offset < len(hints) {
+					hints = hints[offset:]
+				} else if offset >= len(hints) {
+					hints = []store.Hint{}
+				}
+				if limit > 0 && limit < len(hints) {
+					hints = hints[:limit]
+				}
+			}
+		}
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -1552,4 +1583,22 @@ func toString(v any) string {
 		b, _ := json.Marshal(val)
 		return string(b)
 	}
+}
+
+func hintMatchesQuery(h store.Hint, q string) bool {
+	query := strings.ToLower(strings.TrimSpace(q))
+	if query == "" {
+		return true
+	}
+	parts := []string{h.ID, h.Pattern, h.Note, h.Severity, h.Confidence}
+	parts = append(parts, h.Tags...)
+	parts = append(parts, h.Examples...)
+	for _, recipes := range h.Recipes {
+		parts = append(parts, recipes...)
+	}
+	for _, applies := range h.AppliesTo {
+		parts = append(parts, applies...)
+	}
+	joined := strings.ToLower(strings.Join(parts, " "))
+	return strings.Contains(joined, query)
 }

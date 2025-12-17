@@ -648,6 +648,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planDetailsError, setPlanDetailsError] = useState("");
   const [enqueueingBuilds, setEnqueueingBuilds] = useState(false);
   const [hintSearch, setHintSearch] = useState("");
+  const [hintPage, setHintPage] = useState(1);
+  const [hintQuery, setHintQuery] = useState("");
   const [selectedHintId, setSelectedHintId] = useState("");
   const [hintForm, setHintForm] = useState(null);
   const [hintFormError, setHintFormError] = useState("");
@@ -660,6 +662,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [bulkUploading, setBulkUploading] = useState(false);
   const apiToastShown = useRef(false);
   const viewKey = view || "overview";
+  const hintPageSize = 200;
 
   const isValidDashboard = (data) => {
     if (!data || typeof data !== "object") return false;
@@ -723,11 +726,22 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     if (apiBlocked && !opts.force) {
       return;
     }
+    const nextPage = Math.max(1, opts.page ?? hintPage);
+    const nextQuery = (opts.query ?? hintQuery).trim();
     setHintsLoading(true);
     setHintsError("");
     try {
-      const list = await fetchHints(authToken);
+      const list = await fetchHints(
+        {
+          limit: hintPageSize,
+          offset: (nextPage - 1) * hintPageSize,
+          query: nextQuery,
+        },
+        authToken,
+      );
       setHintsState(Array.isArray(list) ? list : []);
+      setHintPage(nextPage);
+      setHintQuery(nextQuery);
       setHintsError("");
     } catch (e) {
       const msg = e.message || "Failed to load hints.";
@@ -745,8 +759,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
 
   useEffect(() => {
     if (viewKey !== "hints") return;
-    loadHints({ force: true });
-  }, [viewKey, authToken]);
+    const handle = setTimeout(() => {
+      loadHints({ force: true, page: 1, query: hintSearch });
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [viewKey, authToken, hintSearch]);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -989,6 +1006,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const hints = toArray(hintsState);
   const metrics = dashboard?.metrics;
   const hintsCount = Number.isFinite(metrics?.hints?.count) ? metrics.hints.count : hints.length;
+  const hintTotalPages = hintQuery ? null : Math.max(1, Math.ceil(hintsCount / hintPageSize));
+  const hintNextDisabled = hintQuery ? hints.length < hintPageSize : hintPage >= hintTotalPages;
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
@@ -1365,7 +1384,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             )}
             {hintsError && <div className="text-amber-200 text-xs">{hintsError}</div>}
             {!hints.length && viewKey !== "hints" && (
-              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => loadHints({ force: true })}>
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                onClick={() => loadHints({ force: true, page: 1, query: hintSearch })}
+              >
                 Load hints
               </button>
             )}
@@ -1986,6 +2008,25 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             value={hintSearch}
             onChange={(e) => setHintSearch(e.target.value)}
           />
+          <div className="flex items-center justify-between text-xs text-slate-400">
+            <span>{hintTotalPages ? `Page ${hintPage} / ${hintTotalPages}` : `Page ${hintPage}`}</span>
+            <div className="flex items-center gap-2">
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                disabled={hintPage === 1 || hintsLoading}
+                onClick={() => loadHints({ page: Math.max(1, hintPage - 1), query: hintSearch })}
+              >
+                Prev
+              </button>
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                disabled={hintNextDisabled || hintsLoading}
+                onClick={() => loadHints({ page: hintPage + 1, query: hintSearch })}
+              >
+                Next
+              </button>
+            </div>
+          </div>
           <button
             className="btn btn-secondary w-full"
             onClick={() => {

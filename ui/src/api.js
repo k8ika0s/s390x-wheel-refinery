@@ -142,8 +142,13 @@ export function fetchSettings(token) {
   return request("/api/settings", {}, token);
 }
 
-export function fetchHints(token) {
-  return request("/api/hints", {}, token);
+export function fetchHints({ limit = 200, offset = 0, query = "" } = {}, token) {
+  const params = new URLSearchParams();
+  if (limit) params.set("limit", limit);
+  if (offset) params.set("offset", offset);
+  if (query) params.set("q", query);
+  const qs = params.toString();
+  return request(qs ? `/api/hints?${qs}` : "/api/hints", {}, token);
 }
 
 export function updateSettings(body, token) {

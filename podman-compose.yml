@@ -90,6 +90,7 @@ services:
       INPUT_DIR: /input
       HINTS_DIR: /hints
       HINTS_SEED: "1"
+      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
     ports:
       - "8080:8080"
     volumes:

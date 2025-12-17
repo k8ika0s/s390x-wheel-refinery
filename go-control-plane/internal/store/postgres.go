@@ -621,6 +621,50 @@ func (p *PostgresStore) ListHints(ctx context.Context) ([]Hint, error) {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanHints(rows)
+}
+
+// ListHintsPaged returns hints with optional search and paging.
+func (p *PostgresStore) ListHintsPaged(ctx context.Context, limit, offset int, query string) ([]Hint, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	args := []any{}
+	whereClause := ""
+	if strings.TrimSpace(query) != "" {
+		args = append(args, "%"+query+"%")
+		whereClause = `
+			WHERE id ILIKE $1
+			   OR pattern ILIKE $1
+			   OR note ILIKE $1
+			   OR tags::text ILIKE $1
+			   OR recipes::text ILIKE $1
+			   OR applies_to::text ILIKE $1
+			   OR examples::text ILIKE $1`
+	}
+	limitIdx := len(args) + 1
+	offsetIdx := len(args) + 2
+	args = append(args, limit, offset)
+	querySQL := fmt.Sprintf(`SELECT id,pattern,recipes,note,tags,severity,applies_to,confidence,examples
+		FROM hints %s ORDER BY id LIMIT $%d OFFSET $%d`, whereClause, limitIdx, offsetIdx)
+	rows, err := p.db.QueryContext(ctx, querySQL, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanHints(rows)
+}
+
+func scanHints(rows *sql.Rows) ([]Hint, error) {
 	var out []Hint
 	for rows.Next() {
 		var h Hint
