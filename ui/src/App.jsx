@@ -1756,7 +1756,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           </div>
         </div>
         <div className="glass p-4 space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-lg font-semibold flex items-center gap-2">
               <span>Pending inputs</span>
               <span className="chip text-xs">🧾</span>
@@ -1765,13 +1765,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load()}>
                 Refresh
               </button>
-              <button
-                className="btn btn-secondary px-2 py-1 text-xs"
-                onClick={handleClearPendingInputs}
-                disabled={clearingPendingInputs || pendingInputs.every((pi) => pi.status !== "pending")}
-              >
-                {clearingPendingInputs ? "Clearing..." : "Clear pending inputs"}
-              </button>
+              {pendingInputs.some((pi) => pi.status === "pending") && (
+                <button
+                  className="btn btn-secondary px-2 py-1 text-xs"
+                  onClick={handleClearPendingInputs}
+                  disabled={clearingPendingInputs}
+                >
+                  {clearingPendingInputs ? "Clearing..." : "Clear pending inputs"}
+                </button>
+              )}
             </div>
           </div>
           {visiblePendingInputs.length === 0 ? (
