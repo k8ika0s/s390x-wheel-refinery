@@ -34,6 +34,31 @@ const jsonHeaders = (token) => ({
   ...(token ? { "X-Worker-Token": token } : {}),
 });
 
+const parseError = async (resp) => {
+  const text = await resp.text();
+  let message = text || resp.statusText;
+  let details;
+  if (text) {
+    try {
+      const data = JSON.parse(text);
+      if (data?.error) {
+        message = data.error;
+      }
+      if (data?.details) {
+        details = data.details;
+      }
+    } catch {
+      // ignore non-json error payloads
+    }
+  }
+  const err = new Error(message);
+  err.status = resp.status;
+  if (details) {
+    err.details = details;
+  }
+  return err;
+};
+
 async function request(path, options = {}, token) {
   const target = joinBasePath(getApiBase(), path);
   const resp = await fetch(target, {
@@ -44,10 +69,7 @@ async function request(path, options = {}, token) {
     },
   });
   if (!resp.ok) {
-    const text = await resp.text();
-    const err = new Error(text || resp.statusText);
-    err.status = resp.status;
-    throw err;
+    throw await parseError(resp);
   }
   const ct = resp.headers.get("content-type") || "";
   if (ct.includes("application/json")) {
@@ -112,10 +134,7 @@ export async function uploadRequirements(file, token) {
     headers,
   });
   if (!resp.ok) {
-    const text = await resp.text();
-    const err = new Error(text || resp.statusText);
-    err.status = resp.status;
-    throw err;
+    throw await parseError(resp);
   }
   return resp.json();
 }
@@ -150,10 +169,7 @@ export async function bulkUploadHints(file, token) {
     headers,
   });
   if (!resp.ok) {
-    const text = await resp.text();
-    const err = new Error(text || resp.statusText);
-    err.status = resp.status;
-    throw err;
+    throw await parseError(resp);
   }
   return resp.json();
 }

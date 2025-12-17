@@ -159,6 +159,14 @@ input:focus-visible {
 .brand-mark {
   @apply w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-cyan-400 text-slate-900 font-black grid place-items-center shadow-lg;
 }
+.status-rail {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+.status-chip {
+  @apply flex items-center justify-between gap-3;
+}
 
 .nav-link {
   @apply text-slate-300 hover:text-accent transition;

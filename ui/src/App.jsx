@@ -115,8 +115,8 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, apiBase,
   return (
     <div className={`min-h-screen app-shell ${theme === "light" ? "theme-light" : "bg-bg text-slate-100"}`}>
       <header className="glass sticky top-0 z-40 backdrop-blur-sm border-b border-border/70">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="max-w-6xl mx-auto px-4 py-3 space-y-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <Link to="/" className="brand">
               <img src={LOGO_SRC} alt="Wheel Refinery logo" className="h-12 w-12 rounded-xl shadow-lg object-contain" />
               <div className="flex flex-col leading-tight">
@@ -124,40 +124,55 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, apiBase,
                 <span className="text-lg font-bold text-accent">Wheel Refinery</span>
               </div>
             </Link>
-            <span className="chip bg-slate-800 border-border text-xs">Env: {ENV_LABEL}</span>
-            <span className="chip bg-slate-800 border-border text-xs" title={apiBase || "same-origin"}>
-              API
-              <span className="inline-flex items-center gap-1 ml-2">
+            <div className="flex flex-wrap items-center gap-3 text-sm text-slate-200 lg:justify-end">
+              <nav className="flex items-center gap-3 flex-wrap">
+                {navItems.map((item) => (
+                  <Link key={item.to} to={item.to} className={`nav-link ${isActive(item.to, item.aliases) ? "nav-link-active" : ""}`}>
+                    {item.label}
+                  </Link>
+                ))}
+              </nav>
+              <button className="btn btn-ghost px-2 py-1 text-xs" onClick={onToggleTheme} title="Toggle theme">
+                {theme === "light" ? "🌤️" : "🌙"}
+              </button>
+            </div>
+          </div>
+          <div className="status-rail">
+            <span className="chip status-chip bg-slate-800 border-border text-xs">
+              <span className="text-slate-400">Env</span>
+              <span className="text-slate-200">{ENV_LABEL}</span>
+            </span>
+            <span className="chip status-chip bg-slate-800 border-border text-xs" title={apiBase || "same-origin"}>
+              <span className="text-slate-400">API</span>
+              <span className="inline-flex items-center gap-2">
                 <span className={`inline-block h-2 w-2 rounded-full ${apiTone}`} />
                 <span className="text-slate-300">{apiLabel}</span>
               </span>
             </span>
-            <span className="chip bg-slate-800 border-border text-xs">
-              Queue
-              <span className="ml-2 inline-flex items-center gap-1">
-                {Array.from({ length: 5 }).map((_, idx) => (
-                  <span
-                    key={idx}
-                    className={`inline-block h-2 w-2 rounded-full ${idx < queueLevel ? "bg-cyan-300" : "bg-slate-700"}`}
-                  />
-                ))}
+            <span className="chip status-chip bg-slate-800 border-border text-xs">
+              <span className="text-slate-400">Queue</span>
+              <span className="inline-flex items-center gap-2">
+                <span className="inline-flex items-center gap-1">
+                  {Array.from({ length: 5 }).map((_, idx) => (
+                    <span
+                      key={idx}
+                      className={`inline-block h-2 w-2 rounded-full ${idx < queueLevel ? "bg-cyan-300" : "bg-slate-700"}`}
+                    />
+                  ))}
+                </span>
+                <span className="text-slate-300">{totalQueue}</span>
               </span>
-              <span className="ml-2 text-slate-300">{totalQueue}</span>
             </span>
-            <span className={`chip bg-slate-800 border-border text-xs ${systemTone}`}>System: {systemStatus}</span>
-            {tokenActive && <span className="chip bg-emerald-900 border border-emerald-600 text-xs text-emerald-100">Token active</span>}
-          </div>
-          <div className="flex items-center gap-3 text-sm text-slate-200">
-            <nav className="flex items-center gap-3 flex-wrap">
-              {navItems.map((item) => (
-                <Link key={item.to} to={item.to} className={`nav-link ${isActive(item.to, item.aliases) ? "nav-link-active" : ""}`}>
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
-            <button className="btn btn-ghost px-2 py-1 text-xs" onClick={onToggleTheme} title="Toggle theme">
-              {theme === "light" ? "🌤️" : "🌙"}
-            </button>
+            <span className="chip status-chip bg-slate-800 border-border text-xs">
+              <span className="text-slate-400">System</span>
+              <span className={systemTone}>{systemStatus}</span>
+            </span>
+            {tokenActive && (
+              <span className="chip status-chip bg-emerald-900 border border-emerald-600 text-xs text-emerald-100">
+                <span className="text-emerald-100/80">Token</span>
+                <span>active</span>
+              </span>
+            )}
           </div>
         </div>
       </header>
@@ -906,6 +921,19 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       .toLowerCase();
     return haystack.includes(hintSearch.toLowerCase());
   });
+  const bulkErrors = toArray(bulkStatus?.errors);
+  const bulkErrorLines = bulkErrors.map((entry, idx) => {
+    if (typeof entry === "string") return entry;
+    if (entry?.errors && Array.isArray(entry.errors)) {
+      const label = entry.id || entry.index || `item ${idx + 1}`;
+      return `${label}: ${entry.errors.join("; ")}`;
+    }
+    if (entry?.error) {
+      const label = entry.id || entry.index || `item ${idx + 1}`;
+      return `${label}: ${entry.error}`;
+    }
+    return JSON.stringify(entry);
+  });
 
   useEffect(() => {
     if (!selectedHintId && filteredHints.length) {
@@ -1016,8 +1044,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         brew: parseLines(hintForm.recipes?.brew),
       },
     };
+    const hasRecipes = Object.values(payload.recipes).some((items) => items.length > 0);
     if (!payload.id || !payload.pattern || !payload.note) {
       setHintFormError("ID, pattern, and note are required.");
+      setHintSaving(false);
+      return;
+    }
+    if (!hasRecipes) {
+      setHintFormError("At least one recipe entry is required.");
       setHintSaving(false);
       return;
     }
@@ -1031,6 +1065,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       pushToast?.({ type: "success", title: "Hint saved", message: payload.id });
       await load({ packageFilter: pkgFilter, statusFilter, force: true });
     } catch (e) {
+      if (Array.isArray(e.details) && e.details.length) {
+        setHintFormError(e.details.join(" "));
+      }
       pushToast?.({ type: "error", title: "Hint save failed", message: e.message });
     } finally {
       setHintSaving(false);
@@ -1877,6 +1914,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         {bulkStatus && (
           <div className="text-xs text-slate-400">
             Loaded: {bulkStatus.loaded || 0} · Skipped: {bulkStatus.skipped || 0} · Errors: {(bulkStatus.errors || []).length}
+          </div>
+        )}
+        {bulkErrorLines.length > 0 && (
+          <div className="text-xs text-amber-200 space-y-1">
+            {bulkErrorLines.slice(0, 6).map((line, idx) => (
+              <div key={`${line}-${idx}`}>{line}</div>
+            ))}
+            {bulkErrorLines.length > 6 && <div>…and {bulkErrorLines.length - 6} more</div>}
           </div>
         )}
       </div>

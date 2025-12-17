@@ -59,7 +59,13 @@ func SeedHintsFromDir(ctx context.Context, st Store, dir string) (SeedResult, er
 			continue
 		}
 		for _, h := range hints {
-			if h.ID == "" || h.Pattern == "" || len(h.Recipes) == 0 || h.Note == "" {
+			h = NormalizeHint(h)
+			if errs := ValidateHint(h); len(errs) > 0 {
+				label := h.ID
+				if label == "" {
+					label = "unknown-id"
+				}
+				res.Errors = append(res.Errors, fmt.Sprintf("%s:%s: %s", entry.Name(), label, strings.Join(errs, "; ")))
 				res.Skipped++
 				continue
 			}

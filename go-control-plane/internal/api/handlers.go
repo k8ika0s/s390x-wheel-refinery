@@ -1112,8 +1112,12 @@ func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 			return
 		}
-		if hint.ID == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"})
+		hint = store.NormalizeHint(hint)
+		if errs := store.ValidateHint(hint); len(errs) > 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":   "validation failed",
+				"details": errs,
+			})
 			return
 		}
 		if err := h.Store.PutHint(r.Context(), hint); err != nil {
@@ -1173,13 +1177,20 @@ func (h *Handler) hintsBulk(w http.ResponseWriter, r *http.Request) {
 	}
 	var loaded, skipped int
 	var errors []string
-	for _, hint := range hints {
-		if hint.ID == "" || hint.Pattern == "" || len(hint.Recipes) == 0 || hint.Note == "" {
+	for idx, hint := range hints {
+		hint = store.NormalizeHint(hint)
+		if errs := store.ValidateHint(hint); len(errs) > 0 {
 			skipped++
+			label := hint.ID
+			if label == "" {
+				label = fmt.Sprintf("index %d", idx)
+			}
+			errors = append(errors, fmt.Sprintf("%s: %s", label, strings.Join(errs, "; ")))
 			continue
 		}
 		if err := h.Store.PutHint(r.Context(), hint); err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", hint.ID, err))
+			skipped++
 			continue
 		}
 		loaded++
@@ -1212,6 +1223,14 @@ func (h *Handler) hintByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		hint.ID = id
+		hint = store.NormalizeHint(hint)
+		if errs := store.ValidateHint(hint); len(errs) > 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":   "validation failed",
+				"details": errs,
+			})
+			return
+		}
 		if err := h.Store.PutHint(r.Context(), hint); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
