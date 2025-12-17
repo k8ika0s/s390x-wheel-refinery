@@ -95,6 +95,8 @@ type BuildStatus struct {
 	OldestAgeSec int64  `json:"oldest_age_seconds,omitempty"`
 	CreatedAt    int64  `json:"created_at"`
 	UpdatedAt    int64  `json:"updated_at"`
+	RunID        string `json:"run_id,omitempty"`
+	PlanID       int64  `json:"plan_id,omitempty"`
 }
 
 // PackageSummary aggregates status for a package.
