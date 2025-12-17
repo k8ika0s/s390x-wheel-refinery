@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,6 +58,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/top-failures", h.topFailures)
 	mux.HandleFunc("/api/top-slowest", h.topSlowest)
 	mux.HandleFunc("/api/plan", h.plan)
+	mux.HandleFunc("/api/plan/", h.planByID)
 	mux.HandleFunc("/api/plan/compute", h.planCompute)
 	mux.HandleFunc("/api/manifest", h.manifest)
 	mux.HandleFunc("/api/artifacts", h.artifacts)
@@ -836,6 +838,7 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			RunID string           `json:"run_id"`
 			Plan  []store.PlanNode `json:"plan"`
+			DAG   json.RawMessage  `json:"dag,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -845,7 +848,7 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "plan required"})
 			return
 		}
-		planID, err := h.Store.SavePlan(r.Context(), body.RunID, body.Plan)
+		planID, err := h.Store.SavePlan(r.Context(), body.RunID, body.Plan, body.DAG)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -857,6 +860,33 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/plan/")
+	if idStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "plan id required"})
+		return
+	}
+	planID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid plan id"})
+		return
+	}
+	snap, err := h.Store.PlanSnapshot(r.Context(), planID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "plan not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
 }
 
 func (h *Handler) manifest(w http.ResponseWriter, r *http.Request) {
@@ -924,7 +954,13 @@ func (h *Handler) planCompute(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(nodes) > 0 {
 		runID := toString(snap["run_id"])
-		planID, _ := h.Store.SavePlan(ctx, runID, nodes)
+		var dagRaw json.RawMessage
+		if dag, ok := snap["dag"]; ok {
+			if data, err := json.Marshal(dag); err == nil {
+				dagRaw = data
+			}
+		}
+		planID, _ := h.Store.SavePlan(ctx, runID, nodes, dagRaw)
 		if h.Config.AutoBuild {
 			_ = h.Store.QueueBuildsFromPlan(ctx, runID, planID, nodes)
 		}

@@ -2,8 +2,13 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"time"
 )
+
+// ErrNotFound is returned when a requested record is missing.
+var ErrNotFound = errors.New("not found")
 
 // Event represents a build event history row.
 type Event struct {
@@ -79,12 +84,20 @@ type Artifact struct {
 
 // PlanNode describes a unit in the build plan/graph.
 type PlanNode struct {
-	Name          string
-	Version       string
-	PythonVersion string
-	PythonTag     string
-	PlatformTag   string
-	Action        string
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	PythonVersion string `json:"python_version,omitempty"`
+	PythonTag     string `json:"python_tag,omitempty"`
+	PlatformTag   string `json:"platform_tag,omitempty"`
+	Action        string `json:"action"`
+}
+
+// PlanSnapshot captures a stored plan with optional DAG payload.
+type PlanSnapshot struct {
+	ID    int64           `json:"id"`
+	RunID string          `json:"run_id,omitempty"`
+	Plan  []PlanNode      `json:"plan"`
+	DAG   json.RawMessage `json:"dag,omitempty"`
 }
 
 // BuildStatus tracks a build job derived from a plan.
@@ -151,7 +164,8 @@ type Store interface {
 
 	// Plan/Manifest/Artifacts
 	Plan(ctx context.Context) ([]PlanNode, error)
-	SavePlan(ctx context.Context, runID string, nodes []PlanNode) (int64, error)
+	PlanSnapshot(ctx context.Context, planID int64) (PlanSnapshot, error)
+	SavePlan(ctx context.Context, runID string, nodes []PlanNode, dag json.RawMessage) (int64, error)
 	QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error
 	Manifest(ctx context.Context, limit int) ([]ManifestEntry, error)
 	SaveManifest(ctx context.Context, entries []ManifestEntry) error

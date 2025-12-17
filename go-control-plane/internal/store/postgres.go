@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -104,8 +105,11 @@ CREATE TABLE IF NOT EXISTS plans (
     id         BIGSERIAL PRIMARY KEY,
     run_id     TEXT,
     plan       JSONB NOT NULL,
+    dag        JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE plans ADD COLUMN IF NOT EXISTS dag JSONB;
 
 CREATE TABLE IF NOT EXISTS build_status (
     id            BIGSERIAL PRIMARY KEY,
@@ -836,7 +840,7 @@ func (p *PostgresStore) Plan(ctx context.Context) ([]PlanNode, error) {
 	return []PlanNode{}, nil
 }
 
-func (p *PostgresStore) SavePlan(ctx context.Context, runID string, nodes []PlanNode) (int64, error) {
+func (p *PostgresStore) SavePlan(ctx context.Context, runID string, nodes []PlanNode, dag json.RawMessage) (int64, error) {
 	if err := p.ensureDB(); err != nil {
 		return 0, err
 	}
@@ -845,10 +849,34 @@ func (p *PostgresStore) SavePlan(ctx context.Context, runID string, nodes []Plan
 		return 0, err
 	}
 	var id int64
-	if err := p.db.QueryRowContext(ctx, `INSERT INTO plans (run_id, plan) VALUES ($1, $2) RETURNING id`, runID, data).Scan(&id); err != nil {
+	if err := p.db.QueryRowContext(ctx, `INSERT INTO plans (run_id, plan, dag) VALUES ($1, $2, $3) RETURNING id`, runID, data, dag).Scan(&id); err != nil {
 		return 0, err
 	}
 	return id, nil
+}
+
+// PlanSnapshot returns a stored plan snapshot by id.
+func (p *PostgresStore) PlanSnapshot(ctx context.Context, planID int64) (PlanSnapshot, error) {
+	if err := p.ensureDB(); err != nil {
+		return PlanSnapshot{}, err
+	}
+	var snap PlanSnapshot
+	var planRaw json.RawMessage
+	var dagRaw json.RawMessage
+	row := p.db.QueryRowContext(ctx, `SELECT id, run_id, plan, dag FROM plans WHERE id = $1`, planID)
+	if err := row.Scan(&snap.ID, &snap.RunID, &planRaw, &dagRaw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return PlanSnapshot{}, ErrNotFound
+		}
+		return PlanSnapshot{}, err
+	}
+	if err := json.Unmarshal(planRaw, &snap.Plan); err != nil {
+		return PlanSnapshot{}, err
+	}
+	if len(dagRaw) > 0 {
+		snap.DAG = dagRaw
+	}
+	return snap, nil
 }
 
 // QueueBuildsFromPlan seeds build_status rows for build nodes in a plan.

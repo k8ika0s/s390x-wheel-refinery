@@ -85,7 +85,10 @@ func (f *fakeStore) PutLog(ctx context.Context, entry store.LogEntry) error {
 func (f *fakeStore) Plan(ctx context.Context) ([]store.PlanNode, error) {
 	return f.lastPlan, nil
 }
-func (f *fakeStore) SavePlan(ctx context.Context, runID string, nodes []store.PlanNode) (int64, error) {
+func (f *fakeStore) PlanSnapshot(ctx context.Context, planID int64) (store.PlanSnapshot, error) {
+	return store.PlanSnapshot{ID: planID, RunID: "test", Plan: f.lastPlan}, nil
+}
+func (f *fakeStore) SavePlan(ctx context.Context, runID string, nodes []store.PlanNode, dag json.RawMessage) (int64, error) {
 	f.lastPlan = nodes
 	return 1, nil
 }

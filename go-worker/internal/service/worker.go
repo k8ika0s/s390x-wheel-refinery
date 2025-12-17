@@ -94,14 +94,15 @@ func (w *Worker) LoadPlan() error {
 
 // Drain pops from queue and executes matched jobs.
 func (w *Worker) Drain(ctx context.Context) error {
-	if err := w.LoadPlan(); err != nil {
-		return fmt.Errorf("load plan: %w", err)
-	}
 	var reqs []queue.Request
 	var err error
-	if w.Cfg.BuildPopURL != "" {
+	usingBuildQueue := w.Cfg.BuildPopURL != ""
+	if usingBuildQueue {
 		reqs, err = w.popBuildQueue(ctx)
 	} else {
+		if err := w.LoadPlan(); err != nil {
+			return fmt.Errorf("load plan: %w", err)
+		}
 		reqs, err = w.Queue.Pop(ctx, w.Cfg.BatchSize)
 	}
 	if err != nil {
@@ -119,7 +120,18 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 	}
 
-	jobs := w.match(ctx, reqs)
+	var jobs []runner.Job
+	if usingBuildQueue {
+		jobs, err = w.jobsFromBuildQueue(ctx, reqs)
+		if err != nil {
+			return err
+		}
+	} else {
+		w.mu.Lock()
+		snap := w.planSnap
+		w.mu.Unlock()
+		jobs = w.match(ctx, snap, reqs)
+	}
 	results := make([]result, len(jobs))
 	g, ctx := errgroup.WithContext(ctx)
 	for i, job := range jobs {
@@ -361,11 +373,7 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	resp.Body.Close()
 }
 
-func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
-	w.mu.Lock()
-	snap := w.planSnap
-	w.mu.Unlock()
-
+func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Request) []runner.Job {
 	packActions := map[string]string{}
 	packMeta := map[string]map[string]any{}
 	runtimeActions := map[string]string{}
@@ -415,6 +423,27 @@ func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {
 		}
 	}
 	return jobs
+}
+
+func (w *Worker) jobsFromBuildQueue(ctx context.Context, reqs []queue.Request) ([]runner.Job, error) {
+	grouped := make(map[int64][]queue.Request)
+	for _, req := range reqs {
+		if req.PlanID == 0 {
+			log.Printf("build queue item missing plan_id: %s@%s", req.Package, req.Version)
+			continue
+		}
+		grouped[req.PlanID] = append(grouped[req.PlanID], req)
+	}
+	var jobs []runner.Job
+	for planID, group := range grouped {
+		snap, err := w.fetchPlanSnapshot(ctx, planID)
+		if err != nil {
+			log.Printf("build queue plan fetch failed id=%d: %v", planID, err)
+			continue
+		}
+		jobs = append(jobs, w.match(ctx, snap, group)...)
+	}
+	return jobs, nil
 }
 
 func equalsIgnoreCase(a, b string) bool {
@@ -693,6 +722,8 @@ func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
 			PythonTag   string `json:"python_tag"`
 			PlatformTag string `json:"platform_tag"`
 			Attempts    int    `json:"attempts"`
+			RunID       string `json:"run_id,omitempty"`
+			PlanID      int64  `json:"plan_id,omitempty"`
 		} `json:"builds"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -707,9 +738,44 @@ func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
 			PythonVersion: pyVersionFromTag(b.PythonTag),
 			PlatformTag:   b.PlatformTag,
 			Attempts:      b.Attempts,
+			RunID:         b.RunID,
+			PlanID:        b.PlanID,
 		})
 	}
 	return out, nil
+}
+
+func (w *Worker) fetchPlanSnapshot(ctx context.Context, planID int64) (plan.Snapshot, error) {
+	if w.Cfg.ControlPlaneURL == "" {
+		return plan.Snapshot{}, fmt.Errorf("control plane URL not set")
+	}
+	url := strings.TrimRight(w.Cfg.ControlPlaneURL, "/") + "/api/plan/" + strconv.FormatInt(planID, 10)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return plan.Snapshot{}, err
+	}
+	if w.Cfg.ControlPlaneToken != "" {
+		req.Header.Set("X-Worker-Token", w.Cfg.ControlPlaneToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return plan.Snapshot{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return plan.Snapshot{}, fmt.Errorf("plan fetch status %d: %s", resp.StatusCode, string(b))
+	}
+	var payload struct {
+		RunID string          `json:"run_id"`
+		Plan  []plan.FlatNode `json:"plan"`
+		DAG   []plan.DAGNode  `json:"dag,omitempty"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return plan.Snapshot{}, err
+	}
+	return plan.Snapshot{RunID: payload.RunID, Plan: payload.Plan, DAG: payload.DAG}, nil
 }
 
 // backoffTime returns a Unix timestamp for the next retry using capped exponential backoff with jitter.
