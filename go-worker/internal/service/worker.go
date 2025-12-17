@@ -99,12 +99,6 @@ func (w *Worker) Drain(ctx context.Context) error {
 		return err
 	}
 	if len(reqs) == 0 {
-		reqs = w.requestsFromPlan()
-		if w.Cfg.BatchSize > 0 && len(reqs) > w.Cfg.BatchSize {
-			reqs = reqs[:w.Cfg.BatchSize]
-		}
-	}
-	if len(reqs) == 0 {
 		return nil
 	}
 
@@ -497,6 +491,7 @@ func (w *Worker) objectURL(job runner.Job, kind string) string {
 
 // requestsFromPlan seeds work items directly from the current plan when the queue is empty.
 func (w *Worker) requestsFromPlan() []queue.Request {
+	// Legacy helper retained for backward compatibility; unused in Drain.
 	w.mu.Lock()
 	snap := w.planSnap
 	w.mu.Unlock()
