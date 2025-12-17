@@ -304,6 +304,8 @@ func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 		"worker_local_cmd": h.Config.WorkerLocalCmd != "",
 		"input_dir":        h.Config.InputDir,
 		"settings_path":    h.Config.SettingsPath,
+		"hints_dir":        h.Config.HintsDir,
+		"hints_seed":       h.Config.SeedHints,
 		"settings":         currentSettings,
 		"auto_plan":        autoPlan,
 		"auto_build":       autoBuild,

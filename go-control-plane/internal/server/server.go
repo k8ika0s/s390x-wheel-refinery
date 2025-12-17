@@ -56,6 +56,13 @@ func (s *Service) routes() {
 		s.cfg.AutoPlan = settings.BoolValue(current.AutoPlan)
 		s.cfg.AutoBuild = settings.BoolValue(current.AutoBuild)
 	}
+	if s.cfg.SeedHints {
+		if res, err := store.SeedHintsFromDir(context.Background(), st, s.cfg.HintsDir); err != nil {
+			log.Printf("warning: hint seed failed: %v", err)
+		} else if res.Files > 0 {
+			log.Printf("hint seed: files=%d loaded=%d skipped=%d errors=%d", res.Files, res.Loaded, res.Skipped, len(res.Errors))
+		}
+	}
 	h := &api.Handler{Store: st, Queue: q, PlanQ: planQ, Config: s.cfg}
 	h.Routes(s.mux)
 }

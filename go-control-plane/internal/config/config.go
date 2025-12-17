@@ -24,6 +24,8 @@ type Config struct {
 	SettingsPath     string
 	AutoPlan         bool
 	AutoBuild        bool
+	HintsDir         string
+	SeedHints        bool
 }
 
 // FromEnv loads configuration with sensible defaults.
@@ -47,6 +49,8 @@ func FromEnv() Config {
 		SettingsPath:     getenv("SETTINGS_PATH", "/config/settings.json"),
 		AutoPlan:         getenv("AUTO_PLAN", "1") != "0",
 		AutoBuild:        getenv("AUTO_BUILD", "1") != "0",
+		HintsDir:         getenv("HINTS_DIR", "/hints"),
+		SeedHints:        getenv("HINTS_SEED", "1") != "0",
 	}
 	return cfg
 }
