@@ -609,6 +609,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [pendingInputs, setPendingInputs] = useState([]);
   const [builds, setBuilds] = useState([]);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
+  const apiToastShown = useRef(false);
 
   const isValidDashboard = (data) => {
     if (!data || typeof data !== "object") return false;
@@ -646,10 +647,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       setDashboard({ ...data, recent, pending, builds: buildsList });
       onMetrics?.(data.metrics);
       onApiStatus?.("ok");
+      apiToastShown.current = false;
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
       setError(msg);
-      pushToast?.({ type: "error", title: "Load failed", message: msg || "Unknown error" });
+      const isApiOffline = msg?.toLowerCase().includes("api not connected");
+      if (!isApiOffline || !apiToastShown.current) {
+        pushToast?.({ type: "error", title: "Load failed", message: msg || "Unknown error" });
+        if (isApiOffline) apiToastShown.current = true;
+      }
       onApiStatus?.("error");
     } finally {
       setLoading(false);
