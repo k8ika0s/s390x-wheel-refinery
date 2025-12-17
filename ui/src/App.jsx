@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Link, Navigate, useParams, useLocation } from "react-router-dom";
 import {
-  API_BASE,
+  getApiBase,
   clearQueue,
   enqueueRetry,
   fetchDashboard,
@@ -88,12 +88,17 @@ function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, ico
   );
 }
 
-function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
+function Layout({ children, tokenActive, theme, onToggleTheme, metrics, apiBase, apiStatus }) {
   const location = useLocation();
   const isActive = (path, aliases = []) =>
     [path, ...aliases].some((p) => location.pathname === p || (p !== "/" && location.pathname.startsWith(p)));
   const systemStatus = metrics?.db?.status || "unknown";
   const systemTone = systemStatus === "ok" ? "text-emerald-300" : "text-amber-300";
+  const apiLabel = apiStatus === "ok" ? "connected" : apiStatus === "error" ? "offline" : "unknown";
+  const apiTone = apiStatus === "ok" ? "bg-emerald-400" : apiStatus === "error" ? "bg-rose-400" : "bg-amber-400";
+  const totalQueue =
+    (metrics?.queue?.length ?? 0) + (metrics?.pending?.plan_queue ?? 0) + (metrics?.build?.length ?? 0);
+  const queueLevel = totalQueue === 0 ? 0 : totalQueue < 5 ? 1 : totalQueue < 20 ? 2 : totalQueue < 50 ? 3 : totalQueue < 100 ? 4 : 5;
   const navItems = [
     { to: "/", label: "Overview", aliases: ["/overview"] },
     { to: "/inputs", label: "Inputs" },
@@ -115,7 +120,25 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
               </div>
             </Link>
             <span className="chip bg-slate-800 border-border text-xs">Env: {ENV_LABEL}</span>
-            <span className="chip bg-slate-800 border-border text-xs">API: {API_BASE || "same-origin"}</span>
+            <span className="chip bg-slate-800 border-border text-xs" title={apiBase || "same-origin"}>
+              API
+              <span className="inline-flex items-center gap-1 ml-2">
+                <span className={`inline-block h-2 w-2 rounded-full ${apiTone}`} />
+                <span className="text-slate-300">{apiLabel}</span>
+              </span>
+            </span>
+            <span className="chip bg-slate-800 border-border text-xs">
+              Queue
+              <span className="ml-2 inline-flex items-center gap-1">
+                {Array.from({ length: 5 }).map((_, idx) => (
+                  <span
+                    key={idx}
+                    className={`inline-block h-2 w-2 rounded-full ${idx < queueLevel ? "bg-cyan-300" : "bg-slate-700"}`}
+                  />
+                ))}
+              </span>
+              <span className="ml-2 text-slate-300">{totalQueue}</span>
+            </span>
             <span className={`chip bg-slate-800 border-border text-xs ${systemTone}`}>System: {systemStatus}</span>
             {tokenActive && <span className="chip bg-emerald-900 border border-emerald-600 text-xs text-emerald-100">Token active</span>}
           </div>
@@ -294,7 +317,7 @@ function TopList({ title, items, render }) {
   );
 }
 
-function PackageDetail({ token, pushToast }) {
+function PackageDetail({ token, pushToast, apiBase }) {
   const { name } = useParams();
   const [data, setData] = useState(null);
   const [logContent, setLogContent] = useState("");
@@ -393,7 +416,7 @@ function PackageDetail({ token, pushToast }) {
   const failuresArr = toArray(failures);
   const eventsArr = toArray(events);
   const hintsArr = toArray(hints);
-  const logDownloadHref = selectedEvent ? `${API_BASE}/api/logs/${selectedEvent.name}/${selectedEvent.version}` : null;
+  const logDownloadHref = selectedEvent ? `${apiBase || ""}/api/logs/${selectedEvent.name}/${selectedEvent.version}` : null;
 
   const variantsPaged = paged(variantsArr, variantPage);
   const failuresPaged = paged(failuresArr, failurePage);
@@ -562,7 +585,7 @@ function PackageDetail({ token, pushToast }) {
 
 const STATUS_CHIPS = ["built", "failed", "retry", "reused", "cached", "missing", "skipped_known_failure"];
 
-function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overview" }) {
+function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, apiBase, onApiBaseChange, view = "overview" }) {
   const [authToken, setAuthToken] = useState(localStorage.getItem("refinery_token") || token || "");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -582,6 +605,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overvie
   const [settingsData, setSettingsData] = useState(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [apiBaseInput, setApiBaseInput] = useState(apiBase || "");
   const [pendingInputs, setPendingInputs] = useState([]);
   const [builds, setBuilds] = useState([]);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
@@ -606,10 +630,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overvie
       setBuilds(Array.isArray(buildsList) ? buildsList : []);
       setDashboard({ ...data, recent, pending, builds: buildsList });
       onMetrics?.(data.metrics);
+      onApiStatus?.("ok");
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
       setError(msg);
       pushToast?.({ type: "error", title: "Load failed", message: msg || "Unknown error" });
+      onApiStatus?.("error");
     } finally {
       setLoading(false);
     }
@@ -635,12 +661,17 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overvie
         if (s.build_pool_size !== undefined) {
           setSettingsData((prev) => ({ ...(prev || s), build_pool_size: s.build_pool_size }));
         }
+        setApiBaseInput(apiBase || getApiBase());
       } catch {
         // ignore settings load failures silently
       }
     };
     loadSettings();
   }, [authToken]);
+
+  useEffect(() => {
+    setApiBaseInput(apiBase || getApiBase());
+  }, [apiBase]);
 
   useEffect(() => {
     if (!pollMs) return;
@@ -798,7 +829,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overvie
     alerts.push(`Queue note: ${metrics.queue.consumer_state}`);
   }
   if (queueInvalid) {
-    alerts.push("Retry queue response is not valid JSON. Check /api proxy or VITE_API_BASE configuration.");
+    alerts.push("Retry queue response is not valid JSON. Check API base or /api proxy configuration.");
   }
   if (settingsData?.auto_plan === false) {
     alerts.push("Auto-plan is off; uploads require manual plan enqueue.");
@@ -831,6 +862,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overvie
     if (!settingsData) return;
     setSettingsSaving(true);
     try {
+      const trimmedBase = apiBaseInput.trim();
+      if (trimmedBase) {
+        localStorage.setItem("refinery_api_base", trimmedBase);
+      } else {
+        localStorage.removeItem("refinery_api_base");
+      }
+      onApiBaseChange?.(trimmedBase || getApiBase());
       const body = {
         python_version: settingsData.python_version,
         platform_tag: settingsData.platform_tag,
@@ -910,7 +948,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overvie
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">API</span>
-                <span className="chip">{API_BASE || "same-origin"}</span>
+                <span className="chip">{apiBase || "same-origin"}</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">DB status</span>
@@ -1341,6 +1379,20 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overvie
             value={authToken}
             onChange={(e) => setAuthToken(e.target.value)}
           />
+          <div className="text-xs text-slate-400 pt-2">API base URL</div>
+          <div className="text-xs text-slate-500">
+            Set the control-plane base URL (for example: <span className="chip chip-muted">http://localhost:8080</span>).
+            Leave blank to use the same-origin <span className="chip chip-muted">/api</span> proxy.
+          </div>
+          <input
+            className="input"
+            placeholder="http://control-plane:8080"
+            value={apiBaseInput}
+            onChange={(e) => {
+              setApiBaseInput(e.target.value);
+              setSettingsDirty(true);
+            }}
+          />
           <div className="flex gap-2">
             <button className="btn btn-primary w-full" onClick={handleSaveToken}>Save</button>
             <button className="btn btn-secondary w-full" onClick={() => load({ packageFilter: pkgFilter, statusFilter })} disabled={loading}>Refresh</button>
@@ -1499,6 +1551,8 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem("refinery_theme") || "dark");
   const [metrics, setMetrics] = useState(null);
+  const [apiBase, setApiBase] = useState(getApiBase());
+  const [apiStatus, setApiStatus] = useState("unknown");
 
   const dismissToast = (id) => setToasts((ts) => ts.filter((t) => t.id !== id));
   const pushToast = ({ type = "success", title, message }) => {
@@ -1516,15 +1570,15 @@ export default function App() {
   };
 
   return (
-    <Layout tokenActive={Boolean(token)} theme={theme} onToggleTheme={toggleTheme} metrics={metrics}>
+    <Layout tokenActive={Boolean(token)} theme={theme} onToggleTheme={toggleTheme} metrics={metrics} apiBase={apiBase} apiStatus={apiStatus}>
       <Routes>
         <Route path="/" element={<Navigate to="/overview" replace />} />
-        <Route path="/overview" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} view="overview" />} />
-        <Route path="/inputs" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} view="inputs" />} />
-        <Route path="/queues" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} view="queues" />} />
-        <Route path="/builds" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} view="builds" />} />
-        <Route path="/settings" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} view="settings" />} />
-        <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} />} />
+        <Route path="/overview" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="overview" />} />
+        <Route path="/inputs" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="inputs" />} />
+        <Route path="/queues" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="queues" />} />
+        <Route path="/builds" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="builds" />} />
+        <Route path="/settings" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="settings" />} />
+        <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} apiBase={apiBase} />} />
       </Routes>
       <Toasts toasts={toasts} onDismiss={dismissToast} />
     </Layout>

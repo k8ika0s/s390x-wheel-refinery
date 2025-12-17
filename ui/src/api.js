@@ -19,7 +19,15 @@ const joinBasePath = (base, path) => {
   return `${b}${p}`;
 };
 
-export const API_BASE = inferApiBase();
+export const API_BASE_DEFAULT = inferApiBase();
+
+export const getApiBase = () => {
+  if (typeof window !== "undefined") {
+    const stored = window.localStorage.getItem("refinery_api_base");
+    if (stored) return stored;
+  }
+  return API_BASE_DEFAULT;
+};
 
 const jsonHeaders = (token) => ({
   "Content-Type": "application/json",
@@ -27,7 +35,7 @@ const jsonHeaders = (token) => ({
 });
 
 async function request(path, options = {}, token) {
-  const target = joinBasePath(API_BASE, path);
+  const target = joinBasePath(getApiBase(), path);
   const resp = await fetch(target, {
     ...options,
     headers: {
@@ -98,7 +106,7 @@ export async function uploadRequirements(file, token) {
   const fd = new FormData();
   fd.append("file", file);
   const headers = token ? { "X-Worker-Token": token } : undefined;
-  const resp = await fetch(joinBasePath(API_BASE, "/api/requirements/upload"), {
+  const resp = await fetch(joinBasePath(getApiBase(), "/api/requirements/upload"), {
     method: "POST",
     body: fd,
     headers,
