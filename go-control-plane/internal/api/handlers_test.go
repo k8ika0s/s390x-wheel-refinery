@@ -116,6 +116,12 @@ func (f *fakeStore) UpdatePendingInputStatus(ctx context.Context, id int64, stat
 	}{id: id, status: status, errMsg: errMsg})
 	return nil
 }
+func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int) ([]store.BuildStatus, error) {
+	return nil, nil
+}
+func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int) error {
+	return nil
+}
 
 // fakeQueue implements only Stats for these tests.
 type fakeQueue struct {

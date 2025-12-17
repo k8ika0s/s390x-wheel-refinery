@@ -112,6 +112,10 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		Count     int `json:"count"`
 		PlanQueue int `json:"plan_queue"`
 	}
+	type buildMetrics struct {
+		Length       int   `json:"length"`
+		OldestAgeSec int64 `json:"oldest_age_seconds,omitempty"`
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
@@ -161,6 +165,14 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		dbm.Status = "n/a"
 	}
 
+	buildStats := buildMetrics{}
+	if h.Queue != nil {
+		stats, err := h.Queue.Stats(ctx)
+		if err == nil {
+			buildStats.Length = stats.Length
+			buildStats.OldestAgeSec = stats.OldestAge
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary": map[string]any{
 			"title":       "Control-plane metrics",
@@ -169,6 +181,7 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		},
 		"queue":           qm,
 		"pending":         pm,
+		"build":           buildStats,
 		"db":              dbm,
 		"status_counts":   sum.StatusCounts,
 		"recent_failures": sum.Failures,
