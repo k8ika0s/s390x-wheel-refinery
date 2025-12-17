@@ -93,6 +93,26 @@ export async function fetchDashboard(token) {
   return { summary, recent, failures, slowest, queue, metrics };
 }
 
+export function fetchSummary(token) {
+  return request("/api/summary", {}, token);
+}
+
+export function fetchTopFailures(limit = 10, token) {
+  return request(`/api/top-failures?limit=${limit}`, {}, token);
+}
+
+export function fetchTopSlowest(limit = 10, token) {
+  return request(`/api/top-slowest?limit=${limit}`, {}, token);
+}
+
+export function fetchQueue(token) {
+  return request("/api/queue", {}, token);
+}
+
+export function fetchMetrics(token) {
+  return request("/api/metrics", {}, token);
+}
+
 export function triggerWorker(token) {
   return request("/api/worker/trigger", { method: "POST" }, token);
 }

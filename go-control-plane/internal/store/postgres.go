@@ -31,6 +31,8 @@ func NewPostgres(db *sql.DB) *PostgresStore {
 }
 
 const schema = `
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 CREATE TABLE IF NOT EXISTS events (
     id            BIGSERIAL PRIMARY KEY,
     run_id        TEXT,
@@ -66,6 +68,12 @@ ALTER TABLE hints ADD COLUMN IF NOT EXISTS severity TEXT;
 ALTER TABLE hints ADD COLUMN IF NOT EXISTS applies_to JSONB;
 ALTER TABLE hints ADD COLUMN IF NOT EXISTS confidence TEXT;
 ALTER TABLE hints ADD COLUMN IF NOT EXISTS examples JSONB;
+CREATE INDEX IF NOT EXISTS idx_hints_pattern_trgm ON hints USING GIN (pattern gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_hints_note_trgm ON hints USING GIN (note gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_hints_tags_trgm ON hints USING GIN ((tags::text) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_hints_recipes_trgm ON hints USING GIN ((recipes::text) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_hints_applies_trgm ON hints USING GIN ((applies_to::text) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_hints_examples_trgm ON hints USING GIN ((examples::text) gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS logs (
     id         BIGSERIAL PRIMARY KEY,

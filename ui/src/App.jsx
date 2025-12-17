@@ -8,7 +8,11 @@ import {
   updateHint,
   deleteHint,
   bulkUploadHints,
-  fetchDashboard,
+  fetchMetrics,
+  fetchQueue,
+  fetchSummary,
+  fetchTopFailures,
+  fetchTopSlowest,
   fetchLog,
   fetchPendingInputs,
   fetchPackageDetail,
@@ -663,42 +667,87 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const apiToastShown = useRef(false);
   const viewKey = view || "overview";
   const hintPageSize = 200;
+  const [isVisible, setIsVisible] = useState(
+    () => (typeof document !== "undefined" ? document.visibilityState === "visible" : true),
+  );
 
   const isValidDashboard = (data) => {
     if (!data || typeof data !== "object") return false;
     const isObject = (v) => v && typeof v === "object" && !Array.isArray(v);
-    if (!isObject(data.summary)) return false;
-    if (!Array.isArray(data.recent)) return false;
-    if (!Array.isArray(data.failures)) return false;
-    if (!Array.isArray(data.slowest)) return false;
-    if (!(isObject(data.queue) || Array.isArray(data.queue))) return false;
+    if (data.summary !== null && data.summary !== undefined && !isObject(data.summary)) return false;
+    if (data.recent !== null && data.recent !== undefined && !Array.isArray(data.recent)) return false;
+    if (data.failures !== null && data.failures !== undefined && !Array.isArray(data.failures)) return false;
+    if (data.slowest !== null && data.slowest !== undefined && !Array.isArray(data.slowest)) return false;
+    if (data.queue !== null && data.queue !== undefined && !(isObject(data.queue) || Array.isArray(data.queue))) return false;
     return true;
   };
 
   const load = async (opts = {}) => {
-    if (apiBlocked && !opts.force) {
+    if ((apiBlocked || !isVisible) && !opts.force) {
       return;
     }
     const { packageFilter, statusFilter: status } = opts;
     setLoading(true);
     try {
-      const recent = await fetchRecent(
-        {
-          limit: recentLimit,
-          packageFilter: packageFilter ?? pkgFilter,
-          status: status ?? statusFilter,
-        },
-        authToken,
-      );
-      const data = await fetchDashboard(authToken);
+      const activeView = opts.view || viewKey;
+      const wantsOverview = activeView === "overview";
+      const wantsQueues = activeView === "queues";
+      const wantsInputs = activeView === "inputs";
+      const wantsBuilds = activeView === "builds";
+      const wantsRecent = wantsOverview || wantsBuilds;
+
+      const recentPromise = wantsRecent
+        ? fetchRecent(
+            {
+              limit: recentLimit,
+              packageFilter: packageFilter ?? pkgFilter,
+              status: status ?? statusFilter,
+            },
+            authToken,
+          )
+        : Promise.resolve(null);
+      const summaryPromise = wantsOverview ? fetchSummary(authToken) : Promise.resolve(null);
+      const failuresPromise = wantsOverview ? fetchTopFailures(10, authToken) : Promise.resolve(null);
+      const slowestPromise = wantsOverview ? fetchTopSlowest(10, authToken) : Promise.resolve(null);
+      const queuePromise = wantsOverview || wantsQueues ? fetchQueue(authToken) : Promise.resolve(null);
+      const metricsPromise = fetchMetrics(authToken).catch(() => null);
+
+      const [recent, summary, failures, slowest, queue, metrics] = await Promise.all([
+        recentPromise,
+        summaryPromise,
+        failuresPromise,
+        slowestPromise,
+        queuePromise,
+        metricsPromise,
+      ]);
+
+      const data = {
+        summary: summary ?? null,
+        recent: Array.isArray(recent) ? recent : [],
+        failures: Array.isArray(failures) ? failures : [],
+        slowest: Array.isArray(slowest) ? slowest : [],
+        queue: queue ?? null,
+        metrics: metrics || null,
+      };
       if (!isValidDashboard(data)) {
         throw new Error("API not connected: unexpected response. Check API base or proxy.");
       }
-      const pending = await fetchPendingInputs(authToken).catch(() => []);
-      setPendingInputs(Array.isArray(pending) ? pending : []);
-      const buildsList = await fetchBuilds({ status: buildStatusFilter || undefined }, authToken).catch(() => []);
-      setBuilds(Array.isArray(buildsList) ? buildsList : []);
-      setDashboard({ ...data, recent, pending, builds: buildsList });
+      if (wantsInputs || wantsOverview) {
+        const pending = await fetchPendingInputs(authToken).catch(() => []);
+        setPendingInputs(Array.isArray(pending) ? pending : []);
+      }
+      if (wantsBuilds) {
+        const buildsList = await fetchBuilds({ status: buildStatusFilter || undefined }, authToken).catch(() => []);
+        setBuilds(Array.isArray(buildsList) ? buildsList : []);
+      }
+      setDashboard((prev) => ({
+        summary: data.summary ?? prev?.summary ?? null,
+        recent: data.recent ?? prev?.recent ?? [],
+        failures: data.failures ?? prev?.failures ?? [],
+        slowest: data.slowest ?? prev?.slowest ?? [],
+        queue: data.queue ?? prev?.queue ?? null,
+        metrics: data.metrics ?? prev?.metrics ?? null,
+      }));
       onMetrics?.(data.metrics);
       onApiStatus?.("ok");
       apiToastShown.current = false;
@@ -723,7 +772,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   };
 
   const loadHints = async (opts = {}) => {
-    if (apiBlocked && !opts.force) {
+    if ((apiBlocked || !isVisible) && !opts.force) {
       return;
     }
     const nextPage = Math.max(1, opts.page ?? hintPage);
@@ -754,8 +803,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
 
   useEffect(() => {
     if (apiBlocked) return;
-    load({ packageFilter: pkgFilter, statusFilter });
-  }, [authToken, pkgFilter, statusFilter, recentLimit, apiBlocked]);
+    if (!isVisible) return;
+    load({ packageFilter: pkgFilter, statusFilter, view: viewKey });
+  }, [authToken, pkgFilter, statusFilter, recentLimit, apiBlocked, isVisible, viewKey]);
 
   useEffect(() => {
     if (viewKey !== "hints") return;
@@ -763,7 +813,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       loadHints({ force: true, page: 1, query: hintSearch });
     }, 300);
     return () => clearTimeout(handle);
-  }, [viewKey, authToken, hintSearch]);
+  }, [viewKey, authToken, hintSearch, isVisible]);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -861,10 +911,25 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   });
 
   useEffect(() => {
-    if (!pollMs || apiBlocked) return;
-    const id = setInterval(() => load({ packageFilter: pkgFilter, statusFilter }), pollMs);
+    if (!pollMs || apiBlocked || !isVisible) return;
+    const id = setInterval(() => load({ packageFilter: pkgFilter, statusFilter, view: viewKey }), pollMs);
     return () => clearInterval(id);
-  }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit, apiBlocked]);
+  }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit, apiBlocked, isVisible, viewKey]);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (typeof document === "undefined") return;
+      setIsVisible(document.visibilityState === "visible");
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleVisibility);
+    }
+    return () => {
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleVisibility);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (view === "builds") {

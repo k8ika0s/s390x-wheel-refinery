@@ -70,5 +70,5 @@ func (s *Service) routes() {
 // Start runs the HTTP server.
 func (s *Service) Start() error {
 	log.Printf("starting server on %s", s.cfg.HTTPAddr)
-	return http.ListenAndServe(s.cfg.HTTPAddr, withCORS(s.cfg, s.mux))
+	return http.ListenAndServe(s.cfg.HTTPAddr, withCORS(s.cfg, withGzip(s.mux)))
 }
