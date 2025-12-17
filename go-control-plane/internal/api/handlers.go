@@ -116,6 +116,8 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	type buildMetrics struct {
 		Length       int   `json:"length"`
 		OldestAgeSec int64 `json:"oldest_age_seconds,omitempty"`
+		Pending      int   `json:"pending"`
+		Retry        int   `json:"retry"`
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
@@ -167,11 +169,23 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	buildStats := buildMetrics{}
-	if h.Queue != nil {
-		stats, err := h.Queue.Stats(ctx)
+	if h.Store != nil {
+		list, err := h.Store.ListBuilds(ctx, "", 500)
 		if err == nil {
-			buildStats.Length = stats.Length
-			buildStats.OldestAgeSec = stats.OldestAge
+			var oldest int64
+			for _, b := range list {
+				if strings.EqualFold(b.Status, "pending") {
+					buildStats.Pending++
+				}
+				if strings.EqualFold(b.Status, "retry") {
+					buildStats.Retry++
+				}
+				buildStats.Length++
+				if oldest == 0 || b.OldestAgeSec > oldest {
+					oldest = b.OldestAgeSec
+				}
+			}
+			buildStats.OldestAgeSec = oldest
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

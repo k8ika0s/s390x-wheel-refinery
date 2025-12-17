@@ -626,6 +626,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
         if (s.auto_plan !== undefined) {
           setSettingsData((prev) => ({ ...(prev || s), auto_plan: !!s.auto_plan, auto_build: s.auto_build !== undefined ? !!s.auto_build : true }));
         }
+        if (s.plan_pool_size !== undefined) {
+          setSettingsData((prev) => ({ ...(prev || s), plan_pool_size: s.plan_pool_size }));
+        }
+        if (s.build_pool_size !== undefined) {
+          setSettingsData((prev) => ({ ...(prev || s), build_pool_size: s.build_pool_size }));
+        }
       } catch {
         // ignore settings load failures silently
       }
@@ -761,6 +767,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
     dashboard?.metrics?.queue?.backend ||
     (Array.isArray(dashboard?.queue) ? "redis" : "redis");
   const planQueueLength = dashboard?.metrics?.pending?.plan_queue ?? 0;
+  const buildQueueLength = dashboard?.metrics?.build?.length ?? 0;
+  const buildQueueOldest = dashboard?.metrics?.build?.oldest_age_seconds ?? "-";
   const buildOldest = dashboard?.metrics?.build?.oldest_age_seconds ?? "-";
   const queueItems = toArray(dashboard?.queue?.items || (Array.isArray(dashboard?.queue) ? dashboard.queue : []));
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
@@ -808,6 +816,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
         recent_limit: recentLimit,
         auto_plan: settingsData.auto_plan,
         auto_build: settingsData.auto_build,
+        plan_pool_size: settingsData.plan_pool_size,
+        build_pool_size: settingsData.build_pool_size,
       };
       const resp = await updateSettings(body, authToken);
       setSettingsData(resp);
@@ -866,6 +876,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
             <StatTile icon="🧠" label="Hints loaded" value={hints.length} hint="Recipe guidance available" />
             <StatTile icon="📥" label="Pending inputs" value={pendingTotal} hint={`waiting: ${pendingByStatus.pending || 0}, planning: ${pendingByStatus.planning || 0}`} />
             <StatTile icon="🗂️" label="Plan queue" value={planQueueLength} hint="Awaiting plan pop" />
+            <StatTile icon="🚀" label="Build queue" value={buildQueueLength} hint={`Oldest: ${buildQueueOldest || 0}s`} />
           </div>
         </div>
         <div className="flex flex-col gap-3 min-w-[260px]">
@@ -948,6 +959,32 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
               value={pollMs}
               onChange={(e) => {
                 setPollMs(Number(e.target.value) || 0);
+                setSettingsDirty(true);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Plan worker pool</div>
+            <input
+              className="input"
+              type="number"
+              min="1"
+              value={settingsData?.plan_pool_size || 0}
+              onChange={(e) => {
+                setSettingsData((s) => ({ ...(s || {}), plan_pool_size: Number(e.target.value) || 1 }));
+                setSettingsDirty(true);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs text-slate-400">Build worker pool</div>
+            <input
+              className="input"
+              type="number"
+              min="1"
+              value={settingsData?.build_pool_size || 0}
+              onChange={(e) => {
+                setSettingsData((s) => ({ ...(s || {}), build_pool_size: Number(e.target.value) || 1 }));
                 setSettingsDirty(true);
               }}
             />

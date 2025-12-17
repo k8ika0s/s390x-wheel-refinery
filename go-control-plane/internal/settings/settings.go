@@ -15,6 +15,8 @@ type Settings struct {
 	RecentLimit   int    `json:"recent_limit,omitempty"`
 	AutoPlan      *bool  `json:"auto_plan,omitempty"`
 	AutoBuild     *bool  `json:"auto_build,omitempty"`
+	PlanPoolSize  int    `json:"plan_pool_size,omitempty"`
+	BuildPoolSize int    `json:"build_pool_size,omitempty"`
 }
 
 var mu sync.Mutex
@@ -24,6 +26,8 @@ const (
 	defaultPlatformTag   = "manylinux2014_s390x"
 	defaultPollMs        = 10000
 	defaultRecentLimit   = 25
+	defaultPlanPoolSize  = 2
+	defaultBuildPoolSize = 2
 )
 
 // ApplyDefaults fills zero-values with sane defaults, but preserves explicit false booleans.
@@ -39,6 +43,12 @@ func ApplyDefaults(s Settings) Settings {
 	}
 	if s.RecentLimit == 0 {
 		s.RecentLimit = defaultRecentLimit
+	}
+	if s.PlanPoolSize == 0 {
+		s.PlanPoolSize = defaultPlanPoolSize
+	}
+	if s.BuildPoolSize == 0 {
+		s.BuildPoolSize = defaultBuildPoolSize
 	}
 	// Auto modes default to true to match current behavior.
 	if s.AutoPlan == nil {
