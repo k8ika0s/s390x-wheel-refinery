@@ -95,6 +95,21 @@ CREATE TABLE IF NOT EXISTS plans (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS build_status (
+    id            BIGSERIAL PRIMARY KEY,
+    package       TEXT NOT NULL,
+    version       TEXT NOT NULL,
+    python_tag    TEXT,
+    platform_tag  TEXT,
+    status        TEXT NOT NULL DEFAULT 'queued',
+    attempts      INT NOT NULL DEFAULT 0,
+    last_error    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_build_status_pkg ON build_status(package, version);
+CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
+
 CREATE TABLE IF NOT EXISTS pending_inputs (
     id          BIGSERIAL PRIMARY KEY,
     filename    TEXT NOT NULL,
@@ -185,6 +200,60 @@ func (p *PostgresStore) UpdatePendingInputStatus(ctx context.Context, id int64, 
 		SET status = $1, error = $2, updated_at = NOW()
 		WHERE id = $3
 	`, status, errMsg, id)
+	return err
+}
+
+// ListBuilds returns build status rows filtered by status if provided.
+func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int) ([]BuildStatus, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	q := `SELECT id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint FROM build_status`
+	args := []any{}
+	if status != "" {
+		q += ` WHERE status = $1`
+		args = append(args, status)
+	}
+	q += ` ORDER BY created_at ASC`
+	if limit > 0 {
+		q += ` LIMIT $2`
+		if status == "" {
+			args = append(args, limit)
+		}
+	}
+	rows, err := p.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BuildStatus
+	for rows.Next() {
+		var bs BuildStatus
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.OldestAgeSec, &bs.CreatedAt, &bs.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, bs)
+	}
+	return out, rows.Err()
+}
+
+// UpdateBuildStatus upserts build status by package/version.
+func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
+	if attempts < 0 {
+		attempts = 0
+	}
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO build_status (package, version, status, last_error, attempts)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (package, version) DO UPDATE
+		SET status = EXCLUDED.status,
+		    last_error = EXCLUDED.last_error,
+		    attempts = EXCLUDED.attempts,
+		    updated_at = NOW()
+	`, pkg, version, status, errMsg, attempts)
 	return err
 }
 

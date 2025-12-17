@@ -82,6 +82,21 @@ type PlanNode struct {
 	Action        string
 }
 
+// BuildStatus tracks a build job derived from a plan.
+type BuildStatus struct {
+	ID           int64  `json:"id"`
+	Package      string `json:"package"`
+	Version      string `json:"version"`
+	PythonTag    string `json:"python_tag"`
+	PlatformTag  string `json:"platform_tag"`
+	Status       string `json:"status"`
+	Attempts     int    `json:"attempts"`
+	LastError    string `json:"last_error,omitempty"`
+	OldestAgeSec int64  `json:"oldest_age_seconds,omitempty"`
+	CreatedAt    int64  `json:"created_at"`
+	UpdatedAt    int64  `json:"updated_at"`
+}
+
 // PackageSummary aggregates status for a package.
 type PackageSummary struct {
 	Name         string
@@ -137,6 +152,10 @@ type Store interface {
 	AddPendingInput(ctx context.Context, pi PendingInput) (int64, error)
 	ListPendingInputs(ctx context.Context, status string) ([]PendingInput, error)
 	UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error
+
+	// Build status/queue visibility
+	ListBuilds(ctx context.Context, status string, limit int) ([]BuildStatus, error)
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int) error
 }
 
 // HistoryFilter defines filters for history queries.

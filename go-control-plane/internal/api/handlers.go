@@ -42,6 +42,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/pending-inputs/pop", h.pendingInputPop)
 	mux.HandleFunc("/api/pending-inputs/status/", h.pendingInputStatus)
 	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
+	mux.HandleFunc("/api/builds", h.builds)
+	mux.HandleFunc("/api/builds/status", h.buildStatusUpdate)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
 	mux.HandleFunc("/api/recent", h.recent)
@@ -519,6 +521,52 @@ func (h *Handler) pendingInputStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "status updated"})
+}
+
+func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	status := r.URL.Query().Get("status")
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 1000)
+	list, err := h.Store.ListBuilds(r.Context(), status, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	var body struct {
+		Package  string `json:"package"`
+		Version  string `json:"version"`
+		Status   string `json:"status"`
+		Error    string `json:"error,omitempty"`
+		Attempts int    `json:"attempts,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if body.Package == "" || body.Version == "" || body.Status == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package, version, and status required"})
+		return
+	}
+	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.Attempts); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"detail": "build status updated"})
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {

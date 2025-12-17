@@ -9,6 +9,7 @@ import {
   fetchPendingInputs,
   fetchPackageDetail,
   fetchRecent,
+  fetchBuilds,
   fetchSettings,
   setCookieToken,
   triggerWorker,
@@ -579,6 +580,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [pendingInputs, setPendingInputs] = useState([]);
+  const [builds, setBuilds] = useState([]);
 
   const load = async (opts = {}) => {
     const { packageFilter, statusFilter: status } = opts;
@@ -596,7 +598,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
       const data = await fetchDashboard(authToken);
       const pending = await fetchPendingInputs(authToken).catch(() => []);
       setPendingInputs(Array.isArray(pending) ? pending : []);
-      setDashboard({ ...data, recent, pending });
+      const buildsList = await fetchBuilds({}, authToken).catch(() => []);
+      setBuilds(Array.isArray(buildsList) ? buildsList : []);
+      setDashboard({ ...data, recent, pending, builds: buildsList });
       onMetrics?.(data.metrics);
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;

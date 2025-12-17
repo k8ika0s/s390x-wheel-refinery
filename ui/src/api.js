@@ -140,3 +140,10 @@ export function fetchRecent({ limit = 25, packageFilter, status }, token) {
   if (status) params.set("status", status);
   return request(`/api/recent?${params.toString()}`, {}, token);
 }
+
+export function fetchBuilds({ status, limit = 200 } = {}, token) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  params.set("limit", limit);
+  return request(`/api/builds?${params.toString()}`, {}, token);
+}
