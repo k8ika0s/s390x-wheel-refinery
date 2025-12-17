@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS build_status (
     platform_tag  TEXT,
     status        TEXT NOT NULL DEFAULT 'queued',
     attempts      INT NOT NULL DEFAULT 0,
+    backoff_until TIMESTAMPTZ,
     last_error    TEXT,
     run_id        TEXT,
     plan_id       BIGINT,
