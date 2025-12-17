@@ -20,14 +20,20 @@ import {
   updateSettings,
   uploadRequirements,
   enqueuePlan,
-  fetchLatestPlan,
   enqueueBuildsFromPlan,
+  fetchPlans,
+  fetchPlan,
 } from "./api";
 
 const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
 const LOGO_SRC = "/s390x-wheel-refinery-logo.png";
 
 const toArray = (value) => (Array.isArray(value) ? value : []);
+const formatEpoch = (value) => {
+  if (!value) return "";
+  const date = new Date(Number(value) * 1000);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : "";
+};
 
 function ArtifactBadges({ meta }) {
   if (!meta) return null;
@@ -632,9 +638,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [pendingInputs, setPendingInputs] = useState([]);
   const [builds, setBuilds] = useState([]);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
-  const [latestPlan, setLatestPlan] = useState(null);
-  const [latestPlanLoading, setLatestPlanLoading] = useState(false);
-  const [latestPlanError, setLatestPlanError] = useState("");
+  const [planList, setPlanList] = useState([]);
+  const [planListLoading, setPlanListLoading] = useState(false);
+  const [planListError, setPlanListError] = useState("");
+  const [selectedPlanId, setSelectedPlanId] = useState(null);
+  const [selectedPlan, setSelectedPlan] = useState(null);
+  const [planDetailsLoading, setPlanDetailsLoading] = useState(false);
+  const [planDetailsError, setPlanDetailsError] = useState("");
   const [enqueueingBuilds, setEnqueueingBuilds] = useState(false);
   const [hintSearch, setHintSearch] = useState("");
   const [selectedHintId, setSelectedHintId] = useState("");
@@ -738,21 +748,41 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     setApiBaseInput(apiBase || getApiBase());
   }, [apiBase]);
 
-  const loadLatestPlan = async () => {
-    setLatestPlanLoading(true);
-    setLatestPlanError("");
+  const loadPlanList = async () => {
+    setPlanListLoading(true);
+    setPlanListError("");
     try {
-      const plan = await fetchLatestPlan(authToken);
-      setLatestPlan(plan);
-    } catch (e) {
-      if (e.status === 404) {
-        setLatestPlan(null);
-        setLatestPlanError("No plan available yet.");
+      const list = await fetchPlans(20, authToken);
+      const items = Array.isArray(list) ? list : [];
+      setPlanList(items);
+      if (items.length > 0) {
+        const ids = new Set(items.map((p) => p.id));
+        if (!selectedPlanId || !ids.has(selectedPlanId)) {
+          setSelectedPlanId(items[0].id);
+        }
       } else {
-        setLatestPlanError(e.message || "Failed to load plan.");
+        setSelectedPlanId(null);
+        setSelectedPlan(null);
       }
+    } catch (e) {
+      setPlanListError(e.message || "Failed to load plans.");
     } finally {
-      setLatestPlanLoading(false);
+      setPlanListLoading(false);
+    }
+  };
+
+  const loadPlanDetails = async (planId) => {
+    if (!planId) return;
+    setPlanDetailsLoading(true);
+    setPlanDetailsError("");
+    try {
+      const plan = await fetchPlan(planId, authToken);
+      setSelectedPlan(plan);
+    } catch (e) {
+      setPlanDetailsError(e.message || "Failed to load plan details.");
+      setSelectedPlan(null);
+    } finally {
+      setPlanDetailsLoading(false);
     }
   };
 
@@ -793,9 +823,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
 
   useEffect(() => {
     if (view === "builds") {
-      loadLatestPlan();
+      loadPlanList();
     }
   }, [view, authToken]);
+
+  useEffect(() => {
+    if (view === "builds" && selectedPlanId) {
+      loadPlanDetails(selectedPlanId);
+    }
+  }, [view, selectedPlanId, authToken]);
 
   const handleTriggerWorker = async () => {
     setMessage("");
@@ -925,6 +961,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const hints = toArray(dashboard?.hints);
   const metrics = dashboard?.metrics;
   const recent = toArray(dashboard?.recent);
+  const selectedPlanNodes = toArray(selectedPlan?.plan);
+  const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
   const pendingByStatus = pendingInputs.reduce(
     (acc, cur) => {
       acc[cur.status] = (acc[cur.status] || 0) + 1;
@@ -1136,13 +1174,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   };
 
   const handleEnqueueBuilds = async () => {
-    if (!latestPlan?.id) {
-      setLatestPlanError("No plan loaded.");
+    if (!selectedPlanId) {
+      setPlanDetailsError("Select a plan to enqueue.");
       return;
     }
     setEnqueueingBuilds(true);
     try {
-      const resp = await enqueueBuildsFromPlan(latestPlan.id, authToken);
+      const resp = await enqueueBuildsFromPlan(selectedPlanId, authToken);
       pushToast?.({
         type: "success",
         title: "Builds enqueued",
@@ -1516,44 +1554,100 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
         <div className="space-y-4">
           <div className="glass p-4 space-y-3">
-            <div className="text-lg font-semibold flex items-center gap-2">
-              <span>Manual build enqueue</span>
-              <span className="chip text-xs">🧪</span>
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-semibold flex items-center gap-2">
+                <span>Plan library</span>
+                <span className="chip text-xs">🗂️</span>
+              </div>
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={loadPlanList} disabled={planListLoading}>
+                Refresh
+              </button>
             </div>
             <div className="text-xs text-slate-400">
-              Auto-build is {settingsData?.auto_build ? "on" : "off"}. Use this to enqueue builds from the latest plan.
+              Auto-build is {settingsData?.auto_build ? "on" : "off"}. Select a plan to enqueue builds manually.
             </div>
-            {latestPlanLoading ? (
-              <div className="text-xs text-slate-500">Loading latest plan…</div>
-            ) : latestPlan ? (
-              <div className="space-y-1 text-sm text-slate-200">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Plan ID</span>
-                  <span className="chip">{latestPlan.id}</span>
-                </div>
-                {latestPlan.run_id && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Run ID</span>
-                    <span className="chip">{latestPlan.run_id}</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Nodes</span>
-                  <span className="chip">{latestPlan.plan?.length || 0}</span>
-                </div>
+            {planListLoading ? (
+              <div className="text-xs text-slate-500">Loading plans…</div>
+            ) : planList.length ? (
+              <div className="space-y-2 max-h-52 overflow-auto text-sm">
+                {planList.map((plan) => {
+                  const selected = plan.id === selectedPlanId;
+                  return (
+                    <button
+                      key={plan.id}
+                      className={`w-full text-left border border-border rounded-lg p-2 transition ${selected ? "bg-slate-800/60" : "hover:bg-slate-800/30"}`}
+                      onClick={() => setSelectedPlanId(plan.id)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-slate-100">Plan #{plan.id}</span>
+                        <span className="text-xs text-slate-500">{formatEpoch(plan.created_at)}</span>
+                      </div>
+                      <div className="text-xs text-slate-400 flex flex-wrap gap-2 mt-1">
+                        {plan.run_id && <span className="chip">run {plan.run_id}</span>}
+                        <span className="chip">{plan.build_count ?? 0} builds</span>
+                        <span className="chip">{plan.node_count ?? 0} nodes</span>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             ) : (
-              <div className="text-xs text-amber-200">{latestPlanError || "No plan loaded."}</div>
+              <div className="text-xs text-slate-500">No plans available yet.</div>
             )}
-            <div className="flex flex-wrap gap-2">
-              <button className="btn btn-primary" onClick={handleEnqueueBuilds} disabled={!latestPlan || enqueueingBuilds}>
-                {enqueueingBuilds ? "Enqueueing..." : "Enqueue builds"}
-              </button>
-              <button className="btn btn-secondary" onClick={loadLatestPlan} disabled={latestPlanLoading}>
-                Refresh plan
-              </button>
+            {planListError && <div className="text-xs text-amber-200">{planListError}</div>}
+            <div className="glass subtle p-3 space-y-2">
+              <div className="text-sm font-semibold text-slate-100">Selected plan</div>
+              {planDetailsLoading ? (
+                <div className="text-xs text-slate-500">Loading plan details…</div>
+              ) : selectedPlan ? (
+                <div className="space-y-2 text-sm text-slate-200">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Plan ID</span>
+                    <span className="chip">{selectedPlan.id}</span>
+                  </div>
+                  {selectedPlan.run_id && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">Run ID</span>
+                      <span className="chip">{selectedPlan.run_id}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Build nodes</span>
+                    <span className="chip">{selectedPlanBuilds.length}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Total nodes</span>
+                    <span className="chip">{selectedPlanNodes.length}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button className="btn btn-primary" onClick={handleEnqueueBuilds} disabled={enqueueingBuilds}>
+                      {enqueueingBuilds ? "Enqueueing..." : "Enqueue builds"}
+                    </button>
+                    <button className="btn btn-secondary" onClick={() => loadPlanDetails(selectedPlan.id)} disabled={planDetailsLoading}>
+                      Refresh details
+                    </button>
+                  </div>
+                  {selectedPlanNodes.length > 0 ? (
+                    <div className="max-h-36 overflow-auto text-xs text-slate-300 space-y-1">
+                      {selectedPlanNodes.slice(0, 8).map((node, idx) => (
+                        <div key={`${node.name}-${node.version}-${idx}`} className="flex items-center justify-between">
+                          <span>{node.name} {node.version}</span>
+                          <span className="chip">{node.action}</span>
+                        </div>
+                      ))}
+                      {selectedPlanNodes.length > 8 && (
+                        <div className="text-slate-500">…and {selectedPlanNodes.length - 8} more</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500">No nodes available for this plan.</div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-xs text-slate-500">{planDetailsError || "Select a plan to review details."}</div>
+              )}
+              {planDetailsError && selectedPlan && <div className="text-xs text-amber-200">{planDetailsError}</div>}
             </div>
-            {latestPlanError && latestPlan && <div className="text-xs text-amber-200">{latestPlanError}</div>}
           </div>
           <div className="glass p-4 space-y-3">
             <div className="text-lg font-semibold flex items-center gap-2">

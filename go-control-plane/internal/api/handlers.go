@@ -60,6 +60,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/plan", h.plan)
 	mux.HandleFunc("/api/plan/latest", h.planLatest)
 	mux.HandleFunc("/api/plan/", h.planByID)
+	mux.HandleFunc("/api/plans", h.plans)
 	mux.HandleFunc("/api/plan/compute", h.planCompute)
 	mux.HandleFunc("/api/manifest", h.manifest)
 	mux.HandleFunc("/api/artifacts", h.artifacts)
@@ -861,6 +862,20 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+func (h *Handler) plans(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 20, 200)
+	list, err := h.Store.ListPlans(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 func (h *Handler) planLatest(w http.ResponseWriter, r *http.Request) {

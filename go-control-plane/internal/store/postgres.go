@@ -903,6 +903,44 @@ func (p *PostgresStore) LatestPlanSnapshot(ctx context.Context) (PlanSnapshot, e
 	return snap, nil
 }
 
+// ListPlans returns recent plan summaries.
+func (p *PostgresStore) ListPlans(ctx context.Context, limit int) ([]PlanSummary, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id,
+		       run_id,
+		       EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at,
+		       CASE WHEN jsonb_typeof(plan) = 'array' THEN jsonb_array_length(plan) ELSE 0 END AS node_count,
+		       CASE WHEN jsonb_typeof(plan) = 'array'
+		            THEN (SELECT COUNT(*) FROM jsonb_array_elements(plan) elem WHERE lower(elem->>'action') = 'build')
+		            ELSE 0 END AS build_count
+		FROM plans
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlanSummary
+	for rows.Next() {
+		var entry PlanSummary
+		if err := rows.Scan(&entry.ID, &entry.RunID, &entry.CreatedAt, &entry.NodeCount, &entry.BuildCount); err != nil {
+			return nil, err
+		}
+		out = append(out, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // QueueBuildsFromPlan seeds build_status rows for build nodes in a plan.
 func (p *PostgresStore) QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error {
 	if err := p.ensureDB(); err != nil {

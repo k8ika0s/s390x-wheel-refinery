@@ -147,12 +147,18 @@ export function updateSettings(body, token) {
   return request("/api/settings", { method: "POST", body: JSON.stringify(body) }, token);
 }
 
-export function fetchLatestPlan(token) {
-  return request("/api/plan/latest", {}, token);
-}
-
 export function enqueueBuildsFromPlan(planId, token) {
   return request(`/api/plan/${planId}/enqueue-builds`, { method: "POST" }, token);
+}
+
+export function fetchPlans(limit = 20, token) {
+  const params = new URLSearchParams();
+  params.set("limit", limit);
+  return request(`/api/plans?${params.toString()}`, {}, token);
+}
+
+export function fetchPlan(planId, token) {
+  return request(`/api/plan/${planId}`, {}, token);
 }
 
 export function createHint(hint, token) {

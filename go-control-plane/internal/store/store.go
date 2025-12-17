@@ -100,6 +100,15 @@ type PlanSnapshot struct {
 	DAG   json.RawMessage `json:"dag,omitempty"`
 }
 
+// PlanSummary provides a compact plan list entry.
+type PlanSummary struct {
+	ID         int64  `json:"id"`
+	RunID      string `json:"run_id,omitempty"`
+	CreatedAt  int64  `json:"created_at"`
+	NodeCount  int    `json:"node_count"`
+	BuildCount int    `json:"build_count"`
+}
+
 // BuildStatus tracks a build job derived from a plan.
 type BuildStatus struct {
 	ID           int64  `json:"id"`
@@ -166,6 +175,7 @@ type Store interface {
 	Plan(ctx context.Context) ([]PlanNode, error)
 	PlanSnapshot(ctx context.Context, planID int64) (PlanSnapshot, error)
 	LatestPlanSnapshot(ctx context.Context) (PlanSnapshot, error)
+	ListPlans(ctx context.Context, limit int) ([]PlanSummary, error)
 	SavePlan(ctx context.Context, runID string, nodes []PlanNode, dag json.RawMessage) (int64, error)
 	QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error
 	Manifest(ctx context.Context, limit int) ([]ManifestEntry, error)
