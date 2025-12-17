@@ -610,6 +610,18 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [builds, setBuilds] = useState([]);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
 
+  const isValidDashboard = (data) => {
+    if (!data || typeof data !== "object") return false;
+    const isObject = (v) => v && typeof v === "object" && !Array.isArray(v);
+    if (!isObject(data.summary)) return false;
+    if (!Array.isArray(data.recent)) return false;
+    if (!Array.isArray(data.failures)) return false;
+    if (!Array.isArray(data.slowest)) return false;
+    if (!(isObject(data.queue) || Array.isArray(data.queue))) return false;
+    if (!Array.isArray(data.hints)) return false;
+    return true;
+  };
+
   const load = async (opts = {}) => {
     const { packageFilter, statusFilter: status } = opts;
     setLoading(true);
@@ -624,6 +636,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         authToken,
       );
       const data = await fetchDashboard(authToken);
+      if (!isValidDashboard(data)) {
+        throw new Error("API not connected: unexpected response. Check API base or proxy.");
+      }
       const pending = await fetchPendingInputs(authToken).catch(() => []);
       setPendingInputs(Array.isArray(pending) ? pending : []);
       const buildsList = await fetchBuilds({ status: buildStatusFilter || undefined }, authToken).catch(() => []);
