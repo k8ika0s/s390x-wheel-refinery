@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -153,6 +154,8 @@ func (w *Worker) Drain(ctx context.Context) error {
 				firstErr = res.err
 			}
 		}
+		// report build status to control-plane
+		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, res.attempt)
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
@@ -317,6 +320,37 @@ func (w *Worker) Drain(ctx context.Context) error {
 		writeManifest(w.Cfg.OutputDir, manifestEntries)
 	}
 	return firstErr
+}
+
+func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, attempts int) {
+	if w.Cfg.ControlPlaneURL == "" {
+		return
+	}
+	url := strings.TrimRight(w.Cfg.ControlPlaneURL, "/") + "/api/builds/status"
+	body := map[string]any{
+		"package":  pkg,
+		"version":  version,
+		"status":   status,
+		"attempts": attempts,
+	}
+	if err != nil {
+		body["error"] = err.Error()
+	}
+	data, _ := json.Marshal(body)
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if reqErr != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if w.Cfg.ControlPlaneToken != "" {
+		req.Header.Set("X-Worker-Token", w.Cfg.ControlPlaneToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, doErr := client.Do(req)
+	if doErr != nil {
+		return
+	}
+	resp.Body.Close()
 }
 
 func (w *Worker) match(ctx context.Context, reqs []queue.Request) []runner.Job {

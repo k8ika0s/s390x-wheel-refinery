@@ -24,6 +24,7 @@ type Config struct {
 	PlanPollIntervalSec int
 	PlanPopBatch        int
 	AutoBuild           bool
+	BuildStatusURL      string
 	KafkaBrokers        string
 	KafkaTopic          string
 	InputDir            string
@@ -88,6 +89,7 @@ func fromEnv() Config {
 		PlanPollIntervalSec: getenvInt("PLAN_POLL_INTERVAL_SEC", 15),
 		PlanPopBatch:        getenvInt("PLAN_POP_BATCH", 5),
 		AutoBuild:           getenvBool("AUTO_BUILD", true),
+		BuildStatusURL:      getenv("BUILD_STATUS_URL", ""),
 		KafkaBrokers:        getenv("KAFKA_BROKERS", ""),
 		KafkaTopic:          getenv("KAFKA_TOPIC", "refinery.queue"),
 		InputDir:            getenv("INPUT_DIR", "/input"),
