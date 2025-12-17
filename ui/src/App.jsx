@@ -4,6 +4,10 @@ import {
   getApiBase,
   clearQueue,
   enqueueRetry,
+  createHint,
+  updateHint,
+  deleteHint,
+  bulkUploadHints,
   fetchDashboard,
   fetchLog,
   fetchPendingInputs,
@@ -104,6 +108,7 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, apiBase,
     { to: "/inputs", label: "Inputs" },
     { to: "/queues", label: "Queues" },
     { to: "/builds", label: "Builds" },
+    { to: "/hints", label: "Hints" },
     { to: "/settings", label: "Settings" },
   ];
 
@@ -610,6 +615,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [pendingInputs, setPendingInputs] = useState([]);
   const [builds, setBuilds] = useState([]);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
+  const [hintSearch, setHintSearch] = useState("");
+  const [selectedHintId, setSelectedHintId] = useState("");
+  const [hintForm, setHintForm] = useState(null);
+  const [hintFormError, setHintFormError] = useState("");
+  const [hintSaving, setHintSaving] = useState(false);
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkStatus, setBulkStatus] = useState(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
   const apiToastShown = useRef(false);
 
   const isValidDashboard = (data) => {
@@ -703,6 +716,35 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   useEffect(() => {
     setApiBaseInput(apiBase || getApiBase());
   }, [apiBase]);
+
+  const parseLines = (value) =>
+    (value || "")
+      .split(/\r?\n/)
+      .map((v) => v.trim())
+      .filter(Boolean);
+
+  const parseCSV = (value) =>
+    (value || "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+
+  const normalizeHintForm = (h) => ({
+    id: h?.id || "",
+    pattern: h?.pattern || "",
+    note: h?.note || "",
+    severity: h?.severity || "",
+    confidence: h?.confidence || "",
+    tags: (h?.tags || []).join(", "),
+    examples: (h?.examples || []).join("\n"),
+    appliesTo: h?.applies_to ? JSON.stringify(h.applies_to, null, 2) : "",
+    recipes: {
+      dnf: (h?.recipes?.dnf || []).join("\n"),
+      apt: (h?.recipes?.apt || []).join("\n"),
+      apk: (h?.recipes?.apk || []).join("\n"),
+      brew: (h?.recipes?.brew || []).join("\n"),
+    },
+  });
 
   useEffect(() => {
     if (!pollMs || apiBlocked) return;
@@ -850,6 +892,27 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     const matchPkg = search ? `${e.name} ${e.version}`.toLowerCase().includes(search.toLowerCase()) : true;
     return matchPkg;
   });
+  const filteredHints = hints.filter((h) => {
+    if (!hintSearch) return true;
+    const haystack = [
+      h.id,
+      h.pattern,
+      h.note,
+      ...(h.tags || []),
+      ...(h.recipes ? Object.values(h.recipes).flat() : []),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(hintSearch.toLowerCase());
+  });
+
+  useEffect(() => {
+    if (!selectedHintId && filteredHints.length) {
+      setSelectedHintId(filteredHints[0].id);
+      setHintForm(normalizeHintForm(filteredHints[0]));
+    }
+  }, [filteredHints, selectedHintId]);
 
   const viewKey = view || "overview";
   const alerts = [];
@@ -920,6 +983,88 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       pushToast?.({ type: "error", title: "Settings save failed", message: e.message });
     } finally {
       setSettingsSaving(false);
+    }
+  };
+
+  const handleHintSave = async () => {
+    if (!hintForm) return;
+    setHintFormError("");
+    setHintSaving(true);
+    let applies = {};
+    if (hintForm.appliesTo?.trim()) {
+      try {
+        applies = JSON.parse(hintForm.appliesTo);
+      } catch (e) {
+        setHintFormError("Applies-to must be valid JSON.");
+        setHintSaving(false);
+        return;
+      }
+    }
+    const payload = {
+      id: hintForm.id?.trim(),
+      pattern: hintForm.pattern?.trim(),
+      note: hintForm.note?.trim(),
+      severity: hintForm.severity?.trim(),
+      confidence: hintForm.confidence?.trim(),
+      tags: parseCSV(hintForm.tags),
+      examples: parseLines(hintForm.examples),
+      applies_to: applies,
+      recipes: {
+        dnf: parseLines(hintForm.recipes?.dnf),
+        apt: parseLines(hintForm.recipes?.apt),
+        apk: parseLines(hintForm.recipes?.apk),
+        brew: parseLines(hintForm.recipes?.brew),
+      },
+    };
+    if (!payload.id || !payload.pattern || !payload.note) {
+      setHintFormError("ID, pattern, and note are required.");
+      setHintSaving(false);
+      return;
+    }
+    try {
+      const exists = hints.some((h) => h.id === payload.id);
+      if (exists) {
+        await updateHint(payload.id, payload, authToken);
+      } else {
+        await createHint(payload, authToken);
+      }
+      pushToast?.({ type: "success", title: "Hint saved", message: payload.id });
+      await load({ packageFilter: pkgFilter, statusFilter, force: true });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Hint save failed", message: e.message });
+    } finally {
+      setHintSaving(false);
+    }
+  };
+
+  const handleHintDelete = async () => {
+    if (!selectedHintId) return;
+    if (!window.confirm(`Delete hint ${selectedHintId}?`)) return;
+    try {
+      await deleteHint(selectedHintId, authToken);
+      pushToast?.({ type: "success", title: "Hint deleted", message: selectedHintId });
+      setSelectedHintId("");
+      setHintForm(null);
+      await load({ packageFilter: pkgFilter, statusFilter, force: true });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Delete failed", message: e.message });
+    }
+  };
+
+  const handleBulkUpload = async () => {
+    if (!bulkFile) return;
+    setBulkUploading(true);
+    setBulkStatus(null);
+    try {
+      const resp = await bulkUploadHints(bulkFile, authToken);
+      setBulkStatus(resp);
+      setBulkFile(null);
+      pushToast?.({ type: "success", title: "Hints imported", message: `Loaded ${resp.loaded || 0}` });
+      await load({ packageFilter: pkgFilter, statusFilter, force: true });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Import failed", message: e.message });
+    } finally {
+      setBulkUploading(false);
     }
   };
 
@@ -1550,6 +1695,194 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     </div>
   );
 
+  const renderHintsView = () => (
+    <div className="space-y-4">
+      <PageHeader
+        title="Hint catalog"
+        subtitle="Search, edit, and bulk import hint recipes for common build failures."
+        badge={`${hints.length} total`}
+      />
+      <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
+        <div className="glass p-4 space-y-3">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Hints</span>
+            <span className="chip text-xs">🧠</span>
+          </div>
+          <input
+            className="input"
+            placeholder="Search by id, pattern, tags"
+            value={hintSearch}
+            onChange={(e) => setHintSearch(e.target.value)}
+          />
+          <button
+            className="btn btn-secondary w-full"
+            onClick={() => {
+              setSelectedHintId("");
+              setHintForm(normalizeHintForm({}));
+              setHintFormError("");
+            }}
+          >
+            New hint
+          </button>
+          <div className="space-y-2 max-h-[420px] overflow-auto text-sm">
+            {filteredHints.length ? filteredHints.map((h) => (
+              <button
+                key={h.id}
+                className={`w-full text-left border border-border rounded-lg p-2 hover:bg-slate-800/40 ${selectedHintId === h.id ? "bg-slate-800/60" : ""}`}
+                onClick={() => {
+                  setSelectedHintId(h.id);
+                  setHintForm(normalizeHintForm(h));
+                  setHintFormError("");
+                }}
+              >
+                <div className="font-semibold text-slate-100">{h.id}</div>
+                <div className="text-xs text-slate-400 truncate">{h.pattern}</div>
+              </button>
+            )) : <EmptyState title="No hints" detail="No hints match your search." />}
+          </div>
+        </div>
+        <div className="glass p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>{selectedHintId ? "Edit hint" : "Create hint"}</span>
+              <span className="chip text-xs">✍️</span>
+            </div>
+            {selectedHintId && (
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleHintDelete}>Delete</button>
+            )}
+          </div>
+          {!hintForm ? (
+            <EmptyState title="Select a hint" detail="Pick a hint from the list to edit or create a new one." />
+          ) : (
+            <div className="space-y-3 text-sm text-slate-200">
+              <div className="grid md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-400">ID</div>
+                  <input
+                    className="input"
+                    placeholder="unique-id"
+                    value={hintForm.id}
+                    onChange={(e) => setHintForm((s) => ({ ...s, id: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-400">Severity</div>
+                  <input
+                    className="input"
+                    placeholder="error|warn|info"
+                    value={hintForm.severity}
+                    onChange={(e) => setHintForm((s) => ({ ...s, severity: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-slate-400">Pattern</div>
+                <input
+                  className="input"
+                  placeholder="regex or literal"
+                  value={hintForm.pattern}
+                  onChange={(e) => setHintForm((s) => ({ ...s, pattern: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-slate-400">Note</div>
+                <textarea
+                  className="input min-h-[80px]"
+                  placeholder="Explain the fix and why it helps."
+                  value={hintForm.note}
+                  onChange={(e) => setHintForm((s) => ({ ...s, note: e.target.value }))}
+                />
+              </div>
+              <div className="grid md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-400">Tags (comma)</div>
+                  <input
+                    className="input"
+                    placeholder="ssl, missing-header"
+                    value={hintForm.tags}
+                    onChange={(e) => setHintForm((s) => ({ ...s, tags: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-400">Confidence</div>
+                  <input
+                    className="input"
+                    placeholder="low|medium|high"
+                    value={hintForm.confidence}
+                    onChange={(e) => setHintForm((s) => ({ ...s, confidence: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="grid md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-400">Examples (one per line)</div>
+                  <textarea
+                    className="input min-h-[90px]"
+                    value={hintForm.examples}
+                    onChange={(e) => setHintForm((s) => ({ ...s, examples: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-400">Applies-to (JSON)</div>
+                  <textarea
+                    className="input min-h-[90px]"
+                    placeholder='{"platforms":["linux"],"arch":["s390x"]}'
+                    value={hintForm.appliesTo}
+                    onChange={(e) => setHintForm((s) => ({ ...s, appliesTo: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="grid md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-400">dnf packages</div>
+                  <textarea className="input min-h-[80px]" value={hintForm.recipes.dnf} onChange={(e) => setHintForm((s) => ({ ...s, recipes: { ...s.recipes, dnf: e.target.value } }))} />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-400">apt packages</div>
+                  <textarea className="input min-h-[80px]" value={hintForm.recipes.apt} onChange={(e) => setHintForm((s) => ({ ...s, recipes: { ...s.recipes, apt: e.target.value } }))} />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-400">apk packages</div>
+                  <textarea className="input min-h-[80px]" value={hintForm.recipes.apk} onChange={(e) => setHintForm((s) => ({ ...s, recipes: { ...s.recipes, apk: e.target.value } }))} />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs text-slate-400">brew packages</div>
+                  <textarea className="input min-h-[80px]" value={hintForm.recipes.brew} onChange={(e) => setHintForm((s) => ({ ...s, recipes: { ...s.recipes, brew: e.target.value } }))} />
+                </div>
+              </div>
+              {hintFormError && <div className="text-amber-300 text-xs">{hintFormError}</div>}
+              <button className="btn btn-primary" onClick={handleHintSave} disabled={hintSaving}>
+                {hintSaving ? "Saving..." : "Save hint"}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="glass p-4 space-y-3">
+        <div className="text-lg font-semibold flex items-center gap-2">
+          <span>Bulk import</span>
+          <span className="chip text-xs">📦</span>
+        </div>
+        <input
+          type="file"
+          accept=".yaml,.yml,.json"
+          className="input"
+          onChange={(e) => setBulkFile(e.target.files?.[0] || null)}
+        />
+        <div className="flex flex-wrap gap-2">
+          <button className="btn btn-primary" onClick={handleBulkUpload} disabled={!bulkFile || bulkUploading}>
+            {bulkUploading ? "Uploading..." : "Upload & seed"}
+          </button>
+        </div>
+        {bulkStatus && (
+          <div className="text-xs text-slate-400">
+            Loaded: {bulkStatus.loaded || 0} · Skipped: {bulkStatus.skipped || 0} · Errors: {(bulkStatus.errors || []).length}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   const renderView = () => {
     switch (viewKey) {
       case "inputs":
@@ -1558,6 +1891,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         return renderQueues();
       case "builds":
         return renderBuilds();
+      case "hints":
+        return renderHintsView();
       case "settings":
         return renderSettingsView();
       default:
@@ -1610,6 +1945,7 @@ export default function App() {
         <Route path="/inputs" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="inputs" />} />
         <Route path="/queues" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="queues" />} />
         <Route path="/builds" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="builds" />} />
+        <Route path="/hints" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="hints" />} />
         <Route path="/settings" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="settings" />} />
         <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} apiBase={apiBase} />} />
       </Routes>

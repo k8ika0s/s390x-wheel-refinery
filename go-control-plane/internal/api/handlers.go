@@ -20,6 +20,7 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
+	"gopkg.in/yaml.v3"
 )
 
 // Handler wires HTTP routes to store/queue backends.
@@ -64,6 +65,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/queue/enqueue", h.queueEnqueue)
 	mux.HandleFunc("/api/queue/clear", h.queueClear)
 	mux.HandleFunc("/api/hints", h.hints)
+	mux.HandleFunc("/api/hints/bulk", h.hintsBulk)
 	mux.HandleFunc("/api/hints/", h.hintByID)
 	mux.HandleFunc("/api/logs/", h.logsByNameVersion)
 	mux.HandleFunc("/api/logs/search", h.logsSearch)
@@ -1122,6 +1124,71 @@ func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+func (h *Handler) hintsBulk(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if h.Store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store not configured"})
+		return
+	}
+	var data []byte
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid form"})
+			return
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file required"})
+			return
+		}
+		defer file.Close()
+		data, err = io.ReadAll(file)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read file"})
+			return
+		}
+	} else {
+		var err error
+		data, err = io.ReadAll(r.Body)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
+			return
+		}
+	}
+	if len(data) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty payload"})
+		return
+	}
+	var hints []store.Hint
+	if err := yaml.Unmarshal(data, &hints); err != nil {
+		if err2 := json.Unmarshal(data, &hints); err2 != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid yaml/json"})
+			return
+		}
+	}
+	var loaded, skipped int
+	var errors []string
+	for _, hint := range hints {
+		if hint.ID == "" || hint.Pattern == "" || len(hint.Recipes) == 0 || hint.Note == "" {
+			skipped++
+			continue
+		}
+		if err := h.Store.PutHint(r.Context(), hint); err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", hint.ID, err))
+			continue
+		}
+		loaded++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"loaded":  loaded,
+		"skipped": skipped,
+		"errors":  errors,
+	})
 }
 
 func (h *Handler) hintByID(w http.ResponseWriter, r *http.Request) {

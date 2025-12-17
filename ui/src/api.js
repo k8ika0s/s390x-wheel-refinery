@@ -128,6 +128,36 @@ export function updateSettings(body, token) {
   return request("/api/settings", { method: "POST", body: JSON.stringify(body) }, token);
 }
 
+export function createHint(hint, token) {
+  return request("/api/hints", { method: "POST", body: JSON.stringify(hint) }, token);
+}
+
+export function updateHint(id, hint, token) {
+  return request(`/api/hints/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(hint) }, token);
+}
+
+export function deleteHint(id, token) {
+  return request(`/api/hints/${encodeURIComponent(id)}`, { method: "DELETE" }, token);
+}
+
+export async function bulkUploadHints(file, token) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const resp = await fetch(joinBasePath(getApiBase(), "/api/hints/bulk"), {
+    method: "POST",
+    body: fd,
+    headers,
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    const err = new Error(text || resp.statusText);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
 export function fetchPackageDetail(name, token, limit = 50) {
   return Promise.all([
     request(`/api/package/${encodeURIComponent(name)}`, {}, token),
