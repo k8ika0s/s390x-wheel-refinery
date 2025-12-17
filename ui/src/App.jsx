@@ -764,15 +764,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overvie
     pushToast?.({ type: "success", title: "Token saved", message: "Worker token stored locally" });
   };
 
-  const queueLength = dashboard?.queue?.length ?? (Array.isArray(dashboard?.queue) ? dashboard.queue.length : 0);
-  const workerMode =
-    dashboard?.queue?.worker_mode ||
-    dashboard?.metrics?.queue?.backend ||
-    (Array.isArray(dashboard?.queue) ? "redis" : "redis");
+  const queueObj = dashboard?.queue && typeof dashboard.queue === "object" && !Array.isArray(dashboard.queue) ? dashboard.queue : null;
+  const queueItems = toArray(queueObj?.items);
+  const queueLength = Number.isFinite(queueObj?.length) ? queueObj.length : queueItems.length;
+  const queueInvalid = Boolean(dashboard?.queue) && !queueObj;
+  const workerMode = queueObj?.worker_mode || dashboard?.metrics?.queue?.backend || "unknown";
   const planQueueLength = dashboard?.metrics?.pending?.plan_queue ?? 0;
   const buildQueueLength = dashboard?.metrics?.build?.length ?? 0;
   const buildQueueOldest = dashboard?.metrics?.build?.oldest_age_seconds ?? "-";
-  const queueItems = toArray(dashboard?.queue?.items || (Array.isArray(dashboard?.queue) ? dashboard.queue : []));
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = toArray(dashboard?.hints);
   const metrics = dashboard?.metrics;
@@ -797,6 +796,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overvie
   }
   if (metrics?.queue?.consumer_state) {
     alerts.push(`Queue note: ${metrics.queue.consumer_state}`);
+  }
+  if (queueInvalid) {
+    alerts.push("Retry queue response is not valid JSON. Check /api proxy or VITE_API_BASE configuration.");
   }
   if (settingsData?.auto_plan === false) {
     alerts.push("Auto-plan is off; uploads require manual plan enqueue.");
