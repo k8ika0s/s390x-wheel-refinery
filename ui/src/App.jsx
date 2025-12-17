@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Routes, Route, Link, Navigate, useParams, useLocation } from "react-router-dom";
+import { Routes, Route, Link, Navigate, useParams, useLocation, useNavigate } from "react-router-dom";
 import {
   getApiBase,
   clearQueue,
@@ -119,8 +119,9 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, apiBase,
   const navItems = [
     { to: "/", label: "Overview", aliases: ["/overview"] },
     { to: "/inputs", label: "Inputs" },
-    { to: "/queues", label: "Queues" },
+    { to: "/plans", label: "Plans" },
     { to: "/builds", label: "Builds" },
+    { to: "/queues", label: "Queues" },
     { to: "/hints", label: "Hints" },
     { to: "/settings", label: "Settings" },
   ];
@@ -619,6 +620,8 @@ function PackageDetail({ token, pushToast, apiBase }) {
 const STATUS_CHIPS = ["built", "failed", "retry", "reused", "cached", "missing", "skipped_known_failure"];
 
 function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, apiBase, onApiBaseChange, view = "overview" }) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [authToken, setAuthToken] = useState(localStorage.getItem("refinery_token") || token || "");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -932,13 +935,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   }, []);
 
   useEffect(() => {
-    if (view === "builds") {
+    if (view === "plans") {
       loadPlanList();
     }
   }, [view, authToken]);
 
   useEffect(() => {
-    if (view === "builds" && selectedPlanId) {
+    if (view === "plans" && selectedPlanId) {
       loadPlanDetails(selectedPlanId);
     }
   }, [view, selectedPlanId, authToken]);
@@ -1117,6 +1120,18 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   });
 
   useEffect(() => {
+    if (viewKey !== "hints") return;
+    const params = new URLSearchParams(location.search);
+    const target = params.get("hint");
+    if (!target) return;
+    const match = filteredHints.find((h) => h.id === target) || hints.find((h) => h.id === target);
+    if (!match || selectedHintId === match.id) return;
+    setSelectedHintId(match.id);
+    setHintForm(normalizeHintForm(match));
+    setHintFormError("");
+  }, [viewKey, location.search, filteredHints, hints, selectedHintId]);
+
+  useEffect(() => {
     if (!selectedHintId && filteredHints.length) {
       setSelectedHintId(filteredHints[0].id);
       setHintForm(normalizeHintForm(filteredHints[0]));
@@ -1143,6 +1158,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     alerts.push("No worker token set; worker actions may be rejected.");
   }
   const failuresTop = toArray(dashboard?.failures);
+  const planListBadge = planListLoading ? "Loading..." : `${planList.length} plans`;
   const slowestTop = toArray(dashboard?.slowest);
 
   const toggleSelectQueue = (item) => {
@@ -1438,11 +1454,19 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <div className="text-slate-400">Loading hints…</div>
             ) : hints.length ? (
               hints.map((h, idx) => (
-                <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
+                <button
+                  key={idx}
+                  type="button"
+                  className="text-left w-full text-slate-300 border border-border rounded-lg p-2 hover:bg-slate-800/40"
+                  onClick={() => {
+                    if (!h?.id) return;
+                    navigate(`/hints?hint=${encodeURIComponent(h.id)}`);
+                  }}
+                >
                   <div className="font-semibold">Pattern: {h?.pattern || "n/a"}</div>
                   <div className="text-slate-400">dnf: {(h?.recipes?.dnf || h?.packages?.dnf || []).join(", ") || "-"}</div>
                   <div className="text-slate-400">apt: {(h?.recipes?.apt || h?.packages?.apt || []).join(", ") || "-"}</div>
-                </div>
+                </button>
               ))
             ) : (
               <div className="text-slate-400">Hints load on demand in the Hints tab.</div>
@@ -1674,111 +1698,126 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     </div>
   );
 
+  const renderPlans = () => (
+    <div className="space-y-4">
+      <PageHeader
+        title="Plans"
+        subtitle="Review planned DAGs, inspect nodes, and manually enqueue builds when auto-build is off."
+        badge={planListBadge}
+      />
+      <div className="grid lg:grid-cols-[360px,1fr] gap-4 items-start">
+        <div className="glass p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Plan library</span>
+              <span className="chip text-xs">🗂️</span>
+            </div>
+            <button className="btn btn-secondary px-2 py-1 text-xs" onClick={loadPlanList} disabled={planListLoading}>
+              Refresh
+            </button>
+          </div>
+          <div className="text-xs text-slate-400">
+            Plan queue: {planQueueLength}. Auto-build is {settingsData?.auto_build ? "on" : "off"}.
+          </div>
+          {planListLoading ? (
+            <div className="text-xs text-slate-500">Loading plans…</div>
+          ) : planList.length ? (
+            <div className="space-y-2 max-h-80 overflow-auto text-sm">
+              {planList.map((plan) => {
+                const selected = plan.id === selectedPlanId;
+                return (
+                  <button
+                    key={plan.id}
+                    className={`w-full text-left border border-border rounded-lg p-2 transition ${selected ? "bg-slate-800/60" : "hover:bg-slate-800/30"}`}
+                    onClick={() => setSelectedPlanId(plan.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-100">Plan #{plan.id}</span>
+                      <span className="text-xs text-slate-500">{formatEpoch(plan.created_at)}</span>
+                    </div>
+                    <div className="text-xs text-slate-400 flex flex-wrap gap-2 mt-1">
+                      {plan.run_id && <span className="chip">run {plan.run_id}</span>}
+                      <span className="chip">{plan.build_count ?? 0} builds</span>
+                      <span className="chip">{plan.node_count ?? 0} nodes</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500">No plans available yet.</div>
+          )}
+          {planListError && <div className="text-xs text-amber-200">{planListError}</div>}
+        </div>
+        <div className="glass subtle p-4 space-y-3">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Selected plan</span>
+            <span className="chip text-xs">📌</span>
+          </div>
+          {planDetailsLoading ? (
+            <div className="text-xs text-slate-500">Loading plan details…</div>
+          ) : selectedPlan ? (
+            <div className="space-y-2 text-sm text-slate-200">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Plan ID</span>
+                <span className="chip">{selectedPlan.id}</span>
+              </div>
+              {selectedPlan.run_id && (
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Run ID</span>
+                  <span className="chip">{selectedPlan.run_id}</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Build nodes</span>
+                <span className="chip">{selectedPlanBuilds.length}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Total nodes</span>
+                <span className="chip">{selectedPlanNodes.length}</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn btn-primary" onClick={handleEnqueueBuilds} disabled={enqueueingBuilds}>
+                  {enqueueingBuilds ? "Enqueueing..." : "Enqueue builds"}
+                </button>
+                <button className="btn btn-secondary" onClick={() => loadPlanDetails(selectedPlan.id)} disabled={planDetailsLoading}>
+                  Refresh details
+                </button>
+              </div>
+              {selectedPlanNodes.length > 0 ? (
+                <div className="max-h-64 overflow-auto text-xs text-slate-300 space-y-1">
+                  {selectedPlanNodes.slice(0, 12).map((node, idx) => (
+                    <div key={`${node.name}-${node.version}-${idx}`} className="flex items-center justify-between">
+                      <span>{node.name} {node.version}</span>
+                      <span className="chip">{node.action}</span>
+                    </div>
+                  ))}
+                  {selectedPlanNodes.length > 12 && (
+                    <div className="text-slate-500">…and {selectedPlanNodes.length - 12} more</div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-xs text-slate-500">No nodes available for this plan.</div>
+              )}
+            </div>
+          ) : (
+            <div className="text-xs text-slate-500">{planDetailsError || "Select a plan to review details."}</div>
+          )}
+          {planDetailsError && selectedPlan && <div className="text-xs text-amber-200">{planDetailsError}</div>}
+        </div>
+      </div>
+    </div>
+  );
+
   const renderBuilds = () => (
     <div className="space-y-4">
       <PageHeader
         title="Build queue & events"
-        subtitle="Track plan-derived builds, retries, and recent execution events."
+        subtitle="Monitor queued builds and recent execution events. Manage plan libraries on the Plans page."
         badge={`${buildQueueLength} queued`}
       />
-      <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
+      <div className="grid lg:grid-cols-[280px,1fr] gap-4 items-start">
         <div className="space-y-4">
-          <div className="glass p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-lg font-semibold flex items-center gap-2">
-                <span>Plan library</span>
-                <span className="chip text-xs">🗂️</span>
-              </div>
-              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={loadPlanList} disabled={planListLoading}>
-                Refresh
-              </button>
-            </div>
-            <div className="text-xs text-slate-400">
-              Auto-build is {settingsData?.auto_build ? "on" : "off"}. Select a plan to enqueue builds manually.
-            </div>
-            {planListLoading ? (
-              <div className="text-xs text-slate-500">Loading plans…</div>
-            ) : planList.length ? (
-              <div className="space-y-2 max-h-52 overflow-auto text-sm">
-                {planList.map((plan) => {
-                  const selected = plan.id === selectedPlanId;
-                  return (
-                    <button
-                      key={plan.id}
-                      className={`w-full text-left border border-border rounded-lg p-2 transition ${selected ? "bg-slate-800/60" : "hover:bg-slate-800/30"}`}
-                      onClick={() => setSelectedPlanId(plan.id)}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-slate-100">Plan #{plan.id}</span>
-                        <span className="text-xs text-slate-500">{formatEpoch(plan.created_at)}</span>
-                      </div>
-                      <div className="text-xs text-slate-400 flex flex-wrap gap-2 mt-1">
-                        {plan.run_id && <span className="chip">run {plan.run_id}</span>}
-                        <span className="chip">{plan.build_count ?? 0} builds</span>
-                        <span className="chip">{plan.node_count ?? 0} nodes</span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="text-xs text-slate-500">No plans available yet.</div>
-            )}
-            {planListError && <div className="text-xs text-amber-200">{planListError}</div>}
-            <div className="glass subtle p-3 space-y-2">
-              <div className="text-sm font-semibold text-slate-100">Selected plan</div>
-              {planDetailsLoading ? (
-                <div className="text-xs text-slate-500">Loading plan details…</div>
-              ) : selectedPlan ? (
-                <div className="space-y-2 text-sm text-slate-200">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Plan ID</span>
-                    <span className="chip">{selectedPlan.id}</span>
-                  </div>
-                  {selectedPlan.run_id && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400">Run ID</span>
-                      <span className="chip">{selectedPlan.run_id}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Build nodes</span>
-                    <span className="chip">{selectedPlanBuilds.length}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Total nodes</span>
-                    <span className="chip">{selectedPlanNodes.length}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button className="btn btn-primary" onClick={handleEnqueueBuilds} disabled={enqueueingBuilds}>
-                      {enqueueingBuilds ? "Enqueueing..." : "Enqueue builds"}
-                    </button>
-                    <button className="btn btn-secondary" onClick={() => loadPlanDetails(selectedPlan.id)} disabled={planDetailsLoading}>
-                      Refresh details
-                    </button>
-                  </div>
-                  {selectedPlanNodes.length > 0 ? (
-                    <div className="max-h-36 overflow-auto text-xs text-slate-300 space-y-1">
-                      {selectedPlanNodes.slice(0, 8).map((node, idx) => (
-                        <div key={`${node.name}-${node.version}-${idx}`} className="flex items-center justify-between">
-                          <span>{node.name} {node.version}</span>
-                          <span className="chip">{node.action}</span>
-                        </div>
-                      ))}
-                      {selectedPlanNodes.length > 8 && (
-                        <div className="text-slate-500">…and {selectedPlanNodes.length - 8} more</div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-xs text-slate-500">No nodes available for this plan.</div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-xs text-slate-500">{planDetailsError || "Select a plan to review details."}</div>
-              )}
-              {planDetailsError && selectedPlan && <div className="text-xs text-amber-200">{planDetailsError}</div>}
-            </div>
-          </div>
           <div className="glass p-4 space-y-3">
             <div className="text-lg font-semibold flex items-center gap-2">
               <span>Filters</span>
@@ -2275,6 +2314,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         return renderInputs();
       case "queues":
         return renderQueues();
+      case "plans":
+        return renderPlans();
       case "builds":
         return renderBuilds();
       case "hints":
@@ -2329,6 +2370,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/overview" replace />} />
         <Route path="/overview" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="overview" />} />
         <Route path="/inputs" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="inputs" />} />
+        <Route path="/plans" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="plans" />} />
         <Route path="/queues" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="queues" />} />
         <Route path="/builds" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="builds" />} />
         <Route path="/hints" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="hints" />} />

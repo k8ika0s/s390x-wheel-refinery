@@ -243,10 +243,12 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 	}
 	q += ` ORDER BY created_at ASC`
 	if limit > 0 {
-		q += ` LIMIT $2`
-		if status == "" {
-			args = append(args, limit)
+		limitIdx := 1
+		if status != "" {
+			limitIdx = 2
 		}
+		q += fmt.Sprintf(" LIMIT $%d::int", limitIdx)
+		args = append(args, limit)
 	}
 	rows, err := p.db.QueryContext(ctx, q, args...)
 	if err != nil {
