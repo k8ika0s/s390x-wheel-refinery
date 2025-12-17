@@ -606,6 +606,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [apiBaseInput, setApiBaseInput] = useState(apiBase || "");
+  const [apiBlocked, setApiBlocked] = useState(false);
   const [pendingInputs, setPendingInputs] = useState([]);
   const [builds, setBuilds] = useState([]);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
@@ -624,6 +625,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   };
 
   const load = async (opts = {}) => {
+    if (apiBlocked && !opts.force) {
+      return;
+    }
     const { packageFilter, statusFilter: status } = opts;
     setLoading(true);
     setError("");
@@ -648,23 +652,29 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       onMetrics?.(data.metrics);
       onApiStatus?.("ok");
       apiToastShown.current = false;
+      setApiBlocked(false);
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
-      setError(msg);
       const isApiOffline = msg?.toLowerCase().includes("api not connected");
+      const isHttpError = Number.isFinite(e.status);
+      setError(msg);
       if (!isApiOffline || !apiToastShown.current) {
         pushToast?.({ type: "error", title: "Load failed", message: msg || "Unknown error" });
         if (isApiOffline) apiToastShown.current = true;
       }
-      onApiStatus?.("error");
+      onApiStatus?.(isApiOffline || !isHttpError ? "error" : "ok");
+      if (isApiOffline) {
+        setApiBlocked(true);
+      }
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
+    if (apiBlocked) return;
     load({ packageFilter: pkgFilter, statusFilter });
-  }, [authToken, pkgFilter, statusFilter, recentLimit]);
+  }, [authToken, pkgFilter, statusFilter, recentLimit, apiBlocked]);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -695,10 +705,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   }, [apiBase]);
 
   useEffect(() => {
-    if (!pollMs) return;
+    if (!pollMs || apiBlocked) return;
     const id = setInterval(() => load({ packageFilter: pkgFilter, statusFilter }), pollMs);
     return () => clearInterval(id);
-  }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit]);
+  }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit, apiBlocked]);
 
   const handleTriggerWorker = async () => {
     setMessage("");
@@ -903,6 +913,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       const resp = await updateSettings(body, authToken);
       setSettingsData(resp);
       setSettingsDirty(false);
+      setApiBlocked(false);
+      load({ packageFilter: pkgFilter, statusFilter, force: true });
       pushToast?.({ type: "success", title: "Settings saved", message: "Defaults updated" });
     } catch (e) {
       pushToast?.({ type: "error", title: "Settings save failed", message: e.message });
@@ -1558,7 +1570,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       {error && (
         <div className="glass p-3 border border-red-500/40 text-sm text-red-200 flex items-center justify-between">
           <span>{error}</span>
-          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>Retry</button>
+          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter, force: true })}>Retry</button>
         </div>
       )}
       {message && <div className="text-green-400 text-sm">{message}</div>}
