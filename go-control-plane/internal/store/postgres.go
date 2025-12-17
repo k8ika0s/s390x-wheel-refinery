@@ -211,7 +211,7 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	q := `SELECT id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), run_id, plan_id, extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint FROM build_status`
+	q := `SELECT id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), run_id, plan_id, extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint, COALESCE(extract(epoch from backoff_until),0)::bigint FROM build_status`
 	args := []any{}
 	if status != "" {
 		q += ` WHERE status = $1`
@@ -232,7 +232,7 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 	var out []BuildStatus
 	for rows.Next() {
 		var bs BuildStatus
-		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.RunID, &bs.PlanID, &bs.OldestAgeSec, &bs.CreatedAt, &bs.UpdatedAt); err != nil {
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.RunID, &bs.PlanID, &bs.OldestAgeSec, &bs.CreatedAt, &bs.UpdatedAt, &bs.BackoffUntil); err != nil {
 			return nil, err
 		}
 		out = append(out, bs)
@@ -241,22 +241,27 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 }
 
 // UpdateBuildStatus upserts build status by package/version.
-func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int) error {
+func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error {
 	if err := p.ensureDB(); err != nil {
 		return err
 	}
 	if attempts < 0 {
 		attempts = 0
 	}
+	var backoff any
+	if backoffUntil > 0 {
+		backoff = time.Unix(backoffUntil, 0)
+	}
 	_, err := p.db.ExecContext(ctx, `
-		INSERT INTO build_status (package, version, status, last_error, attempts)
-		VALUES ($1,$2,$3,$4,$5)
+		INSERT INTO build_status (package, version, status, last_error, attempts, backoff_until)
+		VALUES ($1,$2,$3,$4,$5,$6)
 		ON CONFLICT (package, version) DO UPDATE
 		SET status = EXCLUDED.status,
 		    last_error = EXCLUDED.last_error,
 		    attempts = EXCLUDED.attempts,
+		    backoff_until = EXCLUDED.backoff_until,
 		    updated_at = NOW()
-	`, pkg, version, status, errMsg, attempts)
+	`, pkg, version, status, errMsg, attempts, backoff)
 	return err
 }
 

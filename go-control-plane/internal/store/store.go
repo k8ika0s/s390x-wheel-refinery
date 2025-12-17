@@ -97,6 +97,7 @@ type BuildStatus struct {
 	UpdatedAt    int64  `json:"updated_at"`
 	RunID        string `json:"run_id,omitempty"`
 	PlanID       int64  `json:"plan_id,omitempty"`
+	BackoffUntil int64  `json:"backoff_until,omitempty"`
 }
 
 // PackageSummary aggregates status for a package.
@@ -157,7 +158,7 @@ type Store interface {
 
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int) ([]BuildStatus, error)
-	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int) error
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error
 }
 
 // HistoryFilter defines filters for history queries.

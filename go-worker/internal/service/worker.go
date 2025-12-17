@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -117,6 +118,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	for i, job := range jobs {
 		i, job := i, job
 		g.Go(func() error {
+			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, reqAttempts[queueKey(job.Name, job.Version)], 0)
 			if job.WheelAction == "reuse" && job.WheelDigest != "" {
 				if err := w.fetchWheel(ctx, job); err != nil {
 					return fmt.Errorf("fetch wheel %s: %w", job.WheelDigest, err)
@@ -155,7 +157,11 @@ func (w *Worker) Drain(ctx context.Context) error {
 			}
 		}
 		// report build status to control-plane
-		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, res.attempt)
+		backoffUntil := int64(0)
+		if res.err != nil {
+			backoffUntil = backoffTime(res.attempt)
+		}
+		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, res.attempt, backoffUntil)
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
@@ -322,7 +328,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, attempts int) {
+func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, attempts int, backoffUntil int64) {
 	if w.Cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -335,6 +341,9 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	}
 	if err != nil {
 		body["error"] = err.Error()
+	}
+	if backoffUntil > 0 {
+		body["backoff_until"] = backoffUntil
 	}
 	data, _ := json.Marshal(body)
 	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
@@ -631,6 +640,22 @@ func (w *Worker) shouldRequeue(reqAttempts map[string]int, job runner.Job) bool 
 		return false
 	}
 	return true
+}
+
+// backoffTime returns a Unix timestamp for the next retry using capped exponential backoff with jitter.
+func backoffTime(attempt int) int64 {
+	if attempt < 1 {
+		attempt = 1
+	}
+	base := 5 * time.Second
+	max := 10 * time.Minute
+	d := base * time.Duration(1<<(attempt-1))
+	if d > max {
+		d = max
+	}
+	// Add up to 1s jitter to avoid thundering herd.
+	jitter := time.Duration(rand.Int63n(int64(time.Second)))
+	return time.Now().Add(d + jitter).Unix()
 }
 
 // writeManifest writes manifest.json locally (best effort).

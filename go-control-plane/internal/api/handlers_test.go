@@ -119,7 +119,7 @@ func (f *fakeStore) UpdatePendingInputStatus(ctx context.Context, id int64, stat
 func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int) ([]store.BuildStatus, error) {
 	return nil, nil
 }
-func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int) error {
+func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error {
 	return nil
 }
 
