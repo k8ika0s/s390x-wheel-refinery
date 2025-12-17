@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS build_status (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_build_status_pkg ON build_status(package, version);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_build_status_pkg_version_unique ON build_status(package, version);
 CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
 
 CREATE TABLE IF NOT EXISTS pending_inputs (
