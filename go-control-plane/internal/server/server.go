@@ -8,6 +8,7 @@ import (
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/api"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/objectstore"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
@@ -63,7 +64,21 @@ func (s *Service) routes() {
 			log.Printf("hint seed: files=%d loaded=%d skipped=%d errors=%d", res.Files, res.Loaded, res.Skipped, len(res.Errors))
 		}
 	}
-	h := &api.Handler{Store: st, Queue: q, PlanQ: planQ, Config: s.cfg}
+	var inputStore objectstore.Store = objectstore.NullStore{}
+	if s.cfg.ObjectStoreEndpoint != "" && s.cfg.ObjectStoreBucket != "" {
+		if storeClient, err := objectstore.NewMinIOStore(
+			s.cfg.ObjectStoreEndpoint,
+			s.cfg.ObjectStoreAccess,
+			s.cfg.ObjectStoreSecret,
+			s.cfg.ObjectStoreBucket,
+			s.cfg.ObjectStoreUseSSL,
+		); err != nil {
+			log.Printf("warning: input object store init failed: %v", err)
+		} else {
+			inputStore = storeClient
+		}
+	}
+	h := &api.Handler{Store: st, Queue: q, PlanQ: planQ, Config: s.cfg, InputStore: inputStore}
 	h.Routes(s.mux)
 }
 

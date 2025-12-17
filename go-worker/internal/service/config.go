@@ -94,7 +94,7 @@ func fromEnv() Config {
 		BuildStatusURL:      getenv("BUILD_STATUS_URL", ""),
 		KafkaBrokers:        getenv("KAFKA_BROKERS", ""),
 		KafkaTopic:          getenv("KAFKA_TOPIC", "refinery.queue"),
-		InputDir:            getenv("INPUT_DIR", "/input"),
+		InputDir:            getenv("INPUT_DIR", ""),
 		OutputDir:           getenv("OUTPUT_DIR", "/output"),
 		CacheDir:            getenv("CACHE_DIR", "/cache"),
 		PythonVersion:       getenv("PYTHON_VERSION", "3.11"),

@@ -32,7 +32,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 ---
 
 ## Overview
-- **Planner (Go)** turns `/input` wheels or a `requirements.txt` into a DAG: runtimes → packs → wheels → repair. It checks CAS (Zot) to mark nodes as `reuse` vs `build`.
+- **Planner (Go)** turns uploaded wheels or a `requirements.txt` (stored in object storage) into a DAG: runtimes → packs → wheels → repair. It checks CAS (Zot) to mark nodes as `reuse` vs `build`.
 - **Worker (Go)** drains the queue, fetches/mounts artifacts, runs builds inside a dedicated builder image via Podman, and uploads wheels/repairs back to CAS and object storage.
 - **Builder image** (`containers/refinery-builder/Containerfile`) carries toolchains, auditwheel/patchelf, and a recipe book for packs and CPython runtimes.
 - **Artifact stores**: Zot (CAS) for digested blobs; MinIO (optional) for a wheelhouse mirror.
@@ -78,12 +78,12 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 
 ## Worker and queue
 - Queue backends: `file`, `redis`, or `kafka` (compose defaults to Redis).
-- Worker mounts `/input`, `/output`, `/cache`; drains queue; runs Podman with the builder image (Podman-only). `PODMAN_BIN` defaults to whatever is on `PATH` and errors if absent. Default build command now wheels `JOB_NAME[/==JOB_VERSION]` via pip inside the builder image using any mounted runtime/packs. Worker container is privileged to allow nested podman.
+- Worker mounts `/output` and `/cache`, drains the build queue, and runs Podman with the builder image (Podman-only). Inputs are read from object storage and metadata in Postgres; no shared `/input` volume is required. `PODMAN_BIN` defaults to whatever is on `PATH` and errors if absent. Default build command now wheels `JOB_NAME[/==JOB_VERSION]` via pip inside the builder image using any mounted runtime/packs. Worker container is privileged to allow nested podman.
 - DAG ordering: worker topologically sorts pack/runtime nodes from the planner DAG to guarantee dependency order before wheel builds.
 - Reuse vs build: CAS hits are reused; misses trigger pack/runtime builds and uploads unless the artifact is manifest-only.
 
 ## Requirements.txt and job shape
-- Inputs: drop wheels and/or `requirements.txt` into `/input`.
+- Inputs are uploaded via the UI/API as immutable objects (wheel files or `requirements.txt`) and stored in object storage.
 - Planner resolves requirements (honors constraints), computes wheel targets, and pins a Python tag from the requested version. Unpinned specs are resolved against configured indexes.
 - Job metadata includes `python_tag`, `abi_tag`, `platform_tag`, requested packs, and repair policy. Defaults map Python version → manylinux2014_s390x.
 
@@ -98,11 +98,11 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
   ```bash
   podman build -f containers/refinery-builder/Containerfile -t refinery-builder:latest .
   ```
-- **Mounts**: place inputs in `./input`, outputs appear in `./output`, cache/logs in `./cache`.
+- **Data dirs**: outputs appear in `./output`, cache/logs in `./cache`. Inputs are uploaded to object storage (MinIO) instead of a local `/input` folder.
 
 ## Configuration reference
 - **Control-plane**: `HTTP_ADDR`, `POSTGRES_DSN`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `WORKER_WEBHOOK_URL`, `WORKER_PLAN_URL`, `WORKER_TOKEN`, `CAS_REGISTRY_URL`, `CAS_REGISTRY_REPO`, `OBJECT_STORE_*`.
-- **Worker**: `INPUT_DIR`, `OUTPUT_DIR`, `CACHE_DIR`, `PYTHON_VERSION`, `PLATFORM_TAG`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `PODMAN_BIN`, `CONTAINER_IMAGE`, `WORKER_RUN_CMD` (override container entrypoint), `PACK_RECIPES_DIR`, `DEFAULT_RUNTIME_CMD`, `DEFAULT_REPAIR_CMD`, `CAS_REGISTRY_URL/REPO`, `LOCAL_CAS_DIR`, `OBJECT_STORE_*`.
+- **Worker**: `OUTPUT_DIR`, `CACHE_DIR`, `PYTHON_VERSION`, `PLATFORM_TAG`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `PODMAN_BIN`, `CONTAINER_IMAGE`, `WORKER_RUN_CMD` (override container entrypoint), `PACK_RECIPES_DIR`, `DEFAULT_RUNTIME_CMD`, `DEFAULT_REPAIR_CMD`, `CAS_REGISTRY_URL/REPO`, `LOCAL_CAS_DIR`, `OBJECT_STORE_*`.
 - **Repair metadata**: `REPAIR_POLICY_HASH`, `REPAIR_TOOL_VERSION` are attached to repair artifacts for provenance.
 
 ## Repair and compliance

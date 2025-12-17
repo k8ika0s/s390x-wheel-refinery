@@ -143,11 +143,37 @@ export function enqueuePlan(id, token) {
   return request(`/api/pending-inputs/${id}/enqueue-plan`, { method: "POST" }, token);
 }
 
+export function deletePendingInput(id, token) {
+  return request(`/api/pending-inputs/${id}`, { method: "DELETE" }, token);
+}
+
+export function clearPendingInputs(status = "pending", token) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  const qs = params.toString();
+  return request(qs ? `/api/pending-inputs/clear?${qs}` : "/api/pending-inputs/clear", { method: "POST" }, token);
+}
+
 export async function uploadRequirements(file, token) {
   const fd = new FormData();
   fd.append("file", file);
   const headers = token ? { "X-Worker-Token": token } : undefined;
   const resp = await fetch(joinBasePath(getApiBase(), "/api/requirements/upload"), {
+    method: "POST",
+    body: fd,
+    headers,
+  });
+  if (!resp.ok) {
+    throw await parseError(resp);
+  }
+  return resp.json();
+}
+
+export async function uploadWheel(file, token) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const resp = await fetch(joinBasePath(getApiBase(), "/api/wheels/upload"), {
     method: "POST",
     body: fd,
     headers,
@@ -179,10 +205,21 @@ export function enqueueBuildsFromPlan(planId, token) {
   return request(`/api/plan/${planId}/enqueue-builds`, { method: "POST" }, token);
 }
 
+export function clearPlanQueue(token) {
+  return request("/api/plan-queue/clear", { method: "POST" }, token);
+}
+
 export function fetchPlans(limit = 20, token) {
   const params = new URLSearchParams();
   params.set("limit", limit);
   return request(`/api/plans?${params.toString()}`, {}, token);
+}
+
+export function deletePlans(id, token) {
+  const params = new URLSearchParams();
+  if (id) params.set("id", id);
+  const qs = params.toString();
+  return request(qs ? `/api/plans?${qs}` : "/api/plans", { method: "DELETE" }, token);
 }
 
 export function fetchPlan(planId, token) {
@@ -242,4 +279,11 @@ export function fetchBuilds({ status, limit = 200 } = {}, token) {
   if (status) params.set("status", status);
   params.set("limit", limit);
   return request(`/api/builds?${params.toString()}`, {}, token);
+}
+
+export function clearBuilds(status, token) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  const qs = params.toString();
+  return request(qs ? `/api/builds?${qs}` : "/api/builds", { method: "DELETE" }, token);
 }

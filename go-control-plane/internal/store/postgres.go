@@ -145,9 +145,30 @@ CREATE TABLE IF NOT EXISTS pending_inputs (
     size_bytes  BIGINT,
     status      TEXT NOT NULL DEFAULT 'pending',
     error       TEXT,
+    source_type TEXT,
+    object_bucket TEXT,
+    object_key  TEXT,
+    content_type TEXT,
+    metadata    JSONB,
+    loaded_at   TIMESTAMPTZ,
+    planned_at  TIMESTAMPTZ,
+    processed_at TIMESTAMPTZ,
+    deleted_at  TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_pending_inputs_status ON pending_inputs(status);
+CREATE INDEX IF NOT EXISTS idx_pending_inputs_deleted ON pending_inputs(deleted_at);
+
+ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS source_type TEXT;
+ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS object_bucket TEXT;
+ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS object_key TEXT;
+ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS content_type TEXT;
+ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS metadata JSONB;
+ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS loaded_at TIMESTAMPTZ;
+ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS planned_at TIMESTAMPTZ;
+ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ;
+ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS plan_metadata (
     id             BIGSERIAL PRIMARY KEY,
@@ -184,9 +205,12 @@ func (p *PostgresStore) AddPendingInput(ctx context.Context, pi PendingInput) (i
 	}
 	var id int64
 	err := p.db.QueryRowContext(ctx, `
-		INSERT INTO pending_inputs (filename, digest, size_bytes, status)
-		VALUES ($1,$2,$3,$4) RETURNING id
-	`, pi.Filename, pi.Digest, pi.SizeBytes, pi.Status).Scan(&id)
+		INSERT INTO pending_inputs (
+			filename, digest, size_bytes, status,
+			source_type, object_bucket, object_key, content_type, metadata
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id
+	`, pi.Filename, pi.Digest, pi.SizeBytes, pi.Status, pi.SourceType, pi.ObjectBucket, pi.ObjectKey, pi.ContentType, pi.Metadata).Scan(&id)
 	return id, err
 }
 
@@ -195,10 +219,13 @@ func (p *PostgresStore) ListPendingInputs(ctx context.Context, status string) ([
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	q := `SELECT id, filename, digest, size_bytes, status, COALESCE(error,''), created_at, updated_at FROM pending_inputs`
+	q := `SELECT id, filename, digest, size_bytes, status, COALESCE(error,''),
+		source_type, object_bucket, object_key, content_type, COALESCE(metadata,'{}'),
+		loaded_at, planned_at, processed_at, deleted_at, created_at, updated_at
+		FROM pending_inputs WHERE deleted_at IS NULL`
 	args := []any{}
 	if status != "" {
-		q += ` WHERE status = $1`
+		q += ` AND status = $1`
 		args = append(args, status)
 	}
 	q += ` ORDER BY created_at DESC`
@@ -210,7 +237,25 @@ func (p *PostgresStore) ListPendingInputs(ctx context.Context, status string) ([
 	var out []PendingInput
 	for rows.Next() {
 		var pi PendingInput
-		if err := rows.Scan(&pi.ID, &pi.Filename, &pi.Digest, &pi.SizeBytes, &pi.Status, &pi.Error, &pi.CreatedAt, &pi.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&pi.ID,
+			&pi.Filename,
+			&pi.Digest,
+			&pi.SizeBytes,
+			&pi.Status,
+			&pi.Error,
+			&pi.SourceType,
+			&pi.ObjectBucket,
+			&pi.ObjectKey,
+			&pi.ContentType,
+			&pi.Metadata,
+			&pi.LoadedAt,
+			&pi.PlannedAt,
+			&pi.ProcessedAt,
+			&pi.DeletedAt,
+			&pi.CreatedAt,
+			&pi.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, pi)
@@ -223,12 +268,115 @@ func (p *PostgresStore) UpdatePendingInputStatus(ctx context.Context, id int64, 
 	if err := p.ensureDB(); err != nil {
 		return err
 	}
+	var loadedAt, plannedAt, processedAt *time.Time
+	now := time.Now().UTC()
+	switch status {
+	case "planning":
+		loadedAt = &now
+	case "planned":
+		plannedAt = &now
+	case "queued", "build_queued":
+		processedAt = &now
+	}
 	_, err := p.db.ExecContext(ctx, `
 		UPDATE pending_inputs
-		SET status = $1, error = $2, updated_at = NOW()
-		WHERE id = $3
-	`, status, errMsg, id)
+		SET status = $1,
+			error = $2,
+			loaded_at = COALESCE($3, loaded_at),
+			planned_at = COALESCE($4, planned_at),
+			processed_at = COALESCE($5, processed_at),
+			updated_at = NOW()
+		WHERE id = $6
+	`, status, errMsg, loadedAt, plannedAt, processedAt, id)
 	return err
+}
+
+// DeletePendingInput removes a pending input and returns the deleted record.
+func (p *PostgresStore) DeletePendingInput(ctx context.Context, id int64) (PendingInput, error) {
+	if err := p.ensureDB(); err != nil {
+		return PendingInput{}, err
+	}
+	var pi PendingInput
+	err := p.db.QueryRowContext(ctx, `
+		UPDATE pending_inputs
+		SET status = 'deleted', deleted_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+		RETURNING id, filename, digest, size_bytes, status, COALESCE(error,''),
+			source_type, object_bucket, object_key, content_type, COALESCE(metadata,'{}'),
+			loaded_at, planned_at, processed_at, deleted_at, created_at, updated_at
+	`, id).Scan(
+		&pi.ID,
+		&pi.Filename,
+		&pi.Digest,
+		&pi.SizeBytes,
+		&pi.Status,
+		&pi.Error,
+		&pi.SourceType,
+		&pi.ObjectBucket,
+		&pi.ObjectKey,
+		&pi.ContentType,
+		&pi.Metadata,
+		&pi.LoadedAt,
+		&pi.PlannedAt,
+		&pi.ProcessedAt,
+		&pi.DeletedAt,
+		&pi.CreatedAt,
+		&pi.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PendingInput{}, ErrNotFound
+	}
+	return pi, err
+}
+
+// LinkPlanToPendingInput records a plan association for a pending input.
+func (p *PostgresStore) LinkPlanToPendingInput(ctx context.Context, pendingID, planID int64) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO plan_metadata (pending_input, plan_id, status)
+		VALUES ($1, $2, 'ready_for_build')
+	`, pendingID, planID)
+	return err
+}
+
+// UpdatePendingInputsForPlan updates pending input status based on plan_id.
+func (p *PostgresStore) UpdatePendingInputsForPlan(ctx context.Context, planID int64, status string) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	var plannedAt, processedAt *time.Time
+	now := time.Now().UTC()
+	switch status {
+	case "planned":
+		plannedAt = &now
+	case "queued", "build_queued":
+		processedAt = &now
+	case "pending":
+	}
+	resetTimes := status == "pending"
+	q := `
+		UPDATE pending_inputs
+		SET status = $1,
+			error = '',
+			planned_at = CASE WHEN $4 THEN NULL WHEN $2 IS NULL THEN planned_at ELSE $2 END,
+			processed_at = CASE WHEN $4 THEN NULL WHEN $3 IS NULL THEN processed_at ELSE $3 END,
+			updated_at = NOW()
+		WHERE deleted_at IS NULL AND id IN (
+			SELECT pending_input FROM plan_metadata`
+	args := []any{status, plannedAt, processedAt, resetTimes}
+	if planID > 0 {
+		q += ` WHERE plan_id = $5`
+		args = append(args, planID)
+	}
+	q += `)`
+	res, err := p.db.ExecContext(ctx, q, args...)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
 }
 
 // ListBuilds returns build status rows filtered by status if provided.
@@ -265,6 +413,27 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 		out = append(out, bs)
 	}
 	return out, rows.Err()
+}
+
+// DeleteBuilds removes build status rows matching the status filter.
+func (p *PostgresStore) DeleteBuilds(ctx context.Context, status string) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	var (
+		res sql.Result
+		err error
+	)
+	if status == "" {
+		res, err = p.db.ExecContext(ctx, `DELETE FROM build_status`)
+	} else {
+		res, err = p.db.ExecContext(ctx, `DELETE FROM build_status WHERE status = $1`, status)
+	}
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
 }
 
 // UpdateBuildStatus upserts build status by package/version.
@@ -920,6 +1089,33 @@ func (p *PostgresStore) SavePlan(ctx context.Context, runID string, nodes []Plan
 		return 0, err
 	}
 	return id, nil
+}
+
+// DeletePlans removes plan snapshots. If planID is 0, all plans are deleted.
+func (p *PostgresStore) DeletePlans(ctx context.Context, planID int64) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	if planID > 0 {
+		if _, err := p.db.ExecContext(ctx, `DELETE FROM plan_metadata WHERE plan_id = $1`, planID); err != nil {
+			return 0, err
+		}
+		res, err := p.db.ExecContext(ctx, `DELETE FROM plans WHERE id = $1`, planID)
+		if err != nil {
+			return 0, err
+		}
+		count, _ := res.RowsAffected()
+		return count, nil
+	}
+	if _, err := p.db.ExecContext(ctx, `DELETE FROM plan_metadata`); err != nil {
+		return 0, err
+	}
+	res, err := p.db.ExecContext(ctx, `DELETE FROM plans`)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
 }
 
 // PlanSnapshot returns a stored plan snapshot by id.

@@ -28,8 +28,8 @@ func TestApplyDefaultsSetsMissing(t *testing.T) {
 	if out.PythonVersion == "" || out.PlatformTag == "" {
 		t.Fatalf("expected defaults to populate versions/tags: %+v", out)
 	}
-	if !BoolValue(out.AutoPlan) || !BoolValue(out.AutoBuild) {
-		t.Fatalf("expected missing bools to default true: %+v", out)
+	if BoolValue(out.AutoPlan) || BoolValue(out.AutoBuild) {
+		t.Fatalf("expected missing bools to default false: %+v", out)
 	}
 	if out.PollMs == 0 || out.RecentLimit == 0 {
 		t.Fatalf("expected numeric defaults to be set: %+v", out)

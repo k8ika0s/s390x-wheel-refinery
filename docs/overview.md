@@ -1,7 +1,7 @@
 # s390x Wheel Refinery — Current Architecture
 
 ## Components
-- **Planner (Go)**: Scans `/input` wheels or `requirements.txt`, resolves pins, and emits a DAG: runtime → packs → wheels → repair. Checks CAS (Zot) for existing digests to mark nodes as `reuse` vs `build`.
+- **Planner (Go)**: Scans uploaded wheels or `requirements.txt` stored in object storage, resolves pins, and emits a DAG: runtime → packs → wheels → repair. Checks CAS (Zot) for existing digests to mark nodes as `reuse` vs `build`.
 - **Worker (Go)**: Drains the queue, downloads missing artifacts from CAS, extracts packs/runtimes, sets `DEPS_PREFIXES`, and runs builds in a builder container via Podman. Pushes wheels/repairs (and optional packs/runtimes) back to CAS/MinIO, and reports logs/manifest/events to the control-plane.
 - **Builder image**: `refinery-builder:latest` (Containerfile in `containers/refinery-builder/`) with toolchains, auditwheel/patchelf, and `recipes/` mounted at `/app/recipes`.
 - **Recipes**: Shell scripts for packs (openssl, zlib, libffi, sqlite, libxml2/xslt, libpng/jpeg/freetype, openblas, etc.), CPython runtimes, and auditwheel repair. Checksums pinned in `recipes/versions.sh`.

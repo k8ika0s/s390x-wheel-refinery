@@ -3,15 +3,15 @@ flowchart TD
         API[api service\nGo control-plane + worker trigger]
         WORKER[worker service\noptional webhook]
         UI[ui service\nReact SPA]
-        VOL_IN[/input/]
         VOL_OUT[/output/]
         VOL_CACHE[/cache/]
+        OBJ[MinIO bucket]
     end
-    VOL_IN --- API
     VOL_OUT --- API
     VOL_CACHE --- API
-    VOL_IN --- WORKER
     VOL_OUT --- WORKER
     VOL_CACHE --- WORKER
+    OBJ --- API
+    OBJ --- WORKER
     API <---> WORKER
     UI --> API

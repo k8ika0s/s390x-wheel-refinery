@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,24 @@ type Options struct {
 	ConstraintsPath  string
 	PackCatalog      *pack.Catalog
 	ArtifactStore    cas.Store
+}
+
+// WheelInput captures an uploaded wheel artifact and its metadata.
+type WheelInput struct {
+	Filename    string
+	Name        string
+	Version     string
+	PythonTag   string
+	AbiTag      string
+	PlatformTag string
+	Digest      string
+	Requires    []DepSpec
+}
+
+// InputSet holds parsed inputs for planning.
+type InputSet struct {
+	Requirements []DepSpec
+	Wheels       []WheelInput
 }
 
 // Write writes a snapshot to the given path.
@@ -155,8 +174,92 @@ func Generate(
 	return snap, nil
 }
 
+// GenerateFromInputs builds a plan from in-memory input metadata and writes it to cacheDir/plan.json.
+func GenerateFromInputs(
+	inputs InputSet,
+	cacheDir,
+	pythonVersion,
+	platformTag string,
+	indexURL,
+	extraIndexURL,
+	strategy,
+	constraintsPath string,
+	catalog *pack.Catalog,
+	store cas.Store,
+	casRegistryURL,
+	casRegistryRepo string,
+) (Snapshot, error) {
+	maxDeps := loadMaxDepsFromEnv()
+	if maxDeps <= 0 {
+		maxDeps = 1000
+	}
+	opts := Options{
+		IndexURL:         indexURL,
+		ExtraIndexURL:    extraIndexURL,
+		IndexUsername:    os.Getenv("INDEX_USERNAME"),
+		IndexPassword:    os.Getenv("INDEX_PASSWORD"),
+		UpgradeStrategy:  strategy,
+		MaxDeps:          maxDeps,
+		PackageOverrides: loadOverridesFromEnv(),
+		ConstraintsPath:  constraintsPath,
+		PackCatalog:      catalog,
+		ArtifactStore:    store,
+	}
+	snap, err := computeWithResolverInputs(inputs.Requirements, inputs.Wheels, pythonVersion, platformTag, opts, &IndexClient{
+		BaseURL:       indexURL,
+		ExtraIndexURL: extraIndexURL,
+		Username:      opts.IndexUsername,
+		Password:      opts.IndexPassword,
+	})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if casRegistryURL != "" {
+		snap.CAS = &CASInfo{RegistryURL: casRegistryURL, RegistryRepo: casRegistryRepo}
+	}
+	path := filepath.Join(cacheDir, "plan.json")
+	if err := Write(path, snap); err != nil {
+		return Snapshot{}, err
+	}
+	return snap, nil
+}
+
 // computeWithResolver walks input wheels and decides reuse vs build for the target tags.
 func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Options, resolver versionResolver) (Snapshot, error) {
+	if opts.MaxDeps <= 0 {
+		opts.MaxDeps = 1000
+	}
+	reqs := loadRequirements(inputDir, opts.RequirementsPath)
+	files, err := os.ReadDir(inputDir)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	wheels := make([]WheelInput, 0, len(files))
+	for _, f := range files {
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".whl") {
+			continue
+		}
+		info, err := parseWheelFilename(f.Name())
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(inputDir, f.Name())
+		reqs, _ := readRequiresDist(path)
+		wheels = append(wheels, WheelInput{
+			Filename:    f.Name(),
+			Name:        info.Name,
+			Version:     info.Version,
+			PythonTag:   info.PythonTag,
+			AbiTag:      info.AbiTag,
+			PlatformTag: info.PlatformTag,
+			Digest:      fileDigest(path),
+			Requires:    reqs,
+		})
+	}
+	return computeWithResolverInputs(reqs, wheels, pythonVersion, platformTag, opts, resolver)
+}
+
+func computeWithResolverInputs(reqs []DepSpec, wheels []WheelInput, pythonVersion, platformTag string, opts Options, resolver versionResolver) (Snapshot, error) {
 	if opts.MaxDeps <= 0 {
 		opts.MaxDeps = 1000
 	}
@@ -165,12 +268,6 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		store = cas.NullStore{}
 	}
 	ctx := context.TODO()
-	reqs := loadRequirements(inputDir, opts.RequirementsPath)
-	constraints := loadConstraints(opts.ConstraintsPath)
-	files, err := os.ReadDir(inputDir)
-	if err != nil {
-		return Snapshot{}, err
-	}
 	pyTag := normalizePyTag(pythonVersion)
 	var nodes []FlatNode
 	var dagNodes []DAGNode
@@ -201,112 +298,89 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		rtAction = "reuse"
 	}
 	dagNodes = append(dagNodes, DAGNode{
-		ID:     rtID,
-		Type:   NodeRuntime,
-		Action: rtAction,
-		Metadata: map[string]any{
-			"python_version": pythonVersion,
-			"python_tag":     pyTag,
-			"platform_tag":   platformTag,
-		},
+		ID:       rtID,
+		Type:     NodeRuntime,
+		Inputs:   nil,
+		Metadata: map[string]any{"python_version": pythonVersion, "python_tag": pyTag, "platform_tag": platformTag},
+		Action:   rtAction,
 	})
-	packSeen := make(map[string]pack.PackDef)
-	selectPacks := func(pkg string) ([]artifact.ID, []string) {
-		if opts.PackCatalog == nil {
-			return nil, nil
-		}
-		var ids []artifact.ID
-		var digests []string
-		for _, def := range opts.PackCatalog.Select(pkg, "") {
-			key := artifact.PackKey{
-				Arch:             "s390x",
-				PolicyBaseDigest: "",
-				Name:             def.Name,
-				Version:          def.Version,
-				RecipeDigest:     def.RecipeDigest,
-			}
-			id := artifact.ID{Type: artifact.PackType, Digest: key.Digest()}
-			if _, ok := packSeen[id.Digest]; !ok {
-				packSeen[id.Digest] = def
-				action := "build"
-				if ok, _ := store.Has(ctx, id); ok {
-					action = "reuse"
-				}
-				var inputs []artifact.ID
-				for _, depName := range packDependencies(def.Name) {
-					if depDef, ok := opts.PackCatalog.Packs[depName]; ok {
-						depKey := artifact.PackKey{Arch: "s390x", PolicyBaseDigest: "", Name: depDef.Name, Version: depDef.Version, RecipeDigest: depDef.RecipeDigest}
-						inputs = append(inputs, artifact.ID{Type: artifact.PackType, Digest: depKey.Digest()})
-					}
-				}
-				meta := map[string]any{
-					"name": def.Name,
-				}
-				if def.Version != "" {
-					meta["version"] = def.Version
-				}
-				if def.RecipeDigest != "" {
-					meta["recipe_digest"] = def.RecipeDigest
-				}
-				if def.Note != "" {
-					meta["note"] = def.Note
-				}
-				dagNodes = append(dagNodes, DAGNode{
-					ID:       id,
-					Type:     NodePack,
-					Inputs:   inputs,
-					Metadata: meta,
-					Action:   action,
-				})
-			}
-			ids = append(ids, id)
-			digests = append(digests, id.Digest)
-		}
-		return ids, digests
-	}
-	depSeen := make(map[string]depSpec)
-	var wheelCount int
-	var depTruncated bool
-	hasInput := len(reqs) > 0
 
+	packSeen := make(map[string]bool)
+	packCatalog := opts.PackCatalog
+	packIDForDef := func(def pack.PackDef) artifact.ID {
+		key := artifact.PackKey{
+			Arch:             "s390x",
+			PolicyBaseDigest: "",
+			Name:             def.Name,
+			Version:          def.Version,
+			RecipeDigest:     def.RecipeDigest,
+		}
+		return artifact.ID{Type: artifact.PackType, Digest: key.Digest()}
+	}
+	var addPack func(def pack.PackDef)
+	addPack = func(def pack.PackDef) {
+		id := packIDForDef(def)
+		if packSeen[id.Digest] {
+			return
+		}
+		var deps []artifact.ID
+		if packCatalog != nil {
+			for _, depName := range packDependencies(def.Name) {
+				depDef, ok := packCatalog.Packs[depName]
+				if !ok {
+					continue
+				}
+				addPack(depDef)
+				deps = append(deps, packIDForDef(depDef))
+			}
+		}
+		action := "build"
+		if ok, _ := store.Has(ctx, id); ok {
+			action = "reuse"
+		}
+		dagNodes = append(dagNodes, DAGNode{
+			ID:       id,
+			Type:     NodePack,
+			Inputs:   deps,
+			Metadata: map[string]any{"name": def.Name, "version": def.Version},
+			Action:   action,
+		})
+		packSeen[id.Digest] = true
+	}
+	addPackNodes := func(defs []pack.PackDef) {
+		for _, def := range defs {
+			addPack(def)
+		}
+	}
+
+	depSeen := make(map[string]DepSpec)
 	seen := make(map[string]bool)
-	// Seed from requirements.txt
-	for _, r := range reqs {
-		name := normalizeName(r.Name)
+	constraints := loadConstraints(opts.ConstraintsPath)
+	hasInput := false
+	depTruncated := false
+
+	for _, spec := range reqs {
+		name := normalizeName(spec.Name)
 		if name == "" {
 			continue
 		}
-		if len(depSeen) >= opts.MaxDeps {
-			depTruncated = true
-			break
-		}
-		if existing, ok := depSeen[name]; ok && existing.Version != "" {
-			continue
-		}
-		version := r.Version
-		if cv, ok := constraints[name]; ok && cv != "" {
-			version = cv
-		}
-		if ov, ok := opts.PackageOverrides[name]; ok && ov != "" {
-			version = strings.TrimPrefix(strings.TrimSpace(ov), "==")
-		}
-		if (version == "" || strings.HasPrefix(version, ">=") || strings.HasPrefix(version, "~=")) && resolver != nil {
+		hasInput = true
+		version := strings.TrimSpace(spec.Version)
+		if resolver != nil && (version == "" || strings.HasPrefix(version, ">=") || strings.HasPrefix(version, "~=")) {
 			if ver, err := resolver.ResolveLatest(name); err == nil {
 				version = ver
 			} else {
 				log.Printf("warn: resolve latest for %s failed: %v", name, err)
 			}
 		}
-		if version == "" {
-			version = "latest"
-		}
-		depSeen[name] = depSpec{Name: name, Version: version}
+		depSeen[name] = DepSpec{Name: name, Version: version}
 		key := name + "::" + version
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		packIDs, packDigests := selectPacks(name)
+		packDefs, packIDs, packDigests := selectPacks(name, opts.PackCatalog)
+		addPackNodes(packDefs)
 		nodes = append(nodes, FlatNode{
 			Name:          name,
 			Version:       version,
@@ -343,18 +417,19 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		addRepair(wheelID, map[string]any{"wheel_name": name, "wheel_version": version})
 	}
 
-	for _, f := range files {
-		if f.IsDir() || !strings.HasSuffix(f.Name(), ".whl") {
-			continue
+	for _, w := range wheels {
+		info := wheelInfo{
+			Name:        w.Name,
+			Version:     w.Version,
+			PythonTag:   w.PythonTag,
+			AbiTag:      w.AbiTag,
+			PlatformTag: w.PlatformTag,
 		}
-		info, err := parseWheelFilename(f.Name())
-		if err != nil {
+		if info.Name == "" || info.Version == "" {
 			continue
 		}
 		hasInput = true
-		wheelCount++
-		requires, _ := readRequiresDist(filepath.Join(inputDir, f.Name()))
-		for _, dep := range requires {
+		for _, dep := range w.Requires {
 			if dep.Name == "" {
 				continue
 			}
@@ -365,7 +440,6 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			if existing, ok := depSeen[dep.Name]; ok && existing.Version != "" {
 				continue
 			}
-			// resolve per strategy
 			if resolver != nil && dep.Version == "" {
 				if ver, err := resolver.ResolveLatest(dep.Name); err == nil {
 					dep.Version = ver
@@ -381,7 +455,8 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			key := info.Name + "::" + ver
 			if !seen[key] {
 				seen[key] = true
-				packIDs, packDigests := selectPacks(info.Name)
+				packDefs, packIDs, packDigests := selectPacks(info.Name, opts.PackCatalog)
+				addPackNodes(packDefs)
 				nodes = append(nodes, FlatNode{
 					Name:          info.Name,
 					Version:       ver,
@@ -419,13 +494,20 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			}
 			continue
 		}
+
 		key := info.Name + "::" + info.Version
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-
-		packIDs, packDigests := selectPacks(info.Name)
+		packDefs, packIDs, packDigests := selectPacks(info.Name, opts.PackCatalog)
+		addPackNodes(packDefs)
+		source := w.Digest
+		if source == "" {
+			source = sourceDigest(info.Name, info.Version)
+		}
+		wk := artifact.WheelKey{SourceDigest: source, PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
+		wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
 		if isCompatible(info, pyTag, platformTag) {
 			nodes = append(nodes, FlatNode{
 				Name:          info.Name,
@@ -435,8 +517,6 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				PlatformTag:   platformTag,
 				Action:        "reuse",
 			})
-			wk := artifact.WheelKey{SourceDigest: bestSourceDigest(info.Name, info.Version, filepath.Join(inputDir, f.Name())), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
-			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
 			wheelAction := "reuse"
 			if ok, _ := store.Has(ctx, wID); ok {
 				wheelAction = "reuse"
@@ -464,8 +544,6 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 				PlatformTag:   platformTag,
 				Action:        "build",
 			})
-			wk := artifact.WheelKey{SourceDigest: bestSourceDigest(info.Name, info.Version, filepath.Join(inputDir, f.Name())), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
-			wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
 			wheelAction := "build"
 			if ok, _ := store.Has(ctx, wID); ok {
 				wheelAction = "reuse"
@@ -521,7 +599,8 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 			continue
 		}
 		seen[key] = true
-		packIDs, packDigests := selectPacks(dep)
+		packDefs, packIDs, packDigests := selectPacks(dep, opts.PackCatalog)
+		addPackNodes(packDefs)
 		nodes = append(nodes, FlatNode{
 			Name:          dep,
 			Version:       version,
@@ -552,7 +631,7 @@ func computeWithResolver(inputDir, pythonVersion, platformTag string, opts Optio
 		addRepair(wID, map[string]any{"wheel_name": dep, "wheel_version": version})
 	}
 	if !hasInput {
-		return Snapshot{}, fmt.Errorf("no wheels or requirements found in input directory %s", inputDir)
+		return Snapshot{}, fmt.Errorf("no wheels or requirements found in input set")
 	}
 	if depTruncated {
 		return Snapshot{}, fmt.Errorf("dependency expansion exceeded MaxDeps (%d); increase MAX_DEPS or trim input", opts.MaxDeps)
@@ -639,7 +718,7 @@ func bestSourceDigest(name, version, path string) string {
 }
 
 // readRequiresDist extracts Requires-Dist entries from METADATA inside a wheel.
-func readRequiresDist(wheelPath string) ([]depSpec, error) {
+func readRequiresDist(wheelPath string) ([]DepSpec, error) {
 	zr, err := zip.OpenReader(wheelPath)
 	if err != nil {
 		return nil, err
@@ -665,7 +744,7 @@ func readRequiresDist(wheelPath string) ([]depSpec, error) {
 	return parseRequiresDist(string(meta)), nil
 }
 
-type depSpec struct {
+type DepSpec struct {
 	Name    string
 	Version string
 }
@@ -712,7 +791,7 @@ func loadMaxDepsFromEnv() int {
 	return n
 }
 
-func loadRequirements(inputDir, path string) []depSpec {
+func loadRequirements(inputDir, path string) []DepSpec {
 	var reqPath string
 	if path != "" {
 		reqPath = path
@@ -727,7 +806,7 @@ func loadRequirements(inputDir, path string) []depSpec {
 		return nil
 	}
 	lines := strings.Split(string(data), "\n")
-	var out []depSpec
+	var out []DepSpec
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -756,7 +835,7 @@ func loadRequirements(inputDir, path string) []depSpec {
 		if name == "" {
 			continue
 		}
-		out = append(out, depSpec{Name: name, Version: version})
+		out = append(out, DepSpec{Name: name, Version: version})
 	}
 	return out
 }
@@ -794,9 +873,9 @@ func loadConstraints(path string) map[string]string {
 	return out
 }
 
-func parseRequiresDist(meta string) []depSpec {
+func parseRequiresDist(meta string) []DepSpec {
 	lines := strings.Split(meta, "\n")
-	var out []depSpec
+	var out []DepSpec
 	for _, line := range lines {
 		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "requires-dist:") {
 			parts := strings.SplitN(line, ":", 2)
@@ -848,11 +927,39 @@ func parseRequiresDist(meta string) []depSpec {
 			name = strings.TrimSpace(name)
 			name = strings.ToLower(strings.ReplaceAll(name, "_", "-"))
 			if name != "" {
-				out = append(out, depSpec{Name: name, Version: version})
+				out = append(out, DepSpec{Name: name, Version: version})
 			}
 		}
 	}
 	return out
+}
+
+func selectPacks(pkg string, catalog *pack.Catalog) ([]pack.PackDef, []artifact.ID, []string) {
+	if catalog == nil {
+		return nil, nil, nil
+	}
+	defs := catalog.Select(pkg, "")
+	if len(defs) == 0 {
+		return nil, nil, nil
+	}
+	sort.Slice(defs, func(i, j int) bool {
+		return defs[i].Name < defs[j].Name
+	})
+	ids := make([]artifact.ID, 0, len(defs))
+	digests := make([]string, 0, len(defs))
+	for _, def := range defs {
+		key := artifact.PackKey{
+			Arch:             "s390x",
+			PolicyBaseDigest: "",
+			Name:             def.Name,
+			Version:          def.Version,
+			RecipeDigest:     def.RecipeDigest,
+		}
+		id := artifact.ID{Type: artifact.PackType, Digest: key.Digest()}
+		ids = append(ids, id)
+		digests = append(digests, id.Digest)
+	}
+	return defs, ids, digests
 }
 
 // packDependencies declares manual pack dependency edges to enforce ordering.

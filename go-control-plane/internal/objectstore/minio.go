@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/minio/minio-go/v7"
@@ -15,7 +14,6 @@ import (
 type MinIOStore struct {
 	Client   *minio.Client
 	Bucket   string
-	BasePath string
 	Endpoint string
 	UseSSL   bool
 }
@@ -64,25 +62,6 @@ func (m *MinIOStore) Put(ctx context.Context, key string, data []byte, contentTy
 		ContentType: contentType,
 	})
 	return err
-}
-
-// Get downloads an object from the bucket.
-func (m *MinIOStore) Get(ctx context.Context, key string) ([]byte, string, error) {
-	obj, err := m.Client.GetObject(ctx, m.Bucket, key, minio.GetObjectOptions{})
-	if err != nil {
-		return nil, "", err
-	}
-	defer obj.Close()
-	stat, statErr := obj.Stat()
-	data, err := io.ReadAll(obj)
-	if err != nil {
-		return nil, "", err
-	}
-	contentType := ""
-	if statErr == nil {
-		contentType = stat.ContentType
-	}
-	return data, contentType, nil
 }
 
 // URL returns an s3/http URL; assumes public/readable or presigned elsewhere.

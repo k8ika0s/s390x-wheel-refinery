@@ -13,6 +13,7 @@ type PlanQueueBackend interface {
 	Enqueue(ctx context.Context, id string) error
 	Pop(ctx context.Context, max int) ([]string, error)
 	Len(ctx context.Context) (int64, error)
+	Clear(ctx context.Context) ([]string, error)
 }
 
 // PlanQueue is a Redis-backed queue for plan IDs.
@@ -85,4 +86,29 @@ func (p *PlanQueue) Len(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return p.client.LLen(ctx, p.key).Val(), nil
+}
+
+// Clear removes all queued plan IDs and returns them.
+func (p *PlanQueue) Clear(ctx context.Context) ([]string, error) {
+	if err := p.ensure(); err != nil {
+		return nil, err
+	}
+	vals, err := p.client.LRange(ctx, p.key, 0, -1).Result()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.client.Del(ctx, p.key).Err(); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, val := range vals {
+		var payload map[string]string
+		if err := json.Unmarshal([]byte(val), &payload); err != nil {
+			continue
+		}
+		if id, ok := payload["pending_input_id"]; ok {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }

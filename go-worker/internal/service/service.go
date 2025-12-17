@@ -86,6 +86,11 @@ func Run() error {
 			}
 			writeJSON(wr, http.StatusOK, snap)
 		case http.MethodPost:
+			if cfg.InputDir == "" {
+				wr.WriteHeader(http.StatusBadRequest)
+				_, _ = wr.Write([]byte(`{"error":"input dir disabled; use pending-input planning"}`))
+				return
+			}
 			if cfg.WorkerToken != "" {
 				tok := r.Header.Get("X-Worker-Token")
 				if tok == "" {
