@@ -7,6 +7,8 @@ services:
       POSTGRESQL_USER: refinery
       POSTGRESQL_PASSWORD: refinery
       POSTGRESQL_DATABASE: refinery
+      POSTGRESQL_ADMIN_PASSWORD: refinery-admin
+      POSTGRESQL_EXTENSIONS: pg_trgm
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
