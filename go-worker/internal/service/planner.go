@@ -32,11 +32,19 @@ func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL str
 	if batch <= 0 {
 		batch = 5
 	}
+	inFlight := make(map[string]time.Time)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
+		}
+		now := time.Now()
+		// expire in-flight markers older than 10 minutes
+		for id, ts := range inFlight {
+			if now.Sub(ts) > 10*time.Minute {
+				delete(inFlight, id)
+			}
 		}
 		ids, err := popPlanIDs(ctx, client, popURL, cfg.WorkerToken, batch)
 		if err != nil {
@@ -50,6 +58,10 @@ func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL str
 		}
 		pendingMap := fetchPendingMap(ctx, client, listURL, cfg.WorkerToken)
 		for _, id := range ids {
+			if _, seen := inFlight[id]; seen {
+				continue
+			}
+			inFlight[id] = time.Now()
 			pi, ok := pendingMap[id]
 			if !ok {
 				log.Printf("planner: pending input %s not found in list", id)

@@ -44,6 +44,9 @@ func (r *RedisQueue) Enqueue(ctx context.Context, req Request) error {
 	if req.EnqueuedAt == 0 {
 		req.EnqueuedAt = time.Now().Unix()
 	}
+	if req.Attempts < 0 {
+		req.Attempts = 0
+	}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return err
