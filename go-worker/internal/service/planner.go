@@ -144,6 +144,11 @@ func planOne(ctx context.Context, client *http.Client, cfg Config, pi pendingInp
 	if err := postPlan(ctx, client, cfg, snap); err != nil {
 		return fmt.Errorf("post plan: %w", err)
 	}
+	if cfg.AutoBuild {
+		if err := enqueueBuild(ctx, client, cfg, snap); err != nil {
+			log.Printf("planner: auto-build enqueue failed for run %s: %v", snap.RunID, err)
+		}
+	}
 	return nil
 }
 
@@ -192,6 +197,44 @@ func postPlan(ctx context.Context, client *http.Client, cfg Config, snap plan.Sn
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("plan post status %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
+func enqueueBuild(ctx context.Context, client *http.Client, cfg Config, snap plan.Snapshot) error {
+	if cfg.ControlPlaneURL == "" {
+		return fmt.Errorf("control plane URL not set")
+	}
+	url := strings.TrimRight(cfg.ControlPlaneURL, "/") + "/api/queue/enqueue"
+	for _, node := range snap.Plan {
+		if strings.ToLower(node.Action) != "build" {
+			continue
+		}
+		body := map[string]any{
+			"package":      node.Name,
+			"version":      node.Version,
+			"python_tag":   node.PythonTag,
+			"platform_tag": node.PlatformTag,
+		}
+		data, _ := json.Marshal(body)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if cfg.ControlPlaneToken != "" {
+			req.Header.Set("X-Worker-Token", cfg.ControlPlaneToken)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return fmt.Errorf("build enqueue status %d: %s", resp.StatusCode, string(b))
+		}
+		resp.Body.Close()
 	}
 	return nil
 }
