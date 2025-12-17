@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Routes, Route, Link, useParams, useLocation } from "react-router-dom";
+import { Routes, Route, Link, Navigate, useParams, useLocation } from "react-router-dom";
 import {
   API_BASE,
   clearQueue,
@@ -88,14 +88,25 @@ function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, ico
   );
 }
 
-function Layout({ children, tokenActive, theme, onToggleTheme, metrics, pendingInputs = [], settingsData }) {
+function Layout({ children, tokenActive, theme, onToggleTheme, metrics }) {
   const location = useLocation();
-  const isActive = (path) => location.pathname === path || (path !== "/" && location.pathname.startsWith(path));
+  const isActive = (path, aliases = []) =>
+    [path, ...aliases].some((p) => location.pathname === p || (p !== "/" && location.pathname.startsWith(p)));
+  const systemStatus = metrics?.db?.status || "unknown";
+  const systemTone = systemStatus === "ok" ? "text-emerald-300" : "text-amber-300";
+  const navItems = [
+    { to: "/", label: "Overview", aliases: ["/overview"] },
+    { to: "/inputs", label: "Inputs" },
+    { to: "/queues", label: "Queues" },
+    { to: "/builds", label: "Builds" },
+    { to: "/settings", label: "Settings" },
+  ];
+
   return (
     <div className={`min-h-screen app-shell ${theme === "light" ? "theme-light" : "bg-bg text-slate-100"}`}>
       <header className="glass sticky top-0 z-40 backdrop-blur-sm border-b border-border/70">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <Link to="/" className="brand">
               <img src={LOGO_SRC} alt="Wheel Refinery logo" className="h-12 w-12 rounded-xl shadow-lg object-contain" />
               <div className="flex flex-col leading-tight">
@@ -105,38 +116,16 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, pendingI
             </Link>
             <span className="chip bg-slate-800 border-border text-xs">Env: {ENV_LABEL}</span>
             <span className="chip bg-slate-800 border-border text-xs">API: {API_BASE || "same-origin"}</span>
-            {metrics?.queue?.length !== undefined && (
-              <span className="chip bg-slate-800 border-border text-xs">Q: {metrics.queue.length}</span>
-            )}
-            <span className="chip bg-slate-800 border-border text-xs">Pending: {pendingInputs.length}</span>
-            {metrics?.pending?.plan_queue !== undefined && (
-              <span className="chip bg-slate-800 border-border text-xs">PlanQ: {metrics.pending.plan_queue}</span>
-            )}
-            {metrics?.db?.status && (
-              <span className={`chip bg-slate-800 border-border text-xs ${metrics.db.status === "ok" ? "text-emerald-300" : "text-amber-300"}`}>
-                DB: {metrics.db.status}
-              </span>
-            )}
-            {settingsData?.auto_plan !== undefined && (
-              <span className={`chip bg-slate-800 border-border text-xs ${settingsData.auto_plan ? "text-emerald-300" : "text-amber-300"}`}>
-                Auto-plan: {settingsData.auto_plan ? "on" : "off"}
-              </span>
-            )}
-            {settingsData?.auto_build !== undefined && (
-              <span className={`chip bg-slate-800 border-border text-xs ${settingsData.auto_build ? "text-emerald-300" : "text-amber-300"}`}>
-                Auto-build: {settingsData.auto_build ? "on" : "off"}
-              </span>
-            )}
-            {tokenActive ? (
-              <span className="chip bg-emerald-900 border border-emerald-600 text-xs text-emerald-100">Token active</span>
-            ) : (
-              <span className="chip bg-slate-800 border-border text-xs text-slate-300">Token: none</span>
-            )}
+            <span className={`chip bg-slate-800 border-border text-xs ${systemTone}`}>System: {systemStatus}</span>
+            {tokenActive && <span className="chip bg-emerald-900 border border-emerald-600 text-xs text-emerald-100">Token active</span>}
           </div>
           <div className="flex items-center gap-3 text-sm text-slate-200">
-            <nav className="flex items-center gap-3">
-              <Link to="/" className={`nav-link ${isActive("/") ? "nav-link-active" : ""}`}>Dashboard</Link>
-              <span className="text-xs text-slate-500 hidden md:inline">Status filters live below</span>
+            <nav className="flex items-center gap-3 flex-wrap">
+              {navItems.map((item) => (
+                <Link key={item.to} to={item.to} className={`nav-link ${isActive(item.to, item.aliases) ? "nav-link-active" : ""}`}>
+                  {item.label}
+                </Link>
+              ))}
             </nav>
             <button className="btn btn-ghost px-2 py-1 text-xs" onClick={onToggleTheme} title="Toggle theme">
               {theme === "light" ? "🌤️" : "🌙"}
@@ -172,6 +161,20 @@ function StatTile({ icon, label, value, hint }) {
         <div className="text-2xl font-semibold text-slate-50">{value}</div>
       </div>
       {hint && <div className="text-xs text-slate-500 mt-1">{hint}</div>}
+    </div>
+  );
+}
+
+function PageHeader({ title, subtitle, badge }) {
+  return (
+    <div className="glass p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      <div>
+        <div className="flex items-center gap-2">
+          <h2 className="text-2xl font-semibold text-slate-50">{title}</h2>
+          {badge && <span className="chip text-xs">{badge}</span>}
+        </div>
+        {subtitle && <p className="text-slate-400 text-sm mt-1 max-w-2xl">{subtitle}</p>}
+      </div>
     </div>
   );
 }
@@ -557,9 +560,9 @@ function PackageDetail({ token, pushToast }) {
   );
 }
 
-const STATUS_CHIPS = ["built", "failed", "reused", "cached", "missing", "skipped_known_failure"];
+const STATUS_CHIPS = ["built", "failed", "retry", "reused", "cached", "missing", "skipped_known_failure"];
 
-function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
+function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overview" }) {
   const [authToken, setAuthToken] = useState(localStorage.getItem("refinery_token") || token || "");
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -769,7 +772,6 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const planQueueLength = dashboard?.metrics?.pending?.plan_queue ?? 0;
   const buildQueueLength = dashboard?.metrics?.build?.length ?? 0;
   const buildQueueOldest = dashboard?.metrics?.build?.oldest_age_seconds ?? "-";
-  const buildOldest = dashboard?.metrics?.build?.oldest_age_seconds ?? "-";
   const queueItems = toArray(dashboard?.queue?.items || (Array.isArray(dashboard?.queue) ? dashboard.queue : []));
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = toArray(dashboard?.hints);
@@ -787,6 +789,24 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
     const matchPkg = search ? `${e.name} ${e.version}`.toLowerCase().includes(search.toLowerCase()) : true;
     return matchPkg;
   });
+
+  const viewKey = view || "overview";
+  const alerts = [];
+  if (metrics?.db?.status && metrics.db.status !== "ok") {
+    alerts.push(`Database is ${metrics.db.status}`);
+  }
+  if (metrics?.queue?.consumer_state) {
+    alerts.push(`Queue note: ${metrics.queue.consumer_state}`);
+  }
+  if (settingsData?.auto_plan === false) {
+    alerts.push("Auto-plan is off; uploads require manual plan enqueue.");
+  }
+  if (settingsData?.auto_build === false) {
+    alerts.push("Auto-build is off; planned builds will wait for manual start.");
+  }
+  if (!authToken) {
+    alerts.push("No worker token set; worker actions may be rejected.");
+  }
   const failuresTop = toArray(dashboard?.failures);
   const slowestTop = toArray(dashboard?.slowest);
 
@@ -858,282 +878,236 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
     </div>
   );
 
-  return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
+  const renderOverview = () => (
+    <>
       <div className="hero glass">
-        <div className="space-y-2">
+        <div className="space-y-3">
           <div>
             <p className="text-xs tracking-widest text-slate-400 uppercase">Control Plane</p>
             <h1 className="text-3xl font-extrabold text-slate-50">s390x Wheel Refinery</h1>
           </div>
           <p className="text-slate-400 text-sm max-w-2xl">
-            Monitor build health, steer queue execution, and surface artifacts and hints with a calmer, more intentional layout.
+            High-level health, queue posture, and build momentum. Drill into inputs, queues, and builds from the tabs.
           </p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
-            <StatTile icon="📦" label="Queue length" value={queueLength} hint="Pending build requests" />
-            <StatTile icon="⚙️" label="Worker mode" value={workerMode} hint="Current worker strategy" />
-            <StatTile icon="🧭" label="Recent events" value={filteredRecent.length} hint="Filtered by search" />
-            <StatTile icon="🧠" label="Hints loaded" value={hints.length} hint="Recipe guidance available" />
+            <StatTile icon="📦" label="Retry queue" value={queueLength} hint="Legacy retry backlog" />
             <StatTile icon="📥" label="Pending inputs" value={pendingTotal} hint={`waiting: ${pendingByStatus.pending || 0}, planning: ${pendingByStatus.planning || 0}`} />
             <StatTile icon="🗂️" label="Plan queue" value={planQueueLength} hint="Awaiting plan pop" />
-            <StatTile icon="🚀" label="Build queue" value={buildQueueLength} hint={`Oldest: ${buildQueueOldest || 0}s`} />
+            <StatTile icon="🚀" label="Build queue" value={buildQueueLength} hint={`Oldest: ${buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}`} />
+            <StatTile icon="🧭" label="Recent events" value={filteredRecent.length} hint="Last fetch" />
+            <StatTile icon="🧠" label="Hints loaded" value={hints.length} hint="Recipe guidance" />
           </div>
         </div>
         <div className="flex flex-col gap-3 min-w-[260px]">
-          <div className="glass subtle p-3 space-y-2">
-            <div className="text-xs text-slate-400">Worker token</div>
-            <input
-              className="input"
-              placeholder="Worker token (optional)"
-              value={authToken}
-              onChange={(e) => setAuthToken(e.target.value)}
-            />
-            <div className="flex gap-2">
-              <button className="btn btn-primary w-full" onClick={handleSaveToken}>Save</button>
-              <button className="btn btn-secondary w-full" onClick={() => load({ packageFilter: pkgFilter, statusFilter })} disabled={loading}>Refresh</button>
+          <div className="glass subtle p-4 space-y-3">
+            <div className="text-xs text-slate-400 uppercase tracking-widest">System pulse</div>
+            <div className="space-y-2 text-sm text-slate-200">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Environment</span>
+                <span className="chip">{ENV_LABEL}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">API</span>
+                <span className="chip">{API_BASE || "same-origin"}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">DB status</span>
+                <span className={`chip ${metrics?.db?.status === "ok" ? "bg-emerald-900" : "bg-slate-800"}`}>{metrics?.db?.status || "unknown"}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Queue backend</span>
+                <span className="chip">{metrics?.queue?.backend || "unknown"}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Auto-plan</span>
+                <span className={`chip ${settingsData?.auto_plan ? "bg-emerald-900" : "bg-slate-800"}`}>
+                  {settingsData?.auto_plan ? "on" : "off"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Auto-build</span>
+                <span className={`chip ${settingsData?.auto_build ? "bg-emerald-900" : "bg-slate-800"}`}>
+                  {settingsData?.auto_build ? "on" : "off"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Plan pool</span>
+                <span className="chip">{settingsData?.plan_pool_size ?? "-"}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Build pool</span>
+                <span className="chip">{settingsData?.build_pool_size ?? "-"}</span>
+              </div>
+            </div>
+            <div className="space-y-1 text-xs">
+              {alerts.length ? (
+                alerts.map((a, idx) => <div key={idx} className="text-amber-200">• {a}</div>)
+              ) : (
+                <div className="text-emerald-300">All systems nominal.</div>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {error && (
-        <div className="glass p-3 border border-red-500/40 text-sm text-red-200 flex items-center justify-between">
-          <span>{error}</span>
-          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>Retry</button>
-        </div>
-      )}
-      {message && <div className="text-green-400 text-sm">{message}</div>}
+      {loading && !dashboard ? renderLoading() : <Summary summary={dashboard?.summary} />}
 
-      <div className="glass p-4 space-y-3 mt-2">
-        <div className="flex items-center justify-between">
-          <div className="text-lg font-semibold flex items-center gap-2">
-            <span>Settings</span>
-            <span className="chip text-xs">⚙️</span>
-          </div>
-          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => handleSaveSettings()} disabled={settingsSaving || !settingsData}>
-            {settingsSaving ? "Saving..." : "Save defaults"}
-          </button>
-        </div>
-        <div className="grid md:grid-cols-4 gap-3 text-sm text-slate-200">
-          <div className="space-y-1">
-            <div className="text-xs text-slate-400">Python version</div>
-            <input
-              className="input"
-              placeholder="e.g. 3.11"
-              value={settingsData?.python_version || ""}
-              onChange={(e) => {
-                setSettingsData((s) => ({ ...(s || {}), python_version: e.target.value }));
-                setSettingsDirty(true);
-              }}
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs text-slate-400">Platform tag</div>
-            <input
-              className="input"
-              placeholder="manylinux2014_s390x"
-              value={settingsData?.platform_tag || ""}
-              onChange={(e) => {
-                setSettingsData((s) => ({ ...(s || {}), platform_tag: e.target.value }));
-                setSettingsDirty(true);
-              }}
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs text-slate-400">Recent limit</div>
-            <input
-              className="input"
-              type="number"
-              value={recentLimit}
-              onChange={(e) => {
-                setRecentLimit(Number(e.target.value) || 25);
-                setSettingsDirty(true);
-              }}
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs text-slate-400">Poll (ms, 0=off)</div>
-            <input
-              className="input"
-              type="number"
-              value={pollMs}
-              onChange={(e) => {
-                setPollMs(Number(e.target.value) || 0);
-                setSettingsDirty(true);
-              }}
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs text-slate-400">Plan worker pool</div>
-            <input
-              className="input"
-              type="number"
-              min="1"
-              value={settingsData?.plan_pool_size || 0}
-              onChange={(e) => {
-                setSettingsData((s) => ({ ...(s || {}), plan_pool_size: Number(e.target.value) || 1 }));
-                setSettingsDirty(true);
-              }}
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs text-slate-400">Build worker pool</div>
-            <input
-              className="input"
-              type="number"
-              min="1"
-              value={settingsData?.build_pool_size || 0}
-              onChange={(e) => {
-                setSettingsData((s) => ({ ...(s || {}), build_pool_size: Number(e.target.value) || 1 }));
-                setSettingsDirty(true);
-              }}
-            />
-          </div>
-        </div>
-        <div className="grid md:grid-cols-2 gap-3 text-sm text-slate-200">
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={!!settingsData?.auto_plan}
-              onChange={(e) => {
-                setSettingsData((s) => ({ ...(s || {}), auto_plan: e.target.checked }));
-                setSettingsDirty(true);
-              }}
-            />
-            <span>Auto-plan new uploads</span>
-          </label>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={!!settingsData?.auto_build}
-              onChange={(e) => {
-                setSettingsData((s) => ({ ...(s || {}), auto_build: e.target.checked }));
-                setSettingsDirty(true);
-              }}
-            />
-            <span>Auto-build planned items</span>
-          </label>
-        </div>
-        <div className="text-xs text-slate-500">
-          These defaults inform queue enqueues and UI polling limits. Worker runtime Python still follows the configured worker image/env.
-        </div>
-      </div>
-
-      <div className="glass p-4 space-y-3 mt-2">
-        <div className="text-lg font-semibold flex items-center gap-2">
-          <span>Upload requirements.txt</span>
-          <span className="chip text-xs">📄</span>
-        </div>
-        <div className="space-y-2 text-sm text-slate-200">
-          <input
-            type="file"
-            accept=".txt"
-            className="input"
-            onChange={(e) => {
-              setReqFile(e.target.files?.[0] || null);
-              setReqError("");
-            }}
-          />
-          {reqError && <div className="text-red-300 text-xs">{reqError}</div>}
-          <div className="flex flex-wrap gap-2">
-            <button className="btn btn-primary" onClick={() => handleUploadReqs(false)} disabled={!reqFile}>Upload only</button>
-            <button className="btn btn-secondary" onClick={() => handleUploadReqs(true)} disabled={!reqFile}>Upload & Trigger worker</button>
-          </div>
-          <div className="text-slate-400 text-xs">
-            Lints basic text (&lt;128KB, no nulls, ≤2000 lines, ≤800 chars/line) then saves to the shared input as requirements.txt.
-          </div>
-        </div>
-      </div>
-
-      <div className="glass p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="text-lg font-semibold flex items-center gap-2">
-            <span>Pending inputs</span>
-            <span className="chip text-xs">🧾</span>
-          </div>
-          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load()}>
-            Refresh
-          </button>
-        </div>
-        {pendingInputs.length === 0 ? (
-          <EmptyState title="No pending uploads" detail="New uploads will appear here until planned." icon="✅" />
-        ) : (
-          <div className="space-y-2 text-sm text-slate-200">
-            {pendingInputs.map((pi) => (
-              <div key={pi.id} className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="font-semibold text-slate-100">{pi.filename}</div>
-                  <div className="text-xs text-slate-500 flex items-center gap-2">
-                    <span className="chip">{pi.status}</span>
-                    {pi.error && <span className="text-red-300">{pi.error}</span>}
-                    <span className="text-slate-500">id {pi.id}</span>
-                  </div>
-                </div>
-                {pi.status === "pending" && (
-                  <button
-                    className="btn btn-secondary px-2 py-1 text-xs"
-                    onClick={async () => {
-                      try {
-                        await enqueuePlan(pi.id, authToken);
-                        pushToast?.({ type: "success", title: "Enqueued for planning", message: pi.filename });
-                        await load();
-                      } catch (e) {
-                        pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
-                      }
-                    }}
-                  >
-                    Enqueue plan
-                  </button>
-                )}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <TopList
+          title="Top failures"
+          items={failuresTop}
+          render={(f) => (
+            <div key={f?.name || `fail-${Math.random()}`} className="flex items-center justify-between text-sm text-slate-200">
+              <span>{f?.name || "unknown"}</span>
+              <span className="chip">{f?.failures ?? 0} failures</span>
+            </div>
+          )}
+        />
+        <TopList
+          title="Top slow packages"
+          items={slowestTop}
+          render={(s) => (
+            <div key={s?.name || `slow-${Math.random()}`} className="flex items-center justify-between text-sm text-slate-200">
+              <span>{s?.name || "unknown"}</span>
+              <span className="chip">{s?.avg_duration ?? "?"}s avg</span>
+            </div>
+          )}
+        />
+        <StatCard title="Hints">
+          <div className="space-y-2 max-h-52 overflow-auto text-sm text-slate-200">
+            {hints.length ? hints.map((h, idx) => (
+              <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
+                <div className="font-semibold">Pattern: {h?.pattern || "n/a"}</div>
+                <div className="text-slate-400">dnf: {(h?.packages?.dnf || []).join(", ") || "-"}</div>
+                <div className="text-slate-400">apt: {(h?.packages?.apt || []).join(", ") || "-"}</div>
               </div>
-            ))}
+            )) : <div className="text-slate-400">No hints loaded</div>}
           </div>
+        </StatCard>
+        {metrics && (
+          <StatCard title="Metrics snapshot">
+            <div className="space-y-3 text-sm text-slate-200">
+              <div className="text-slate-400 text-xs">{metrics.summary?.description || "Queue and DB health at a glance."}</div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Queue length</span>
+                <span className="chip">{metrics.queue?.length ?? "?"}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Oldest age (s)</span>
+                <span className="chip">{metrics.queue?.oldest_age_seconds ?? "-"}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Build queue</span>
+                <span className="chip">{metrics.build?.length ?? 0}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Pending inputs</span>
+                <span className="chip">{metrics.pending?.count ?? 0}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Plan queue</span>
+                <span className="chip">{metrics.pending?.plan_queue ?? 0}</span>
+              </div>
+            </div>
+          </StatCard>
         )}
       </div>
 
-      <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
-        <div className="space-y-4">
-          <div className="glass p-4 space-y-3">
-            <div className="text-lg font-semibold flex items-center gap-2">
-              <span>Filters</span>
-              <span className="chip text-xs">🎯</span>
+      <EventsTable events={filteredRecent} pageSize={8} />
+    </>
+  );
+
+  const renderInputs = () => (
+    <div className="space-y-4">
+      <PageHeader
+        title="Inputs & planning"
+        subtitle="Manage requirements uploads and watch them advance into planning."
+        badge={`${pendingTotal} pending`}
+      />
+      <div className="grid lg:grid-cols-2 gap-4">
+        <div className="glass p-4 space-y-3">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Upload requirements.txt</span>
+            <span className="chip text-xs">📄</span>
+          </div>
+          <div className="space-y-2 text-sm text-slate-200">
+            <input
+              type="file"
+              accept=".txt"
+              className="input"
+              onChange={(e) => {
+                setReqFile(e.target.files?.[0] || null);
+                setReqError("");
+              }}
+            />
+            {reqError && <div className="text-red-300 text-xs">{reqError}</div>}
+            <div className="flex flex-wrap gap-2">
+              <button className="btn btn-primary" onClick={() => handleUploadReqs(false)} disabled={!reqFile}>Upload only</button>
+              <button className="btn btn-secondary" onClick={() => handleUploadReqs(true)} disabled={!reqFile}>Upload & Trigger worker</button>
             </div>
-            <div className="space-y-2">
-              <div className="space-y-1">
-                <div className="text-xs text-slate-400">Filter package</div>
-                <input className="input w-full" placeholder="Filter package" value={pkgFilter} onChange={(e) => setPkgFilter(e.target.value)} />
-              </div>
-              <input className="input w-full" placeholder="Search recent (name/version)" value={search} onChange={(e) => setSearch(e.target.value)} />
-              <div className="flex gap-2">
-                <input className="input w-1/2" placeholder="Recent limit" title="How many recent events to show" value={recentLimit} onChange={(e) => setRecentLimit(Number(e.target.value) || 25)} />
-                <input className="input w-1/2" placeholder="Poll ms (0=off)" title="Refresh cadence in milliseconds" value={pollMs} onChange={(e) => setPollMs(Number(e.target.value) || 0)} />
-              </div>
-            </div>
-              <div className="flex flex-wrap gap-2">
-                {STATUS_CHIPS.map((s) => {
-                  const active = statusFilter === s;
-                  return (
-                    <button
-                      key={s}
-                      className={`chip cursor-pointer ${active ? "chip-active" : "hover:bg-slate-800"}`}
-                      onClick={() => setStatusFilter(active ? "" : s)}
-                      title="Toggle status filter"
-                    >
-                      {s}
-                    </button>
-                  );
-                })}
-              {statusFilter && (
-                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setStatusFilter("")}>
-                  Clear status filter
-                </button>
-              )}
-              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => { clearFilters(); load({ packageFilter: "", statusFilter: "" }); }}>
-                Clear all
-              </button>
+            <div className="text-slate-400 text-xs">
+              Lints basic text (&lt;128KB, no nulls, ≤2000 lines, ≤800 chars/line) then saves to the shared input as requirements.txt.
             </div>
           </div>
+        </div>
+        <div className="glass p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Pending inputs</span>
+              <span className="chip text-xs">🧾</span>
+            </div>
+            <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load()}>
+              Refresh
+            </button>
+          </div>
+          {pendingInputs.length === 0 ? (
+            <EmptyState title="No pending uploads" detail="New uploads will appear here until planned." icon="✅" />
+          ) : (
+            <div className="space-y-2 text-sm text-slate-200">
+              {pendingInputs.map((pi) => (
+                <div key={pi.id} className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="font-semibold text-slate-100">{pi.filename}</div>
+                    <div className="text-xs text-slate-500 flex items-center gap-2">
+                      <span className="chip">{pi.status}</span>
+                      {pi.error && <span className="text-red-300">{pi.error}</span>}
+                      <span className="text-slate-500">id {pi.id}</span>
+                    </div>
+                  </div>
+                  {pi.status === "pending" && (
+                    <button
+                      className="btn btn-secondary px-2 py-1 text-xs"
+                      onClick={async () => {
+                        try {
+                          await enqueuePlan(pi.id, authToken);
+                          pushToast?.({ type: "success", title: "Enqueued for planning", message: pi.filename });
+                          await load();
+                        } catch (e) {
+                          pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
+                        }
+                      }}
+                    >
+                      Enqueue plan
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 
+  const renderQueues = () => (
+    <div className="space-y-4">
+      <PageHeader
+        title="Queues & retries"
+        subtitle="Manage legacy retry queue and trigger worker runs."
+        badge={`${queueLength} retry`}
+      />
+      <div className="grid lg:grid-cols-[360px,1fr] gap-4 items-start">
+        <div className="space-y-4">
           <div className="glass p-4 space-y-3">
             <div className="text-lg font-semibold flex items-center gap-2">
               <span>Queue controls</span>
@@ -1141,7 +1115,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
             </div>
             <div className="space-y-2 text-sm text-slate-200">
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Queue length</span>
+                <span className="text-slate-400">Retry queue</span>
                 <span className="chip">{queueLength}</span>
               </div>
               <div className="flex items-center justify-between">
@@ -1162,25 +1136,46 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
                 </button>
               </div>
             </div>
-            {queueItemsSorted.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs border border-border rounded-lg">
-                  <thead className="bg-slate-900 text-slate-400 sticky top-0">
-                    <tr>
-                      <th className="px-2 py-2"></th>
-                      <th className="text-left px-2 py-2">Package</th>
-                      <th className="text-left px-2 py-2">Version</th>
-                      <th className="text-left px-2 py-2">Python</th>
-                      <th className="text-left px-2 py-2">Platform</th>
-                      <th className="text-left px-2 py-2">Recipes</th>
-                      <th className="text-left px-2 py-2">Attempts</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {queueItemsSorted.map((q, idx) => {
-                      const key = `${q.package}@${q.version || "latest"}`;
-                      const checked = Boolean(selectedQueue[key]);
-                      return (
+          </div>
+          <div className="glass p-4 space-y-3">
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Enqueue retry</span>
+              <span className="chip text-xs">⏩</span>
+            </div>
+            <div className="flex flex-col gap-3">
+              <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
+              <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
+              <button className="btn btn-primary" onClick={handleRetry}>Enqueue</button>
+            </div>
+            <div className="text-slate-400 text-sm">
+              Uses API: POST /package/&lt;name&gt;/retry (adds hint-derived recipes automatically).
+            </div>
+          </div>
+        </div>
+        <div className="glass p-4 space-y-3">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Retry queue items</span>
+            <span className="chip text-xs">📦</span>
+          </div>
+          {queueItemsSorted.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-xs border border-border rounded-lg">
+                <thead className="bg-slate-900 text-slate-400 sticky top-0">
+                  <tr>
+                    <th className="px-2 py-2"></th>
+                    <th className="text-left px-2 py-2">Package</th>
+                    <th className="text-left px-2 py-2">Version</th>
+                    <th className="text-left px-2 py-2">Python</th>
+                    <th className="text-left px-2 py-2">Platform</th>
+                    <th className="text-left px-2 py-2">Recipes</th>
+                    <th className="text-left px-2 py-2">Attempts</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {queueItemsSorted.map((q, idx) => {
+                    const key = `${q.package}@${q.version || "latest"}`;
+                    const checked = Boolean(selectedQueue[key]);
+                    return (
                       <tr key={`${q.package}-${q.version}-${idx}`} className="border-t border-slate-800">
                         <td className="px-2 py-2">
                           <input type="checkbox" checked={checked} onChange={() => toggleSelectQueue(q)} />
@@ -1192,22 +1187,85 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
                         <td className="px-2 py-2 text-slate-400 truncate">{(q.recipes || []).join(", ") || "-"}</td>
                         <td className="px-2 py-2 text-slate-400">{q.attempts ?? 0}</td>
                       </tr>
-                    )})}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <EmptyState title="Queue is empty" detail="No retry requests pending." actionLabel="Refresh" onAction={() => load({ packageFilter: pkgFilter, statusFilter })} />
-            )}
-          </div>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState title="Queue is empty" detail="No retry requests pending." actionLabel="Refresh" onAction={() => load({ packageFilter: pkgFilter, statusFilter })} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
 
+  const renderBuilds = () => (
+    <div className="space-y-4">
+      <PageHeader
+        title="Build queue & events"
+        subtitle="Track plan-derived builds, retries, and recent execution events."
+        badge={`${buildQueueLength} queued`}
+      />
+      <div className="grid lg:grid-cols-[320px,1fr] gap-4 items-start">
+        <div className="space-y-4">
+          <div className="glass p-4 space-y-3">
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Filters</span>
+              <span className="chip text-xs">🎯</span>
+            </div>
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <div className="text-xs text-slate-400">Filter package</div>
+                <input className="input w-full" placeholder="Filter package" value={pkgFilter} onChange={(e) => setPkgFilter(e.target.value)} />
+              </div>
+              <input className="input w-full" placeholder="Search recent (name/version)" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <div className="flex gap-2">
+                <input className="input w-1/2" placeholder="Recent limit" title="How many recent events to show" value={recentLimit} onChange={(e) => setRecentLimit(Number(e.target.value) || 25)} />
+                <input className="input w-1/2" placeholder="Poll ms (0=off)" title="Refresh cadence in milliseconds" value={pollMs} onChange={(e) => setPollMs(Number(e.target.value) || 0)} />
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {STATUS_CHIPS.map((s) => {
+                const active = statusFilter === s;
+                return (
+                  <button
+                    key={s}
+                    className={`chip cursor-pointer ${active ? "chip-active" : "hover:bg-slate-800"}`}
+                    onClick={() => setStatusFilter(active ? "" : s)}
+                    title="Toggle status filter"
+                  >
+                    {s}
+                  </button>
+                );
+              })}
+              {statusFilter && (
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setStatusFilter("")}>
+                  Clear status filter
+                </button>
+              )}
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                onClick={() => {
+                  setPkgFilter("");
+                  setSearch("");
+                  setStatusFilter("");
+                  load({ packageFilter: "", statusFilter: "" });
+                }}
+              >
+                Clear all
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="space-y-4">
           <div className="glass p-4 space-y-3">
             <div className="text-lg font-semibold flex items-center gap-2">
               <span>Build queue</span>
               <span className="chip text-xs">🏗️</span>
             </div>
             <div className="flex flex-wrap gap-2 text-sm">
-              {["", "queued", "building", "failed", "built"].map((s) => (
+              {["", "pending", "retry", "building", "failed", "built"].map((s) => (
                 <button
                   key={s || "all"}
                   className={`chip ${buildStatusFilter === s ? "chip-active" : "hover:bg-slate-800"}`}
@@ -1220,7 +1278,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
                 </button>
               ))}
             </div>
-            <div className="text-xs text-slate-400">Oldest queued: {buildOldest === "-" ? "—" : `${buildOldest}s`}</div>
+            <div className="text-xs text-slate-400">Oldest queued: {buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}</div>
             <div className="overflow-x-auto">
               <table className="min-w-full text-xs border border-border rounded-lg">
                 <thead className="bg-slate-900 text-slate-400 sticky top-0">
@@ -1254,132 +1312,177 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
               </table>
             </div>
           </div>
-
-          <div className="glass p-4 space-y-3">
-            <div className="text-lg font-semibold flex items-center gap-2">
-              <span>Enqueue retry</span>
-              <span className="chip text-xs">⏩</span>
-            </div>
-            <div className="flex flex-col gap-3">
-              <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
-              <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
-              <button className="btn btn-primary" onClick={handleRetry}>Enqueue</button>
-            </div>
-            <div className="text-slate-400 text-sm">
-              Uses API: POST /package/&lt;name&gt;/retry (adds hint-derived recipes automatically).
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          {loading && !dashboard ? (
-            renderLoading()
-          ) : (
-            <Summary summary={dashboard?.summary} />
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <TopList
-              title="Top failures"
-              items={failuresTop}
-              render={(f) => (
-                <div key={f?.name || `fail-${Math.random()}`} className="flex items-center justify-between text-sm text-slate-200">
-                  <span>{f?.name || "unknown"}</span>
-                  <span className="chip">{f?.failures ?? 0} failures</span>
-                </div>
-              )}
-            />
-            <TopList
-              title="Top slow packages"
-              items={slowestTop}
-              render={(s) => (
-                <div key={s?.name || `slow-${Math.random()}`} className="flex items-center justify-between text-sm text-slate-200">
-                  <span>{s?.name || "unknown"}</span>
-                  <span className="chip">{s?.avg_duration ?? "?"}s avg</span>
-                </div>
-              )}
-            />
-            <StatCard title="Hints">
-              <div className="space-y-2 max-h-52 overflow-auto text-sm text-slate-200">
-                {hints.length ? hints.map((h, idx) => (
-                  <div key={idx} className="text-slate-300 border border-border rounded-lg p-2">
-                    <div className="font-semibold">Pattern: {h?.pattern || "n/a"}</div>
-                    <div className="text-slate-400">dnf: {(h?.packages?.dnf || []).join(", ") || "-"}</div>
-                    <div className="text-slate-400">apt: {(h?.packages?.apt || []).join(", ") || "-"}</div>
-                  </div>
-                )) : <div className="text-slate-400">No hints loaded</div>}
-              </div>
-            </StatCard>
-            {metrics && (
-              <StatCard title="Metrics snapshot">
-                <div className="space-y-3 text-sm text-slate-200">
-                  <div className="text-slate-400 text-xs">{metrics.summary?.description || "Queue and DB health at a glance."}</div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Queue backend</span>
-                    <span className="chip">{metrics.queue?.backend || "unknown"}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Queue length</span>
-                    <span className="chip">{metrics.queue?.length ?? "?"}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Oldest age (s)</span>
-                    <span className="chip">{metrics.queue?.oldest_age_seconds ?? "-"}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Auto-build</span>
-                    <span className={`chip ${metrics.auto_build ? "bg-emerald-900" : "bg-slate-800"}`}>
-                      {metrics.auto_build ? "on" : "off"}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Pending inputs</span>
-                    <span className="chip">{metrics.pending?.count ?? 0}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">Plan queue</span>
-                    <span className="chip">{metrics.pending?.plan_queue ?? 0}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-400">DB</span>
-                    <span className={`chip ${metrics.db?.status === "ok" ? "bg-emerald-900" : "bg-slate-800"}`}>
-                      {metrics.db?.status || "unknown"}
-                    </span>
-                  </div>
-                  {metrics.queue?.consumer_state && (
-                    <div className="text-xs text-amber-300">Queue note: {metrics.queue.consumer_state}</div>
-                  )}
-                  {metrics.status_counts && Object.keys(metrics.status_counts).length > 0 && (
-                    <div className="space-y-1">
-                      <div className="text-xs text-slate-400">Status counts</div>
-                      <div className="flex flex-wrap gap-2">
-                        {Object.entries(metrics.status_counts).map(([k, v]) => (
-                          <span key={k} className="chip chip-muted">{k}: {v}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {toArray(metrics.recent_failures).length > 0 && (
-                    <div className="space-y-1">
-                      <div className="text-xs text-slate-400">Recent failures</div>
-                      <div className="space-y-1">
-                        {toArray(metrics.recent_failures).slice(0, 5).map((f, idx) => (
-                          <div key={idx} className="flex items-center justify-between text-xs text-slate-300">
-                            <span>{f.name} {f.version}</span>
-                            <span className="chip">{f.status}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </StatCard>
-            )}
-          </div>
-
-            <EventsTable events={filteredRecent} />
+          <EventsTable events={filteredRecent} />
         </div>
       </div>
+    </div>
+  );
+
+  const renderSettingsView = () => (
+    <div className="space-y-4">
+      <PageHeader
+        title="Settings & access"
+        subtitle="Tune defaults, polling, and worker pool sizing."
+        badge={settingsDirty ? "Unsaved changes" : "Defaults"}
+      />
+      <div className="grid lg:grid-cols-2 gap-4">
+        <div className="glass subtle p-4 space-y-2">
+          <div className="text-xs text-slate-400">Worker token</div>
+          <input
+            className="input"
+            placeholder="Worker token (optional)"
+            value={authToken}
+            onChange={(e) => setAuthToken(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <button className="btn btn-primary w-full" onClick={handleSaveToken}>Save</button>
+            <button className="btn btn-secondary w-full" onClick={() => load({ packageFilter: pkgFilter, statusFilter })} disabled={loading}>Refresh</button>
+          </div>
+          <div className="text-xs text-slate-500">Token required for queue and build actions.</div>
+        </div>
+        <div className="glass p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Defaults</span>
+              <span className="chip text-xs">⚙️</span>
+            </div>
+            <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => handleSaveSettings()} disabled={settingsSaving || !settingsData}>
+              {settingsSaving ? "Saving..." : "Save defaults"}
+            </button>
+          </div>
+          <div className="grid md:grid-cols-2 gap-3 text-sm text-slate-200">
+            <div className="space-y-1">
+              <div className="text-xs text-slate-400">Python version</div>
+              <input
+                className="input"
+                placeholder="e.g. 3.11"
+                value={settingsData?.python_version || ""}
+                onChange={(e) => {
+                  setSettingsData((s) => ({ ...(s || {}), python_version: e.target.value }));
+                  setSettingsDirty(true);
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-slate-400">Platform tag</div>
+              <input
+                className="input"
+                placeholder="manylinux2014_s390x"
+                value={settingsData?.platform_tag || ""}
+                onChange={(e) => {
+                  setSettingsData((s) => ({ ...(s || {}), platform_tag: e.target.value }));
+                  setSettingsDirty(true);
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-slate-400">Recent limit</div>
+              <input
+                className="input"
+                type="number"
+                value={recentLimit}
+                onChange={(e) => {
+                  setRecentLimit(Number(e.target.value) || 25);
+                  setSettingsDirty(true);
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-slate-400">Poll (ms, 0=off)</div>
+              <input
+                className="input"
+                type="number"
+                value={pollMs}
+                onChange={(e) => {
+                  setPollMs(Number(e.target.value) || 0);
+                  setSettingsDirty(true);
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-slate-400">Plan worker pool</div>
+              <input
+                className="input"
+                type="number"
+                min="1"
+                value={settingsData?.plan_pool_size || 0}
+                onChange={(e) => {
+                  setSettingsData((s) => ({ ...(s || {}), plan_pool_size: Number(e.target.value) || 1 }));
+                  setSettingsDirty(true);
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-slate-400">Build worker pool</div>
+              <input
+                className="input"
+                type="number"
+                min="1"
+                value={settingsData?.build_pool_size || 0}
+                onChange={(e) => {
+                  setSettingsData((s) => ({ ...(s || {}), build_pool_size: Number(e.target.value) || 1 }));
+                  setSettingsDirty(true);
+                }}
+              />
+            </div>
+          </div>
+          <div className="grid md:grid-cols-2 gap-3 text-sm text-slate-200">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={!!settingsData?.auto_plan}
+                onChange={(e) => {
+                  setSettingsData((s) => ({ ...(s || {}), auto_plan: e.target.checked }));
+                  setSettingsDirty(true);
+                }}
+              />
+              <span>Auto-plan new uploads</span>
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={!!settingsData?.auto_build}
+                onChange={(e) => {
+                  setSettingsData((s) => ({ ...(s || {}), auto_build: e.target.checked }));
+                  setSettingsDirty(true);
+                }}
+              />
+              <span>Auto-build planned items</span>
+            </label>
+          </div>
+          <div className="text-xs text-slate-500">
+            Defaults inform queue enqueues and UI polling limits. Worker runtime Python still follows the configured worker image/env.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderView = () => {
+    switch (viewKey) {
+      case "inputs":
+        return renderInputs();
+      case "queues":
+        return renderQueues();
+      case "builds":
+        return renderBuilds();
+      case "settings":
+        return renderSettingsView();
+      default:
+        return renderOverview();
+    }
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
+      {error && (
+        <div className="glass p-3 border border-red-500/40 text-sm text-red-200 flex items-center justify-between">
+          <span>{error}</span>
+          <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>Retry</button>
+        </div>
+      )}
+      {message && <div className="text-green-400 text-sm">{message}</div>}
+      {renderView()}
     </div>
   );
 }
@@ -1408,7 +1511,12 @@ export default function App() {
   return (
     <Layout tokenActive={Boolean(token)} theme={theme} onToggleTheme={toggleTheme} metrics={metrics}>
       <Routes>
-        <Route path="/" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} />} />
+        <Route path="/" element={<Navigate to="/overview" replace />} />
+        <Route path="/overview" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} view="overview" />} />
+        <Route path="/inputs" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} view="inputs" />} />
+        <Route path="/queues" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} view="queues" />} />
+        <Route path="/builds" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} view="builds" />} />
+        <Route path="/settings" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} view="settings" />} />
         <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} />} />
       </Routes>
       <Toasts toasts={toasts} onDismiss={dismissToast} />
