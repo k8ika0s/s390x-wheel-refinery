@@ -45,6 +45,14 @@ const formatEpoch = (value) => {
   const date = new Date(Number(value) * 1000);
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : "";
 };
+const formatBytes = (value) => {
+  if (value === undefined || value === null) return "-";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
 
 function ArtifactBadges({ meta }) {
   if (!meta) return null;
@@ -1769,41 +1777,47 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           {visiblePendingInputs.length === 0 ? (
             <EmptyState title="No pending uploads" detail="New uploads will appear here until planned." icon="✅" />
           ) : (
-            <div className="space-y-2 text-sm text-slate-200">
+            <div className="grid gap-2 md:grid-cols-2 text-sm text-slate-200">
               {visiblePendingInputs.map((pi) => (
-                <div key={pi.id} className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="font-semibold text-slate-100">{pi.filename}</div>
-                    <div className="text-xs text-slate-500 flex items-center gap-2">
-                      <span className="chip">{pi.status}</span>
-                      {pi.error && <span className="text-red-300">{pi.error}</span>}
-                      <span className="text-slate-500">id {pi.id}</span>
+                <div key={pi.id} className="glass subtle px-3 py-3 rounded-lg space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="font-semibold text-slate-100 truncate max-w-[18rem]" title={pi.filename}>
+                        {pi.filename}
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs text-slate-500">
+                        <span className="chip">{pi.status}</span>
+                        {pi.source_type && <span className="chip">{pi.source_type}</span>}
+                        {pi.size_bytes > 0 && <span className="chip">{formatBytes(pi.size_bytes)}</span>}
+                        <span className="text-slate-500">id {pi.id}</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1 items-end">
+                      {pi.status === "pending" && (
+                        <button
+                          className="btn btn-secondary px-2 py-1 text-xs"
+                          onClick={() => enqueuePlanForInput(pi, "Enqueued for planning")}
+                        >
+                          Enqueue
+                        </button>
+                      )}
+                      {pi.status === "failed" && (
+                        <button
+                          className="btn btn-secondary px-2 py-1 text-xs"
+                          onClick={() => enqueuePlanForInput(pi, "Replan queued")}
+                        >
+                          Replan
+                        </button>
+                      )}
+                      <button
+                        className="btn btn-secondary px-2 py-1 text-xs"
+                        onClick={() => handleDeletePendingInput(pi)}
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
-                  <div className="flex flex-col gap-2 items-end">
-                    {pi.status === "pending" && (
-                      <button
-                        className="btn btn-secondary px-2 py-1 text-xs"
-                        onClick={() => enqueuePlanForInput(pi, "Enqueued for planning")}
-                      >
-                        Enqueue plan
-                      </button>
-                    )}
-                    {pi.status === "failed" && (
-                      <button
-                        className="btn btn-secondary px-2 py-1 text-xs"
-                        onClick={() => enqueuePlanForInput(pi, "Replan queued")}
-                      >
-                        Replan
-                      </button>
-                    )}
-                    <button
-                      className="btn btn-secondary px-2 py-1 text-xs"
-                      onClick={() => handleDeletePendingInput(pi)}
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  {pi.error && <div className="text-red-300 text-xs">{pi.error}</div>}
                 </div>
               ))}
             </div>
