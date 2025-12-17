@@ -1328,6 +1328,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, view = "overvie
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="glass subtle p-4 space-y-2">
           <div className="text-xs text-slate-400">Worker token</div>
+          <div className="text-xs text-slate-500">
+            Required for any action that enqueues work or updates control-plane state. Paste the shared token issued for workers;
+            it is stored locally in this browser and attached as the <span className="chip chip-muted">X-Worker-Token</span> header
+            on API calls. Until provided, queue actions and worker-trigger operations may be rejected.
+          </div>
           <input
             className="input"
             placeholder="Worker token (optional)"
