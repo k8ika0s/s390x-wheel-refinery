@@ -581,6 +581,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [pendingInputs, setPendingInputs] = useState([]);
   const [builds, setBuilds] = useState([]);
+  const [buildStatusFilter, setBuildStatusFilter] = useState("");
 
   const load = async (opts = {}) => {
     const { packageFilter, statusFilter: status } = opts;
@@ -598,7 +599,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
       const data = await fetchDashboard(authToken);
       const pending = await fetchPendingInputs(authToken).catch(() => []);
       setPendingInputs(Array.isArray(pending) ? pending : []);
-      const buildsList = await fetchBuilds({}, authToken).catch(() => []);
+      const buildsList = await fetchBuilds({ status: buildStatusFilter || undefined }, authToken).catch(() => []);
       setBuilds(Array.isArray(buildsList) ? buildsList : []);
       setDashboard({ ...data, recent, pending, builds: buildsList });
       onMetrics?.(data.metrics);
@@ -760,6 +761,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
     dashboard?.metrics?.queue?.backend ||
     (Array.isArray(dashboard?.queue) ? "redis" : "redis");
   const planQueueLength = dashboard?.metrics?.pending?.plan_queue ?? 0;
+  const buildOldest = dashboard?.metrics?.build?.oldest_age_seconds ?? "-";
   const queueItems = toArray(dashboard?.queue?.items || (Array.isArray(dashboard?.queue) ? dashboard.queue : []));
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = toArray(dashboard?.hints);
