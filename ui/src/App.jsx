@@ -1166,6 +1166,60 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics }) {
 
           <div className="glass p-4 space-y-3">
             <div className="text-lg font-semibold flex items-center gap-2">
+              <span>Build queue</span>
+              <span className="chip text-xs">🏗️</span>
+            </div>
+            <div className="flex flex-wrap gap-2 text-sm">
+              {["", "queued", "building", "failed", "built"].map((s) => (
+                <button
+                  key={s || "all"}
+                  className={`chip ${buildStatusFilter === s ? "chip-active" : "hover:bg-slate-800"}`}
+                  onClick={() => {
+                    setBuildStatusFilter(s);
+                    load({ packageFilter: pkgFilter, statusFilter });
+                  }}
+                >
+                  {s || "all"}
+                </button>
+              ))}
+            </div>
+            <div className="text-xs text-slate-400">Oldest queued: {buildOldest === "-" ? "—" : `${buildOldest}s`}</div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-xs border border-border rounded-lg">
+                <thead className="bg-slate-900 text-slate-400 sticky top-0">
+                  <tr>
+                    <th className="text-left px-2 py-2">Package</th>
+                    <th className="text-left px-2 py-2">Version</th>
+                    <th className="text-left px-2 py-2">Status</th>
+                    <th className="text-left px-2 py-2">Attempts</th>
+                    <th className="text-left px-2 py-2">Python</th>
+                    <th className="text-left px-2 py-2">Platform</th>
+                    <th className="text-left px-2 py-2">Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {builds.length ? builds.map((b, idx) => (
+                    <tr key={`${b.package}-${b.version}-${idx}`} className="border-t border-slate-800">
+                      <td className="px-2 py-2">{b.package}</td>
+                      <td className="px-2 py-2">{b.version}</td>
+                      <td className="px-2 py-2"><span className="chip">{b.status}</span></td>
+                      <td className="px-2 py-2">{b.attempts ?? 0}</td>
+                      <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
+                      <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
+                      <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{b.last_error || "-"}</td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td className="px-2 py-3 text-slate-400" colSpan="7">No builds found</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="glass p-4 space-y-3">
+            <div className="text-lg font-semibold flex items-center gap-2">
               <span>Enqueue retry</span>
               <span className="chip text-xs">⏩</span>
             </div>
