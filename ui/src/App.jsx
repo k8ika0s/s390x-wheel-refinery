@@ -177,18 +177,31 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, apiBase,
                 <span className="text-slate-300">{apiLabel}</span>
               </span>
             </span>
-            <span className="chip status-chip bg-slate-800 border-border text-xs">
-              <span className="text-slate-400">Queue</span>
+            <span
+              className={`chip status-chip text-xs ${autoPlanEnabled ? "bg-emerald-900/70 border-emerald-600" : "bg-amber-900/60 border-amber-600"}`}
+              title={`Plan queue (${autoPlanEnabled ? "auto" : "manual"})`}
+            >
+              <span className="text-slate-200">Plan q</span>
               <span className="inline-flex items-center gap-2">
-                <span className="inline-flex items-center gap-1">
-                  {Array.from({ length: 5 }).map((_, idx) => (
-                    <span
-                      key={idx}
-                      className={`inline-block h-2 w-2 rounded-full ${idx < queueLevel ? "bg-cyan-300" : "bg-slate-700"}`}
-                    />
-                  ))}
-                </span>
-                <span className="text-slate-300">{totalQueue}</span>
+                <span className={`inline-block h-2 w-2 rounded-full ${autoPlanEnabled ? "bg-emerald-400" : "bg-amber-300"}`} />
+                <span className="text-slate-100">{planQueueLength}</span>
+              </span>
+            </span>
+            <span
+              className={`chip status-chip text-xs ${autoBuildEnabled ? "bg-emerald-900/70 border-emerald-600" : "bg-amber-900/60 border-amber-600"}`}
+              title={`Build queue (${autoBuildEnabled ? "auto" : "manual"})`}
+            >
+              <span className="text-slate-200">Build q</span>
+              <span className="inline-flex items-center gap-2">
+                <span className={`inline-block h-2 w-2 rounded-full ${autoBuildEnabled ? "bg-emerald-400" : "bg-amber-300"}`} />
+                <span className="text-slate-100">{buildQueueLength}</span>
+              </span>
+            </span>
+            <span className="chip status-chip bg-slate-800 border-border text-xs" title="Pending inputs">
+              <span className="text-slate-200">Inputs</span>
+              <span className="inline-flex items-center gap-2">
+                <span className={`inline-block h-2 w-2 rounded-full ${pendingInputsCount > 0 ? "bg-amber-300" : "bg-emerald-400"}`} />
+                <span className="text-slate-100">{pendingInputsCount}</span>
               </span>
             </span>
             <span className="chip status-chip bg-slate-800 border-border text-xs">
@@ -1240,6 +1253,9 @@ const enqueuePlanForInput = async (pi, verb) => {
   const planQueueLength = dashboard?.metrics?.pending?.plan_queue ?? 0;
   const buildQueueLength = dashboard?.metrics?.build?.length ?? 0;
   const buildQueueOldest = dashboard?.metrics?.build?.oldest_age_seconds ?? "-";
+  const autoPlanEnabled = settingsData?.auto_plan ?? false;
+  const autoBuildEnabled = settingsData?.auto_build ?? false;
+  const pendingInputsCount = toArray(pendingInputs).length;
   const clearBuildsLabel = buildStatusFilter ? `Clear ${buildStatusFilter} builds` : "Clear pending builds";
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = toArray(hintsState);
