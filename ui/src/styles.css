@@ -105,6 +105,10 @@ body {
   }
 }
 
+.scroll-panel {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.75), rgba(15, 23, 42, 0.6));
+}
+
 .btn {
   @apply inline-flex items-center justify-center px-3 py-2 rounded-lg font-semibold cursor-pointer transition;
 }
