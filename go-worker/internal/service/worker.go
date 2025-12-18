@@ -137,6 +137,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 	}
 	results := make([]result, len(jobs))
 	g, ctx := errgroup.WithContext(ctx)
+	if w.Cfg.BuildPoolSize > 0 {
+		g.SetLimit(w.Cfg.BuildPoolSize)
+	}
 	for i, job := range jobs {
 		i, job := i, job
 		g.Go(func() error {
