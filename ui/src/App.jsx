@@ -130,12 +130,16 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, apiBase,
   const totalQueue =
     (metrics?.queue?.length ?? 0) + (metrics?.pending?.plan_queue ?? 0) + (metrics?.build?.length ?? 0);
   const queueLevel = totalQueue === 0 ? 0 : totalQueue < 5 ? 1 : totalQueue < 20 ? 2 : totalQueue < 50 ? 3 : totalQueue < 100 ? 4 : 5;
+  const planQueueLength = metrics?.pending?.plan_queue ?? 0;
+  const buildQueueLength = metrics?.build?.length ?? 0;
+  const pendingInputsCount = metrics?.pending?.inputs ?? 0;
+  const autoPlanEnabled = Boolean(metrics?.settings?.auto_plan ?? false);
+  const autoBuildEnabled = Boolean(metrics?.settings?.auto_build ?? false);
   const navItems = [
     { to: "/", label: "Overview", aliases: ["/overview"] },
     { to: "/inputs", label: "Inputs" },
     { to: "/plans", label: "Plans" },
     { to: "/builds", label: "Builds" },
-    { to: "/queues", label: "Queues" },
     { to: "/hints", label: "Hints" },
     { to: "/settings", label: "Settings" },
   ];
@@ -728,7 +732,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     setLoading(true);
     const activeView = opts.view || viewKey;
     const wantsOverview = activeView === "overview";
-    const wantsQueues = activeView === "queues";
+    const wantsQueues = activeView === "queues" || activeView === "builds";
     const wantsInputs = activeView === "inputs";
     const wantsBuilds = activeView === "builds";
     const wantsRecent = wantsOverview || wantsBuilds;
@@ -1179,6 +1183,17 @@ const enqueuePlanForInput = async (pi, verb) => {
     return "";
   };
 
+  const reqInputRef = useRef(null);
+  const wheelInputRef = useRef(null);
+
+  const hashFile = async (file) => {
+    const buf = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", buf);
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  };
+
   const handleUploadReqs = async (trigger = false) => {
     setReqError("");
     const lintErr = await lintReqFile(reqFile);
@@ -1187,9 +1202,29 @@ const enqueuePlanForInput = async (pi, verb) => {
       pushToast?.({ type: "error", title: "Upload failed", message: lintErr });
       return;
     }
+    // Detect duplicate by digest against pending inputs.
+    try {
+      const digestHex = await hashFile(reqFile);
+      const digest = `sha256:${digestHex}`;
+      const dup = pendingInputs.find((pi) => pi.digest === digest);
+      if (dup) {
+        pushToast?.({
+          type: "info",
+          title: "Already uploaded",
+          message: `${reqFile.name} matches an existing pending upload (id ${dup.id}).`,
+        });
+        setReqFile(null);
+        if (reqInputRef.current) reqInputRef.current.value = "";
+        return;
+      }
+    } catch {
+      // best effort; continue on hash failure
+    }
     try {
       const resp = await uploadRequirements(reqFile, authToken);
       pushToast?.({ type: "success", title: "Uploaded", message: resp.detail || "requirements uploaded" });
+      setReqFile(null);
+      if (reqInputRef.current) reqInputRef.current.value = "";
       if (trigger) {
         await handleTriggerWorker();
       } else {
@@ -1217,8 +1252,27 @@ const enqueuePlanForInput = async (pi, verb) => {
       return;
     }
     try {
+      const digestHex = await hashFile(wheelFile);
+      const digest = `sha256:${digestHex}`;
+      const dup = pendingInputs.find((pi) => pi.digest === digest);
+      if (dup) {
+        pushToast?.({
+          type: "info",
+          title: "Already uploaded",
+          message: `${wheelFile.name} matches an existing pending upload (id ${dup.id}).`,
+        });
+        setWheelFile(null);
+        if (wheelInputRef.current) wheelInputRef.current.value = "";
+        return;
+      }
+    } catch {
+      // ignore hash failure, continue upload
+    }
+    try {
       const resp = await uploadWheel(wheelFile, authToken);
       pushToast?.({ type: "success", title: "Uploaded", message: resp.detail || "wheel uploaded" });
+      setWheelFile(null);
+      if (wheelInputRef.current) wheelInputRef.current.value = "";
       if (trigger) {
         await handleTriggerWorker();
       } else {
@@ -1529,6 +1583,11 @@ const enqueuePlanForInput = async (pi, verb) => {
       setPlanDetailsError("Select a plan to enqueue.");
       return;
     }
+    if (selectedPlan?.queued) {
+      setPlanDetailsError("Plan is already enqueued for builds.");
+      pushToast?.({ type: "info", title: "Already queued", message: "This plan is already in the build queue." });
+      return;
+    }
     setEnqueueingBuilds(true);
     try {
       const resp = await enqueueBuildsFromPlan(selectedPlanId, authToken);
@@ -1537,6 +1596,8 @@ const enqueuePlanForInput = async (pi, verb) => {
         title: "Builds enqueued",
         message: `${resp.enqueued ?? 0} builds queued`,
       });
+      setSelectedPlan((prev) => (prev ? { ...prev, queued: true } : prev));
+      setPlanList((prev) => prev.map((p) => (p.id === selectedPlanId ? { ...p, queued: true } : p)));
       await load({ packageFilter: pkgFilter, statusFilter, force: true });
     } catch (e) {
       pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
@@ -1750,6 +1811,7 @@ const enqueuePlanForInput = async (pi, verb) => {
           </div>
           <div className="space-y-2 text-sm text-slate-200">
             <input
+              ref={reqInputRef}
               type="file"
               accept=".txt"
               className="input"
@@ -1775,6 +1837,7 @@ const enqueuePlanForInput = async (pi, verb) => {
           </div>
           <div className="space-y-2 text-sm text-slate-200">
             <input
+              ref={wheelInputRef}
               type="file"
               accept=".whl"
               className="input"
@@ -1863,13 +1926,15 @@ const enqueuePlanForInput = async (pi, verb) => {
                           {pendingActions[pi.id] ? "Replanning..." : "Replan"}
                         </button>
                       )}
-                      <button
-                        className="btn btn-secondary px-2 py-1 text-xs"
-                        disabled={!!pendingActions[pi.id]}
-                        onClick={() => handleDeletePendingInput(pi)}
-                      >
-                        {pendingActions[pi.id] === "delete" ? "Deleting..." : "Delete"}
-                      </button>
+                      {pi.status === "pending" && (
+                        <button
+                          className="btn btn-secondary px-2 py-1 text-xs"
+                          disabled={!!pendingActions[pi.id]}
+                          onClick={() => handleDeletePendingInput(pi)}
+                        >
+                          {pendingActions[pi.id] === "delete" ? "Deleting..." : "Delete"}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2047,6 +2112,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                       {plan.run_id && <span className="chip">run {plan.run_id}</span>}
                       <span className="chip">{plan.build_count ?? 0} builds</span>
                       <span className="chip">{plan.node_count ?? 0} nodes</span>
+                      {plan.queued && <span className="chip bg-amber-500/20 text-amber-200 border-amber-500/40">queued</span>}
                     </div>
                   </button>
                 );
@@ -2066,9 +2132,31 @@ const enqueuePlanForInput = async (pi, verb) => {
             <div className="text-xs text-slate-500">Loading plan details…</div>
           ) : selectedPlan ? (
             <div className="space-y-2 text-sm text-slate-200">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className="btn btn-primary"
+                  onClick={handleEnqueueBuilds}
+                  disabled={enqueueingBuilds || selectedPlan?.queued}
+                  title={selectedPlan?.queued ? "Plan already enqueued" : ""}
+                >
+                  {enqueueingBuilds ? "Enqueueing..." : selectedPlan?.queued ? "Already enqueued" : "Enqueue builds"}
+                </button>
+                <button className="btn btn-secondary" onClick={() => loadPlanDetails(selectedPlan.id)} disabled={planDetailsLoading}>
+                  Refresh details
+                </button>
+                <button className="btn btn-secondary" onClick={() => handleClearPlans(selectedPlan.id)} disabled={clearingPlans}>
+                  {clearingPlans ? "Clearing..." : "Clear selected"}
+                </button>
+              </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Plan ID</span>
                 <span className="chip">{selectedPlan.id}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Queued</span>
+                <span className={`chip ${selectedPlan.queued ? "bg-amber-500/20 text-amber-200 border-amber-500/40" : ""}`}>
+                  {selectedPlan.queued ? "yes" : "no"}
+                </span>
               </div>
               {selectedPlan.run_id && (
                 <div className="flex items-center justify-between">
@@ -2092,32 +2180,23 @@ const enqueuePlanForInput = async (pi, verb) => {
                 <span className="text-slate-400">Platform tag</span>
                 <span className="chip">{planPlatformTag}</span>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button className="btn btn-primary" onClick={handleEnqueueBuilds} disabled={enqueueingBuilds}>
-                  {enqueueingBuilds ? "Enqueueing..." : "Enqueue builds"}
-                </button>
-                <button className="btn btn-secondary" onClick={() => loadPlanDetails(selectedPlan.id)} disabled={planDetailsLoading}>
-                  Refresh details
-                </button>
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => handleClearPlans(selectedPlan.id)}
-                  disabled={clearingPlans}
-                >
-                  {clearingPlans ? "Clearing..." : "Clear selected"}
-                </button>
-              </div>
               {selectedPlanNodes.length > 0 ? (
-                <div className="max-h-64 overflow-auto text-xs text-slate-300 space-y-1">
-                  {selectedPlanNodes.slice(0, 12).map((node, idx) => (
-                    <div key={`${node.name}-${node.version}-${idx}`} className="flex items-center justify-between">
-                      <span>{node.name} {node.version}</span>
-                      <span className="chip">{node.action}</span>
+                <div className="max-h-72 overflow-auto text-xs text-slate-300 space-y-2">
+                  {selectedPlanNodes.map((node, idx) => (
+                    <div
+                      key={`${node.name}-${node.version}-${idx}`}
+                      className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between"
+                    >
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-semibold text-slate-100 truncate" title={node.name}>{node.name}</span>
+                        <span className="text-slate-400 truncate">{node.version || "version?"}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="chip">{node.action}</span>
+                        {node.python_version && <span className="chip chip-muted">{node.python_version}</span>}
+                      </div>
                     </div>
                   ))}
-                  {selectedPlanNodes.length > 12 && (
-                    <div className="text-slate-500">…and {selectedPlanNodes.length - 12} more</div>
-                  )}
                 </div>
               ) : (
                 <div className="text-xs text-slate-500">No nodes available for this plan.</div>
@@ -2277,6 +2356,102 @@ const enqueuePlanForInput = async (pi, verb) => {
                       )}
                 </tbody>
               </table>
+            </div>
+          </div>
+          <div className="glass p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-lg font-semibold flex items-center gap-2">
+                <span>Retry queue</span>
+                <span className="chip text-xs">🧰</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <span className="chip">{queueLength}</span>
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleTriggerWorker}>
+                  Run worker now
+                </button>
+              </div>
+            </div>
+            <div className="grid md:grid-cols-[280px,1fr] gap-4 items-start">
+              <div className="space-y-2 text-sm text-slate-200">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Worker mode</span>
+                  <span className="chip">{workerMode}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Plan queue</span>
+                  <div className="flex items-center gap-2">
+                    <span className="chip">{metrics?.pending?.plan_queue ?? 0}</span>
+                    <button
+                      className="btn btn-secondary px-2 py-1 text-xs"
+                      onClick={handleClearPlanQueue}
+                      disabled={clearingPlanQueue || !planQueueLength}
+                    >
+                      {clearingPlanQueue ? "Clearing..." : "Clear plan queue"}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
+                    Retry selected
+                  </button>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
+                    Clear retry queue
+                  </button>
+                </div>
+                <div className="glass subtle p-3 space-y-2">
+                  <div className="text-xs text-slate-400">Enqueue retry</div>
+                  <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
+                  <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
+                  <button className="btn btn-primary w-full" onClick={handleRetry}>Enqueue</button>
+                  <div className="text-slate-500 text-xs">Uses API: POST /package/&lt;name&gt;/retry</div>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm text-slate-400">
+                  <span>Retry queue items</span>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>
+                    Refresh
+                  </button>
+                </div>
+                {queueItemsSorted.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-xs border border-border rounded-lg">
+                      <thead className="bg-slate-900 text-slate-400 sticky top-0">
+                        <tr>
+                          <th className="px-2 py-2"></th>
+                          <th className="text-left px-2 py-2">Package</th>
+                          <th className="text-left px-2 py-2">Version</th>
+                          <th className="text-left px-2 py-2">Python</th>
+                          <th className="text-left px-2 py-2">Platform</th>
+                          <th className="text-left px-2 py-2">Recipes</th>
+                          <th className="text-left px-2 py-2">Attempts</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {queueItemsSorted.map((q, idx) => {
+                          const key = `${q.package}@${q.version || "latest"}`;
+                          const checked = Boolean(selectedQueue[key]);
+                          return (
+                            <tr key={`${q.package}-${q.version}-${idx}`} className="border-t border-slate-800">
+                              <td className="px-2 py-2">
+                                <input type="checkbox" checked={checked} onChange={() => toggleSelectQueue(q)} />
+                              </td>
+                              <td className="px-2 py-2">{q.package}</td>
+                              <td className="px-2 py-2">{q.version || "latest"}</td>
+                              <td className="px-2 py-2 text-slate-400">{q.python_tag || "-"}</td>
+                              <td className="px-2 py-2 text-slate-400">{q.platform_tag || "-"}</td>
+                              <td className="px-2 py-2 text-slate-400 truncate">{(q.recipes || []).join(", ") || "-"}</td>
+                              <td className="px-2 py-2 text-slate-400">{q.attempts ?? 0}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <EmptyState title="Retry queue is empty" detail="No retry requests pending." icon="✅" />
+                )}
+              </div>
             </div>
           </div>
           <EventsTable events={filteredRecent} />
@@ -2678,8 +2853,6 @@ const enqueuePlanForInput = async (pi, verb) => {
     switch (viewKey) {
       case "inputs":
         return renderInputs();
-      case "queues":
-        return renderQueues();
       case "plans":
         return renderPlans();
       case "builds":
@@ -2737,7 +2910,6 @@ export default function App() {
         <Route path="/overview" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="overview" />} />
         <Route path="/inputs" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="inputs" />} />
         <Route path="/plans" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="plans" />} />
-        <Route path="/queues" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="queues" />} />
         <Route path="/builds" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="builds" />} />
         <Route path="/hints" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="hints" />} />
         <Route path="/settings" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="settings" />} />
