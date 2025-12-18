@@ -2148,7 +2148,7 @@ const enqueuePlanForInput = async (pi, verb) => {
           )}
           {planListError && <div className="text-xs text-amber-200">{planListError}</div>}
         </div>
-        <div className="glass subtle p-4 space-y-3 w-full overflow-hidden">
+        <div className="glass subtle p-4 space-y-3 w-full overflow-hidden min-w-0">
           <div className="text-lg font-semibold flex items-center gap-2">
             <span>Selected plan</span>
             <span className="chip text-xs">📌</span>
