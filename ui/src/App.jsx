@@ -1923,7 +1923,9 @@ const enqueuePlanForInput = async (pi, verb) => {
                         {pi.filename}
                       </div>
                       <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-                        <span className="chip">{pi.status}</span>
+                        <span className={`chip ${pi.status === "planning" ? "chip-animated" : ""}`}>
+                          {pi.status}
+                        </span>
                         {pi.source_type && <span className="chip">{pi.source_type}</span>}
                         {pi.size_bytes > 0 && <span className="chip">{formatBytes(pi.size_bytes)}</span>}
                         <span className="text-slate-500">id {pi.id}</span>

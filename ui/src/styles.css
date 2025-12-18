@@ -81,6 +81,30 @@ body {
   box-shadow: 0 10px 30px rgba(45, 212, 191, 0.25);
 }
 
+.chip-animated {
+  position: relative;
+  overflow: hidden;
+}
+.chip-animated::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(45, 212, 191, 0.25), transparent);
+  animation: shimmer 1.2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
 .btn {
   @apply inline-flex items-center justify-center px-3 py-2 rounded-lg font-semibold cursor-pointer transition;
 }
