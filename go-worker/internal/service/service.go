@@ -14,7 +14,7 @@ import (
 
 // Run starts the worker HTTP server (stub for now).
 func Run() error {
-	cfg := fromEnv()
+	cfg := overlaySettingsFromControlPlane(fromEnv())
 	w, err := BuildWorker(cfg)
 	if err != nil {
 		return err
@@ -139,4 +139,46 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// overlaySettingsFromControlPlane fetches settings from control-plane and applies
+// pool sizes when available, so worker concurrency aligns with UI-configured values.
+func overlaySettingsFromControlPlane(cfg Config) Config {
+	if cfg.ControlPlaneURL == "" {
+		return cfg
+	}
+	url := strings.TrimRight(cfg.ControlPlaneURL, "/") + "/api/settings"
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return cfg
+	}
+	if cfg.ControlPlaneToken != "" {
+		req.Header.Set("X-Worker-Token", cfg.ControlPlaneToken)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("settings fetch failed: %v", err)
+		return cfg
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("settings fetch status %d", resp.StatusCode)
+		return cfg
+	}
+	var payload struct {
+		PlanPoolSize  int `json:"plan_pool_size"`
+		BuildPoolSize int `json:"build_pool_size"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		log.Printf("settings decode failed: %v", err)
+		return cfg
+	}
+	if payload.PlanPoolSize > 0 {
+		cfg.PlanPoolSize = payload.PlanPoolSize
+	}
+	if payload.BuildPoolSize > 0 {
+		cfg.BuildPoolSize = payload.BuildPoolSize
+	}
+	return cfg
 }
