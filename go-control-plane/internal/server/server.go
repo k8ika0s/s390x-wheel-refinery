@@ -52,11 +52,18 @@ func (s *Service) routes() {
 		q = queue.NewFileQueue(s.cfg.QueueFile)
 	}
 	// Load persisted settings to align auto-plan/build toggles on startup.
-	if cfgFile := s.cfg.SettingsPath; cfgFile != "" {
-		current := settings.Load(cfgFile)
-		s.cfg.AutoPlan = settings.BoolValue(current.AutoPlan)
-		s.cfg.AutoBuild = settings.BoolValue(current.AutoBuild)
+	current := settings.ApplyDefaults(settings.Settings{})
+	if st != nil {
+		if loaded, err := st.GetSettings(context.Background()); err != nil {
+			log.Printf("warning: failed to load DB settings: %v", err)
+		} else {
+			current = loaded
+		}
+	} else if cfgFile := s.cfg.SettingsPath; cfgFile != "" {
+		current = settings.Load(cfgFile)
 	}
+	s.cfg.AutoPlan = settings.BoolValue(current.AutoPlan)
+	s.cfg.AutoBuild = settings.BoolValue(current.AutoBuild)
 	if s.cfg.SeedHints {
 		if res, err := store.SeedHintsFromDir(context.Background(), st, s.cfg.HintsDir); err != nil {
 			log.Printf("warning: hint seed failed: %v", err)

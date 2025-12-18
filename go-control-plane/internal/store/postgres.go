@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/lib/pq"
 )
 
@@ -109,6 +110,12 @@ ALTER TABLE manifests ADD COLUMN IF NOT EXISTS pack_urls TEXT[];
 ALTER TABLE manifests ADD COLUMN IF NOT EXISTS repair_url TEXT;
 ALTER TABLE manifests ADD COLUMN IF NOT EXISTS repair_digest TEXT;
 
+CREATE TABLE IF NOT EXISTS app_settings (
+    id         INT PRIMARY KEY DEFAULT 1,
+    payload    JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS plans (
     id         BIGSERIAL PRIMARY KEY,
     run_id     TEXT,
@@ -196,6 +203,44 @@ func (p *PostgresStore) Ping(ctx context.Context) error {
 		return err
 	}
 	return p.db.PingContext(ctx)
+}
+
+// GetSettings returns persisted settings, or defaults if none stored.
+func (p *PostgresStore) GetSettings(ctx context.Context) (settings.Settings, error) {
+	if err := p.ensureDB(); err != nil {
+		return settings.ApplyDefaults(settings.Settings{}), err
+	}
+	var payload []byte
+	err := p.db.QueryRowContext(ctx, `SELECT payload FROM app_settings WHERE id = 1`).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return settings.ApplyDefaults(settings.Settings{}), nil
+	}
+	if err != nil {
+		return settings.ApplyDefaults(settings.Settings{}), err
+	}
+	var s settings.Settings
+	if err := json.Unmarshal(payload, &s); err != nil {
+		return settings.ApplyDefaults(settings.Settings{}), err
+	}
+	return settings.ApplyDefaults(s), nil
+}
+
+// SaveSettings upserts settings into the DB.
+func (p *PostgresStore) SaveSettings(ctx context.Context, s settings.Settings) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
+	s = settings.ApplyDefaults(s)
+	data, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.ExecContext(ctx, `
+		INSERT INTO app_settings (id, payload, updated_at)
+		VALUES (1, $1, NOW())
+		ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+	`, data)
+	return err
 }
 
 // AddPendingInput inserts a new pending input.

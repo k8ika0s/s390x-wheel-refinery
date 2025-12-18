@@ -11,6 +11,7 @@ import (
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
 )
 
@@ -153,6 +154,12 @@ func (f *fakeStore) LeaseBuilds(ctx context.Context, max int) ([]store.BuildStat
 }
 func (f *fakeStore) DeleteBuilds(ctx context.Context, status string) (int64, error) {
 	return 0, nil
+}
+func (f *fakeStore) GetSettings(ctx context.Context) (settings.Settings, error) {
+	return settings.ApplyDefaults(settings.Settings{}), nil
+}
+func (f *fakeStore) SaveSettings(ctx context.Context, s settings.Settings) error {
+	return nil
 }
 
 // fakeQueue implements only Stats for these tests.

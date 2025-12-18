@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 )
 
 // ErrNotFound is returned when a requested record is missing.
@@ -205,6 +207,10 @@ type Store interface {
 	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)
+
+	// Settings
+	GetSettings(ctx context.Context) (settings.Settings, error)
+	SaveSettings(ctx context.Context, s settings.Settings) error
 }
 
 // HistoryFilter defines filters for history queries.
