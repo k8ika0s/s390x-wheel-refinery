@@ -1783,8 +1783,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               {visiblePendingInputs.map((pi) => (
                 <div key={pi.id} className="glass subtle px-3 py-3 rounded-lg space-y-2">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="font-semibold text-slate-100 truncate max-w-[18rem]" title={pi.filename}>
+                    <div className="space-y-1 min-w-0">
+                      <div className="font-semibold text-slate-100 truncate max-w-[16rem]" title={pi.filename}>
                         {pi.filename}
                       </div>
                       <div className="flex flex-wrap gap-2 text-xs text-slate-500">
