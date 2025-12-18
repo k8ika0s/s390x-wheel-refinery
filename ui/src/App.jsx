@@ -675,6 +675,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [apiBaseInput, setApiBaseInput] = useState(apiBase || "");
   const [apiBlocked, setApiBlocked] = useState(false);
   const [pendingInputs, setPendingInputs] = useState([]);
+  const pendingPrevRef = useRef([]);
+  const [pendingHighlight, setPendingHighlight] = useState({});
   const [builds, setBuilds] = useState([]);
   const [buildsLoading, setBuildsLoading] = useState(false);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
@@ -778,7 +780,25 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       }
       if (wantsInputs || wantsOverview) {
         const pending = await fetchPendingInputs(authToken).catch(() => []);
-        setPendingInputs(Array.isArray(pending) ? pending : []);
+        const pendingArr = Array.isArray(pending) ? pending : [];
+        const prevIds = new Set((pendingPrevRef.current || []).map((pi) => pi.id));
+        const newOnes = pendingArr.filter((pi) => pi?.id && !prevIds.has(pi.id));
+        if (newOnes.length) {
+          const add = {};
+          newOnes.forEach((pi) => {
+            add[pi.id] = true;
+          });
+          setPendingHighlight((prev) => ({ ...prev, ...add }));
+          setTimeout(() => {
+            setPendingHighlight((prev) => {
+              const next = { ...prev };
+              newOnes.forEach((pi) => delete next[pi.id]);
+              return next;
+            });
+          }, 1400);
+        }
+        pendingPrevRef.current = pendingArr;
+        setPendingInputs(pendingArr);
       }
       if (wantsBuilds) {
         const buildsList = await fetchBuilds({ status: buildStatus || undefined }, authToken).catch(() => []);
@@ -1893,7 +1913,10 @@ const enqueuePlanForInput = async (pi, verb) => {
           ) : (
             <div className="flex flex-col gap-2 text-sm text-slate-200">
               {visiblePendingInputs.map((pi) => (
-                <div key={pi.id} className="glass subtle px-3 py-3 rounded-lg space-y-3 w-full">
+                <div
+                  key={pi.id}
+                  className={`glass subtle px-3 py-3 rounded-lg space-y-3 w-full ${pendingHighlight[pi.id] ? "flash-in" : ""}`}
+                >
                   <div className="flex items-start gap-3">
                     <div className="space-y-2 min-w-0 flex-1">
                       <div className="font-semibold text-slate-100 truncate" title={pi.filename}>

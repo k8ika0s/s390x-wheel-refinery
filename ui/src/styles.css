@@ -132,6 +132,22 @@ input:focus-visible {
   @apply bg-slate-800/80 animate-pulse rounded;
 }
 
+.flash-in {
+  animation: flashFade 1.2s ease;
+}
+
+@keyframes flashFade {
+  0% {
+    background-color: rgba(56, 189, 248, 0.35);
+  }
+  50% {
+    background-color: rgba(56, 189, 248, 0.2);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
 .toast {
   @apply glass p-3 shadow-lg cursor-pointer transition-transform;
 }
