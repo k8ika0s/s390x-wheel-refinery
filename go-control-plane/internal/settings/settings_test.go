@@ -35,3 +35,15 @@ func TestApplyDefaultsSetsMissing(t *testing.T) {
 		t.Fatalf("expected numeric defaults to be set: %+v", out)
 	}
 }
+
+func TestValidate(t *testing.T) {
+	if err := Validate(Settings{PythonVersion: "3.10", PlatformTag: "manylinux2014_s390x"}); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	if err := Validate(Settings{PythonVersion: "2.7"}); err == nil {
+		t.Fatalf("expected error for python 2.7")
+	}
+	if err := Validate(Settings{PlatformTag: "bad tag"}); err == nil {
+		t.Fatalf("expected error for invalid platform tag")
+	}
+}

@@ -30,7 +30,7 @@ type pendingInput struct {
 	Metadata     json.RawMessage `json:"metadata,omitempty"`
 }
 
-func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL string, planPool *atomic.Int32) {
+func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL string, planPool *atomic.Int32, pyVersion, platformTag *atomic.Value) {
 	interval := time.Duration(cfg.PlanPollIntervalSec) * time.Second
 	if interval <= 0 {
 		interval = 15 * time.Second
@@ -75,7 +75,18 @@ func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL str
 			}
 			piCopy := pi
 			g.Go(func() error {
-				if err := planOne(gctx, client, cfg, inputStore, piCopy, statusURL); err != nil {
+				localCfg := cfg
+				if pyVersion != nil {
+					if v, ok := pyVersion.Load().(string); ok && v != "" {
+						localCfg.PythonVersion = v
+					}
+				}
+				if platformTag != nil {
+					if v, ok := platformTag.Load().(string); ok && v != "" {
+						localCfg.PlatformTag = v
+					}
+				}
+				if err := planOne(gctx, client, localCfg, inputStore, piCopy, statusURL); err != nil {
 					log.Printf("planner: failed planning id=%d: %v", piCopy.ID, err)
 				}
 				return nil

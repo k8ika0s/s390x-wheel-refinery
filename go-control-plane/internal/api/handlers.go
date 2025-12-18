@@ -796,6 +796,10 @@ func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
 			s.PollMs = 0
 		}
 		s = settings.ApplyDefaults(s)
+		if err := settings.Validate(s); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		if h.Store != nil {
 			if err := h.Store.SaveSettings(r.Context(), s); err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
