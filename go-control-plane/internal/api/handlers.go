@@ -386,6 +386,19 @@ func normalizeName(name string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "_", "-"))
 }
 
+func looksLikeHTMLOrScript(data []byte) bool {
+	sample := strings.ToLower(string(data))
+	if len(sample) > 4096 {
+		sample = sample[:4096]
+	}
+	for _, marker := range []string{"<script", "<html", "<?php", "<iframe", "javascript:"} {
+		if strings.Contains(sample, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func parseRequirements(data []byte) []requirementSpec {
 	lines := strings.Split(string(data), "\n")
 	out := make([]requirementSpec, 0, len(lines))
@@ -513,6 +526,27 @@ func readWheelMetadata(data []byte) ([]requirementSpec, error) {
 	return parseRequiresDist(string(meta)), nil
 }
 
+func validateWheelArchive(data []byte) error {
+	reader := bytes.NewReader(data)
+	zr, err := zip.NewReader(reader, int64(len(data)))
+	if err != nil {
+		return fmt.Errorf("invalid wheel archive: %w", err)
+	}
+	if len(zr.File) == 0 {
+		return fmt.Errorf("wheel archive is empty")
+	}
+	if len(zr.File) > 5000 {
+		return fmt.Errorf("wheel archive has too many files")
+	}
+	for _, f := range zr.File {
+		name := f.Name
+		if strings.HasPrefix(name, "/") || strings.Contains(name, "..") {
+			return fmt.Errorf("wheel contains unsafe path: %s", name)
+		}
+	}
+	return nil
+}
+
 func inputObjectKey(prefix, digestHex, filename string) string {
 	clean := strings.TrimSpace(filename)
 	if clean == "" {
@@ -561,6 +595,10 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := lintRequirements(data); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if looksLikeHTMLOrScript(data) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file appears to contain HTML/script content"})
 		return
 	}
 	sum := sha256.Sum256(data)
@@ -639,6 +677,10 @@ func (h *Handler) wheelsUpload(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(io.LimitReader(file, 256<<20))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read file"})
+		return
+	}
+	if err := validateWheelArchive(data); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	sum := sha256.Sum256(data)
