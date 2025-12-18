@@ -65,5 +65,5 @@ This document tracks the staged implementation to separate planning and building
 - Planner loop lacks dedupe/in-flight tracking and robust error handling/backoff.
 - Planner pop/status endpoints are not yet worker-token protected.
 - Prometheus metrics omit plan queue/pending gauges.
-- Settings persistence relies on a shared settings file; verify volume mounting so AutoPlan/AutoBuild survive restarts.
+- Settings persist in Postgres (`app_settings`), so AutoPlan/AutoBuild survive restarts without a shared settings file.
 - No integration test for upload → pending → plan → build; minimal coverage for planner loop error paths.

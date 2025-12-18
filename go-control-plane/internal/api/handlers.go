@@ -739,6 +739,16 @@ func (h *Handler) wheelsUpload(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		// Prefer DB-backed settings; fall back to file if no store.
+		if h.Store != nil {
+			s, err := h.Store.GetSettings(r.Context())
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, s)
+			return
+		}
 		writeJSON(w, http.StatusOK, settings.Load(h.Config.SettingsPath))
 	case http.MethodPost:
 		var s settings.Settings
@@ -754,9 +764,17 @@ func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
 			s.PollMs = 0
 		}
 		s = settings.ApplyDefaults(s)
-		if err := settings.Save(h.Config.SettingsPath, s); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
+		if h.Store != nil {
+			if err := h.Store.SaveSettings(r.Context(), s); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+		} else {
+			// fallback to file persistence if no store is configured
+			if err := settings.Save(h.Config.SettingsPath, s); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
 		}
 		// reflect auto flags into config defaults for this process lifetime
 		h.Config.AutoPlan = settings.BoolValue(s.AutoPlan)
