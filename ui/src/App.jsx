@@ -967,6 +967,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   }, [view, authToken]);
 
+  // Prefetch plans once so the library stays warm even before visiting the Plans tab.
+  useEffect(() => {
+    loadPlanList();
+  }, [authToken]);
+
   useEffect(() => {
     if (view === "plans" && selectedPlanId) {
       loadPlanDetails(selectedPlanId);
@@ -2009,11 +2014,17 @@ const enqueuePlanForInput = async (pi, verb) => {
                 return (
                   <button
                     key={plan.id}
-                    className={`w-full text-left border border-border rounded-lg p-2 transition ${selected ? "bg-slate-800/60" : "hover:bg-slate-800/30"}`}
+                    aria-pressed={selected}
+                    className={`w-full text-left border rounded-lg p-2 transition ${
+                      selected ? "bg-slate-800/80 border-sky-500/70 shadow-lg shadow-sky-900/30" : "border-border hover:bg-slate-800/30"
+                    }`}
                     onClick={() => setSelectedPlanId(plan.id)}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-100">Plan #{plan.id}</span>
+                      <span className="font-semibold text-slate-100 flex items-center gap-2">
+                        {selected && <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" aria-hidden />}
+                        Plan #{plan.id}
+                      </span>
                       <span className="text-xs text-slate-500">{formatEpoch(plan.created_at)}</span>
                     </div>
                     <div className="text-xs text-slate-400 flex flex-wrap gap-2 mt-1">
@@ -2136,8 +2147,11 @@ const enqueuePlanForInput = async (pi, verb) => {
                 return (
                   <button
                     key={s}
-                    className={`chip cursor-pointer ${active ? "chip-active" : "hover:bg-slate-800"}`}
+                    className={`chip cursor-pointer ${active ? "chip-active" : "hover:bg-slate-800"} ${
+                      buildsLoading ? "opacity-60 cursor-wait" : ""
+                    }`}
                     onClick={() => setStatusFilter(active ? "" : s)}
+                    disabled={buildsLoading}
                     title="Toggle status filter"
                   >
                     {s}
@@ -2157,6 +2171,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                   setStatusFilter("");
                   load({ packageFilter: "", statusFilter: "" });
                 }}
+                disabled={buildsLoading}
               >
                 Clear all
               </button>
@@ -2185,11 +2200,12 @@ const enqueuePlanForInput = async (pi, verb) => {
               {["", "pending", "retry", "building", "failed", "built"].map((s) => (
                 <button
                   key={s || "all"}
-                  className={`chip ${buildStatusFilter === s ? "chip-active" : "hover:bg-slate-800"}`}
+                  className={`chip ${buildStatusFilter === s ? "chip-active" : "hover:bg-slate-800"} ${buildsLoading ? "opacity-60 cursor-wait" : ""}`}
                   onClick={() => {
                     setBuildStatusFilter(s);
                     load({ packageFilter: pkgFilter, statusFilter, buildStatusFilter: s });
                   }}
+                  disabled={buildsLoading}
                 >
                   {s || "all"}
                 </button>
@@ -2210,26 +2226,39 @@ const enqueuePlanForInput = async (pi, verb) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {builds.length ? builds.map((b, idx) => (
-                    <tr
-                      key={`${b.package}-${b.version}-${idx}`}
-                      className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
-                      onClick={() => navigate(`/package/${encodeURIComponent(b.package)}`)}
-                      title="View package details"
-                    >
-                      <td className="px-2 py-2">{b.package}</td>
-                      <td className="px-2 py-2">{b.version}</td>
-                      <td className="px-2 py-2"><span className="chip">{b.status}</span></td>
-                      <td className="px-2 py-2">{b.attempts ?? 0}</td>
-                      <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
-                      <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
-                      <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{b.last_error || "-"}</td>
-                    </tr>
-                  )) : (
+                  {buildsLoading && (
                     <tr>
-                      <td className="px-2 py-3 text-slate-400" colSpan="7">No builds found</td>
+                      <td className="px-2 py-3 text-slate-400 text-center" colSpan="7">
+                        Loading builds…
+                      </td>
                     </tr>
                   )}
+                  {!buildsLoading && builds.length
+                    ? builds.map((b, idx) => (
+                        <tr
+                          key={`${b.package}-${b.version}-${idx}`}
+                          className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
+                          onClick={() => navigate(`/package/${encodeURIComponent(b.package)}`)}
+                          title="View package details"
+                        >
+                          <td className="px-2 py-2">{b.package}</td>
+                          <td className="px-2 py-2">{b.version}</td>
+                          <td className="px-2 py-2">
+                            <span className="chip">{b.status}</span>
+                          </td>
+                          <td className="px-2 py-2">{b.attempts ?? 0}</td>
+                          <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
+                          <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
+                          <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{b.last_error || "-"}</td>
+                        </tr>
+                      ))
+                    : !buildsLoading && (
+                        <tr>
+                          <td className="px-2 py-3 text-slate-400 text-center" colSpan="7">
+                            No builds found
+                          </td>
+                        </tr>
+                      )}
                 </tbody>
               </table>
             </div>
