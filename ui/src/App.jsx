@@ -661,11 +661,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [builds, setBuilds] = useState([]);
   const [buildsLoading, setBuildsLoading] = useState(false);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
-const [clearingBuilds, setClearingBuilds] = useState(false);
-const [clearingPendingInputs, setClearingPendingInputs] = useState(false);
-const [clearingPlanQueue, setClearingPlanQueue] = useState(false);
-const [pendingActions, setPendingActions] = useState({});
-const [pendingRefreshing, setPendingRefreshing] = useState(false);
+  const [clearingBuilds, setClearingBuilds] = useState(false);
+  const [clearingPendingInputs, setClearingPendingInputs] = useState(false);
+  const [clearingPlanQueue, setClearingPlanQueue] = useState(false);
   const [pendingActions, setPendingActions] = useState({});
   const [pendingRefreshing, setPendingRefreshing] = useState(false);
   const [planList, setPlanList] = useState([]);
