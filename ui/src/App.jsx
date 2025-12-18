@@ -1779,12 +1779,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           {visiblePendingInputs.length === 0 ? (
             <EmptyState title="No pending uploads" detail="New uploads will appear here until planned." icon="✅" />
           ) : (
-            <div className="grid gap-2 md:grid-cols-2 text-sm text-slate-200">
+            <div className="flex flex-col gap-2 text-sm text-slate-200">
               {visiblePendingInputs.map((pi) => (
-                <div key={pi.id} className="glass subtle px-3 py-3 rounded-lg space-y-2 w-full">
-                  <div className="grid grid-cols-[1fr_auto] gap-3 items-start">
-                    <div className="space-y-1 min-w-0">
-                      <div className="font-semibold text-slate-100 truncate max-w-[14rem]" title={pi.filename}>
+                <div key={pi.id} className="glass subtle px-3 py-3 rounded-lg space-y-3 w-full">
+                  <div className="flex items-start gap-3">
+                    <div className="space-y-2 min-w-0 flex-1">
+                      <div className="font-semibold text-slate-100 truncate" title={pi.filename}>
                         {pi.filename}
                       </div>
                       <div className="flex flex-wrap gap-2 text-xs text-slate-500">
@@ -1793,11 +1793,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                         {pi.size_bytes > 0 && <span className="chip">{formatBytes(pi.size_bytes)}</span>}
                         <span className="text-slate-500">id {pi.id}</span>
                       </div>
+                      {pi.error && <div className="text-red-300 text-xs">{pi.error}</div>}
                     </div>
-                    <div className="flex flex-col gap-2 items-end">
+                    <div className="flex flex-col gap-2 items-stretch w-[120px] shrink-0">
                       {pi.status === "pending" && (
                         <button
-                          className="btn btn-secondary px-2 py-1 text-xs w-full"
+                          className="btn btn-secondary px-2 py-1 text-xs"
                           onClick={() => enqueuePlanForInput(pi, "Enqueued for planning")}
                         >
                           Enqueue
@@ -1805,21 +1806,20 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                       )}
                       {pi.status === "failed" && (
                         <button
-                          className="btn btn-secondary px-2 py-1 text-xs w-full"
+                          className="btn btn-secondary px-2 py-1 text-xs"
                           onClick={() => enqueuePlanForInput(pi, "Replan queued")}
                         >
                           Replan
                         </button>
                       )}
                       <button
-                        className="btn btn-secondary px-2 py-1 text-xs w-full"
+                        className="btn btn-secondary px-2 py-1 text-xs"
                         onClick={() => handleDeletePendingInput(pi)}
                       >
                         Delete
                       </button>
                     </div>
                   </div>
-                  {pi.error && <div className="text-red-300 text-xs">{pi.error}</div>}
                 </div>
               ))}
             </div>
