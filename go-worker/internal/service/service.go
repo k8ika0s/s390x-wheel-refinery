@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
@@ -15,10 +16,20 @@ import (
 // Run starts the worker HTTP server (stub for now).
 func Run() error {
 	cfg := overlaySettingsFromControlPlane(fromEnv())
+	planPool := atomic.Int32{}
+	buildPool := atomic.Int32{}
+	if cfg.PlanPoolSize > 0 {
+		planPool.Store(int32(cfg.PlanPoolSize))
+	}
+	if cfg.BuildPoolSize > 0 {
+		buildPool.Store(int32(cfg.BuildPoolSize))
+	}
 	w, err := BuildWorker(cfg)
 	if err != nil {
 		return err
 	}
+	// allow dynamic pool overrides from settings poller
+	w.buildPoolSize = &buildPool
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if cfg.PlanPollEnabled && cfg.ControlPlaneURL != "" {
@@ -34,8 +45,9 @@ func Run() error {
 		if listURL == "" {
 			listURL = strings.TrimRight(cfg.ControlPlaneURL, "/") + "/api/pending-inputs"
 		}
-		go plannerLoop(ctx, cfg, popURL, statusURL, listURL)
+		go plannerLoop(ctx, cfg, popURL, statusURL, listURL, &planPool)
 	}
+	go pollSettings(ctx, cfg, &planPool, &buildPool)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(wr http.ResponseWriter, r *http.Request) {
 		wr.WriteHeader(http.StatusOK)
@@ -139,6 +151,29 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// pollSettings periodically refreshes pool sizes from control-plane settings.
+func pollSettings(ctx context.Context, cfg Config, planPool, buildPool *atomic.Int32) {
+	if cfg.ControlPlaneURL == "" {
+		return
+	}
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			updated := overlaySettingsFromControlPlane(cfg)
+			if updated.PlanPoolSize > 0 && planPool != nil {
+				planPool.Store(int32(updated.PlanPoolSize))
+			}
+			if updated.BuildPoolSize > 0 && buildPool != nil {
+				buildPool.Store(int32(updated.BuildPoolSize))
+			}
+		}
+	}
 }
 
 // overlaySettingsFromControlPlane fetches settings from control-plane and applies

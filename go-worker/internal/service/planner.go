@@ -15,6 +15,7 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/objectstore"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
 	"golang.org/x/sync/errgroup"
+	"sync/atomic"
 )
 
 type pendingInput struct {
@@ -29,7 +30,7 @@ type pendingInput struct {
 	Metadata     json.RawMessage `json:"metadata,omitempty"`
 }
 
-func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL string) {
+func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL string, planPool *atomic.Int32) {
 	interval := time.Duration(cfg.PlanPollIntervalSec) * time.Second
 	if interval <= 0 {
 		interval = 15 * time.Second
@@ -59,6 +60,9 @@ func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL str
 		pendingMap := fetchPendingMap(ctx, client, listURL, cfg.WorkerToken)
 		g, gctx := errgroup.WithContext(ctx)
 		pool := cfg.PlanPoolSize
+		if planPool != nil && planPool.Load() > 0 {
+			pool = int(planPool.Load())
+		}
 		if pool <= 0 {
 			pool = 2
 		}
