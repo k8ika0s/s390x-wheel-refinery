@@ -661,9 +661,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [builds, setBuilds] = useState([]);
   const [buildsLoading, setBuildsLoading] = useState(false);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
-  const [clearingBuilds, setClearingBuilds] = useState(false);
-  const [clearingPendingInputs, setClearingPendingInputs] = useState(false);
-  const [clearingPlanQueue, setClearingPlanQueue] = useState(false);
+const [clearingBuilds, setClearingBuilds] = useState(false);
+const [clearingPendingInputs, setClearingPendingInputs] = useState(false);
+const [clearingPlanQueue, setClearingPlanQueue] = useState(false);
+const [pendingActions, setPendingActions] = useState({});
+const [pendingRefreshing, setPendingRefreshing] = useState(false);
+  const [pendingActions, setPendingActions] = useState({});
+  const [pendingRefreshing, setPendingRefreshing] = useState(false);
   const [planList, setPlanList] = useState([]);
   const [planListLoading, setPlanListLoading] = useState(false);
   const [planListError, setPlanListError] = useState("");
@@ -1055,9 +1059,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
-  const handleDeletePendingInput = async (pi) => {
+const handleDeletePendingInput = async (pi) => {
     if (!pi?.id) return;
     if (!window.confirm(`Delete pending input ${pi.filename || pi.id}?`)) return;
+    setPendingActions((m) => ({ ...m, [pi.id]: "delete" }));
     try {
       await deletePendingInput(pi.id, authToken);
       pushToast?.({ type: "success", title: "Pending input deleted", message: pi.filename || `ID ${pi.id}` });
@@ -1065,6 +1070,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     } catch (e) {
       setError(e.message);
       pushToast?.({ type: "error", title: "Delete pending input failed", message: e.message });
+    } finally {
+      setPendingActions((m) => {
+        const next = { ...m };
+        delete next[pi.id];
+        return next;
+      });
     }
   };
 
@@ -1119,13 +1130,21 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
-  const enqueuePlanForInput = async (pi, verb) => {
+const enqueuePlanForInput = async (pi, verb) => {
+    if (!pi?.id) return;
+    setPendingActions((m) => ({ ...m, [pi.id]: "enqueue" }));
     try {
       await enqueuePlan(pi.id, authToken);
       pushToast?.({ type: "success", title: verb, message: pi.filename });
       await load();
     } catch (e) {
       pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
+    } finally {
+      setPendingActions((m) => {
+        const next = { ...m };
+        delete next[pi.id];
+        return next;
+      });
     }
   };
 
@@ -1762,8 +1781,19 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <span className="chip text-xs">🧾</span>
             </div>
             <div className="flex flex-wrap gap-2 whitespace-nowrap">
-              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load()}>
-                Refresh
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                onClick={async () => {
+                  setPendingRefreshing(true);
+                  try {
+                    await load({ force: true });
+                  } finally {
+                    setPendingRefreshing(false);
+                  }
+                }}
+                disabled={pendingRefreshing}
+              >
+                {pendingRefreshing ? "Refreshing..." : "Refresh"}
               </button>
               {pendingInputs.some((pi) => pi.status === "pending") && (
                 <button
@@ -1799,24 +1829,27 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                       {pi.status === "pending" && (
                         <button
                           className="btn btn-secondary px-2 py-1 text-xs"
+                          disabled={!!pendingActions[pi.id]}
                           onClick={() => enqueuePlanForInput(pi, "Enqueued for planning")}
                         >
-                          Enqueue
+                          {pendingActions[pi.id] ? "Enqueuing..." : "Enqueue"}
                         </button>
                       )}
                       {pi.status === "failed" && (
                         <button
                           className="btn btn-secondary px-2 py-1 text-xs"
+                          disabled={!!pendingActions[pi.id]}
                           onClick={() => enqueuePlanForInput(pi, "Replan queued")}
                         >
-                          Replan
+                          {pendingActions[pi.id] ? "Replanning..." : "Replan"}
                         </button>
                       )}
                       <button
                         className="btn btn-secondary px-2 py-1 text-xs"
+                        disabled={!!pendingActions[pi.id]}
                         onClick={() => handleDeletePendingInput(pi)}
                       >
-                        Delete
+                        {pendingActions[pi.id] === "delete" ? "Deleting..." : "Delete"}
                       </button>
                     </div>
                   </div>
