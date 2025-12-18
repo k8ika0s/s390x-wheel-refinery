@@ -91,3 +91,23 @@ func TestPlanEndpointGeneratesPlan(t *testing.T) {
 		t.Fatalf("unexpected status: %d", getResp.StatusCode)
 	}
 }
+
+func TestOverlaySettingsFromControlPlane(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/settings" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"plan_pool_size":4,"build_pool_size":3}`))
+	}))
+	defer s.Close()
+	cfg := Config{
+		ControlPlaneURL: s.URL,
+		PlanPoolSize:    1,
+		BuildPoolSize:   1,
+	}
+	out := overlaySettingsFromControlPlane(cfg)
+	if out.PlanPoolSize != 4 || out.BuildPoolSize != 3 {
+		t.Fatalf("overlay failed: %#v", out)
+	}
+}

@@ -209,6 +209,18 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 			hm.Count = count
 		}
 	}
+	poolPlan := 0
+	poolBuild := 0
+	if h.Store != nil {
+		if s, err := h.Store.GetSettings(ctx); err == nil {
+			poolPlan = s.PlanPoolSize
+			poolBuild = s.BuildPoolSize
+		}
+	} else {
+		s := settings.Load(h.Config.SettingsPath)
+		poolPlan = s.PlanPoolSize
+		poolBuild = s.BuildPoolSize
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary": map[string]any{
 			"title":       "Control-plane metrics",
@@ -224,6 +236,8 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		"recent_failures": sum.Failures,
 		"auto_plan":       h.Config.AutoPlan,
 		"auto_build":      h.Config.AutoBuild,
+		"plan_pool_size":  poolPlan,
+		"build_pool_size": poolBuild,
 	})
 }
 
@@ -238,6 +252,18 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 	sum, _ := h.Store.Summary(ctx, 10)
 	qstats, _ := h.Queue.Stats(ctx)
 	buildStats, _ := h.Queue.Stats(ctx)
+	poolPlan := 0
+	poolBuild := 0
+	if h.Store != nil {
+		if s, err := h.Store.GetSettings(ctx); err == nil {
+			poolPlan = s.PlanPoolSize
+			poolBuild = s.BuildPoolSize
+		}
+	} else {
+		s := settings.Load(h.Config.SettingsPath)
+		poolPlan = s.PlanPoolSize
+		poolBuild = s.BuildPoolSize
+	}
 	dbOK := 0
 	if pinger, ok := h.Store.(interface{ Ping(context.Context) error }); ok {
 		if err := pinger.Ping(ctx); err == nil {
@@ -257,6 +283,12 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&buf, "# HELP refinery_build_queue_oldest_seconds Age in seconds of the oldest build item.\n")
 	fmt.Fprintf(&buf, "# TYPE refinery_build_queue_oldest_seconds gauge\n")
 	fmt.Fprintf(&buf, "refinery_build_queue_oldest_seconds %d\n", buildStats.OldestAge)
+	fmt.Fprintf(&buf, "# HELP refinery_pool_size_plan Configured plan pool size.\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_pool_size_plan gauge\n")
+	fmt.Fprintf(&buf, "refinery_pool_size_plan %d\n", poolPlan)
+	fmt.Fprintf(&buf, "# HELP refinery_pool_size_build Configured build pool size.\n")
+	fmt.Fprintf(&buf, "# TYPE refinery_pool_size_build gauge\n")
+	fmt.Fprintf(&buf, "refinery_pool_size_build %d\n", poolBuild)
 	if pq, ok := h.PlanQ.(interface {
 		Len(context.Context) (int64, error)
 	}); ok && pq != nil {

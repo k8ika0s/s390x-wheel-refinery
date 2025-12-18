@@ -14,6 +14,8 @@ import (
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/objectstore"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
+	"golang.org/x/sync/errgroup"
+	"sync/atomic"
 )
 
 type pendingInput struct {
@@ -28,7 +30,7 @@ type pendingInput struct {
 	Metadata     json.RawMessage `json:"metadata,omitempty"`
 }
 
-func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL string) {
+func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL string, planPool *atomic.Int32) {
 	interval := time.Duration(cfg.PlanPollIntervalSec) * time.Second
 	if interval <= 0 {
 		interval = 15 * time.Second
@@ -39,19 +41,11 @@ func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL str
 	if batch <= 0 {
 		batch = 5
 	}
-	inFlight := make(map[string]time.Time)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-		}
-		now := time.Now()
-		// expire in-flight markers older than 10 minutes
-		for id, ts := range inFlight {
-			if now.Sub(ts) > 10*time.Minute {
-				delete(inFlight, id)
-			}
 		}
 		ids, err := popPlanIDs(ctx, client, popURL, cfg.WorkerToken, batch)
 		if err != nil {
@@ -64,21 +58,30 @@ func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL str
 			continue
 		}
 		pendingMap := fetchPendingMap(ctx, client, listURL, cfg.WorkerToken)
+		g, gctx := errgroup.WithContext(ctx)
+		pool := cfg.PlanPoolSize
+		if planPool != nil && planPool.Load() > 0 {
+			pool = int(planPool.Load())
+		}
+		if pool <= 0 {
+			pool = 2
+		}
+		g.SetLimit(pool)
 		for _, id := range ids {
-			if _, seen := inFlight[id]; seen {
-				continue
-			}
-			inFlight[id] = time.Now()
 			pi, ok := pendingMap[id]
 			if !ok {
 				log.Printf("planner: pending input %s not found in list", id)
 				continue
 			}
-			err := planOne(ctx, client, cfg, inputStore, pi, statusURL)
-			if err != nil {
-				log.Printf("planner: failed planning id=%s: %v", id, err)
-			}
+			piCopy := pi
+			g.Go(func() error {
+				if err := planOne(gctx, client, cfg, inputStore, piCopy, statusURL); err != nil {
+					log.Printf("planner: failed planning id=%d: %v", piCopy.ID, err)
+				}
+				return nil
+			})
 		}
+		_ = g.Wait()
 	}
 }
 

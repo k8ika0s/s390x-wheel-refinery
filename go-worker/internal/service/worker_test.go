@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
@@ -216,6 +218,81 @@ func TestFetchRuntimeBuildsStub(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("stub runtime not written: %v", err)
+	}
+}
+
+type stubQueue struct {
+	reqs []queue.Request
+}
+
+func (s *stubQueue) Enqueue(ctx context.Context, req queue.Request) error { return nil }
+func (s *stubQueue) List(ctx context.Context) ([]queue.Request, error)    { return nil, nil }
+func (s *stubQueue) Clear(ctx context.Context) error                      { return nil }
+func (s *stubQueue) Stats(ctx context.Context) (queue.Stats, error)       { return queue.Stats{}, nil }
+func (s *stubQueue) Pop(ctx context.Context, max int) ([]queue.Request, error) {
+	out := s.reqs
+	s.reqs = nil
+	return out, nil
+}
+
+type countingRunner struct {
+	delay     time.Duration
+	max       int32
+	inFlight  int32
+	totalRuns int32
+}
+
+func (r *countingRunner) Run(ctx context.Context, job runner.Job) (time.Duration, string, error) {
+	cur := atomic.AddInt32(&r.inFlight, 1)
+	defer atomic.AddInt32(&r.inFlight, -1)
+	for {
+		old := atomic.LoadInt32(&r.max)
+		if cur <= old {
+			break
+		}
+		if atomic.CompareAndSwapInt32(&r.max, old, cur) {
+			break
+		}
+	}
+	atomic.AddInt32(&r.totalRuns, 1)
+	time.Sleep(r.delay)
+	return r.delay, "", nil
+}
+
+func TestDrainRespectsBuildPoolSize(t *testing.T) {
+	dir := t.TempDir()
+	snap := plan.Snapshot{
+		Plan: []plan.FlatNode{
+			{Name: "a", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"},
+			{Name: "b", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"},
+		},
+	}
+	if err := plan.Write(filepath.Join(dir, "plan.json"), snap); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	q := &stubQueue{reqs: []queue.Request{
+		{Package: "a", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x"},
+		{Package: "b", Version: "1.0.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x"},
+	}}
+	r := &countingRunner{delay: 50 * time.Millisecond}
+	w := &Worker{
+		Cfg: Config{
+			OutputDir:     dir,
+			CacheDir:      dir,
+			BuildPoolSize: 1,
+		},
+		Queue:    q,
+		Runner:   r,
+		packPath: make(map[string]string),
+	}
+	if err := w.Drain(context.Background()); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if r.max > 1 {
+		t.Fatalf("expected max concurrency 1, got %d", r.max)
+	}
+	if atomic.LoadInt32(&r.totalRuns) != 2 {
+		t.Fatalf("expected 2 runs, got %d", r.totalRuns)
 	}
 }
 

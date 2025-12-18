@@ -74,6 +74,8 @@ type Config struct {
 	DefaultRuntimeCmd   string
 	DefaultRepairCmd    string
 	PackRecipesDir      string
+	BuildPoolSize       int
+	PlanPoolSize        int
 }
 
 func fromEnv() Config {
@@ -138,6 +140,8 @@ func fromEnv() Config {
 		DefaultRuntimeCmd:   getenv("DEFAULT_RUNTIME_CMD", "/app/recipes/cpython311.sh"),
 		DefaultRepairCmd:    getenv("DEFAULT_REPAIR_CMD", "/app/recipes/repair.sh"),
 		PackRecipesDir:      getenv("PACK_RECIPES_DIR", "/app/recipes"),
+		BuildPoolSize:       getenvInt("BUILD_POOL_SIZE", 2),
+		PlanPoolSize:        getenvInt("PLAN_POOL_SIZE", 2),
 	}
 	return cfg
 }

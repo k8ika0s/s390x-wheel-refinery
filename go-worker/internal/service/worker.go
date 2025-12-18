@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
@@ -45,6 +46,8 @@ type Worker struct {
 	packPath map[string]string
 	mu       sync.Mutex
 	planSnap plan.Snapshot
+	// buildPoolSize allows dynamic overrides from control-plane settings.
+	buildPoolSize *atomic.Int32
 }
 
 type result struct {
@@ -137,6 +140,13 @@ func (w *Worker) Drain(ctx context.Context) error {
 	}
 	results := make([]result, len(jobs))
 	g, ctx := errgroup.WithContext(ctx)
+	poolSize := w.Cfg.BuildPoolSize
+	if w.buildPoolSize != nil && w.buildPoolSize.Load() > 0 {
+		poolSize = int(w.buildPoolSize.Load())
+	}
+	if poolSize > 0 {
+		g.SetLimit(poolSize)
+	}
 	for i, job := range jobs {
 		i, job := i, job
 		g.Go(func() error {
@@ -668,6 +678,13 @@ func BuildWorker(cfg Config) (*Worker, error) {
 			Password: cfg.CASRegistryPass,
 		},
 		packPath: make(map[string]string),
+		buildPoolSize: func() *atomic.Int32 {
+			var v atomic.Int32
+			if cfg.BuildPoolSize > 0 {
+				v.Store(int32(cfg.BuildPoolSize))
+			}
+			return &v
+		}(),
 	}, nil
 }
 
