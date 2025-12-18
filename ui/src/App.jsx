@@ -2204,22 +2204,70 @@ const enqueuePlanForInput = async (pi, verb) => {
                 <span className="chip">{planPlatformTag}</span>
               </div>
               {selectedPlanNodes.length > 0 ? (
-                <div className="max-h-72 overflow-auto text-xs text-slate-300 space-y-2">
-                  {selectedPlanNodes.map((node, idx) => (
-                    <div
-                      key={`${node.name}-${node.version}-${idx}`}
-                      className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between"
-                    >
-                      <div className="flex flex-col min-w-0">
-                        <span className="font-semibold text-slate-100 truncate" title={node.name}>{node.name}</span>
-                        <span className="text-slate-400 truncate">{node.version || "version?"}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="chip">{node.action}</span>
-                        {node.python_version && <span className="chip chip-muted">{node.python_version}</span>}
-                      </div>
-                    </div>
-                  ))}
+                <div className="max-h-80 overflow-auto text-xs text-slate-300 space-y-2">
+                  {selectedPlanNodes.map((node, idx) => {
+                    const hasHints = Array.isArray(node.hints) && node.hints.length > 0;
+                    const hasRecipes = Array.isArray(node.recipes) && node.recipes.length > 0;
+                    return (
+                      <details
+                        key={`${node.name}-${node.version}-${idx}`}
+                        className={`glass subtle px-3 py-2 rounded-lg ${hasHints || hasRecipes ? "cursor-pointer" : ""}`}
+                      >
+                        <summary className="flex items-center justify-between gap-3">
+                          <div className="flex flex-col min-w-0">
+                            <span className="font-semibold text-slate-100 truncate" title={node.name}>{node.name}</span>
+                            <span className="text-slate-400 truncate">{node.version || "version?"}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="chip">{node.action}</span>
+                            {node.python_version && <span className="chip chip-muted">{node.python_version}</span>}
+                            {hasHints && <span className="chip bg-emerald-500/10 text-emerald-200 border-emerald-500/40">hints</span>}
+                            {hasRecipes && <span className="chip bg-sky-500/10 text-sky-200 border-sky-500/40">recipes</span>}
+                          </div>
+                        </summary>
+                        {(hasHints || hasRecipes) && (
+                          <div className="mt-2 space-y-2 text-slate-200">
+                            {hasHints && (
+                              <div className="space-y-1">
+                                <div className="text-xs uppercase tracking-wide text-emerald-300">Matched hints</div>
+                                <div className="space-y-1">
+                                  {node.hints.map((h, i) => (
+                                    <div key={`${h.id || i}`} className="glass subtle px-2 py-1 rounded border border-emerald-500/30">
+                                      <div className="flex items-center justify-between gap-2 text-xs">
+                                        <span className="font-semibold">{h.pattern || h.id || "hint"}</span>
+                                        {h.reason && <span className="text-slate-400 truncate">{h.reason}</span>}
+                                      </div>
+                                      {Array.isArray(h.packs) && h.packs.length > 0 && (
+                                        <div className="text-slate-400 text-[11px] mt-1">
+                                          Packs: {(h.packs || []).join(", ")}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {hasRecipes && (
+                              <div className="space-y-1">
+                                <div className="text-xs uppercase tracking-wide text-sky-300">Recipes/packs</div>
+                                <div className="space-y-1">
+                                  {node.recipes.map((r, i) => (
+                                    <div key={`${r.name || i}`} className="glass subtle px-2 py-1 rounded border border-sky-500/30 flex items-center justify-between gap-2">
+                                      <div className="flex flex-col min-w-0">
+                                        <span className="font-semibold">{r.name || "recipe"}</span>
+                                        {r.version && <span className="text-slate-400 text-[11px]">{r.version}</span>}
+                                      </div>
+                                      {r.reason && <span className="text-slate-400 text-[11px] truncate">{r.reason}</span>}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </details>
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="text-xs text-slate-500">No nodes available for this plan.</div>
