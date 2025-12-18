@@ -1781,10 +1781,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           ) : (
             <div className="grid gap-2 md:grid-cols-2 text-sm text-slate-200">
               {visiblePendingInputs.map((pi) => (
-                <div key={pi.id} className="glass subtle px-3 py-3 rounded-lg space-y-2">
-                  <div className="flex items-start justify-between gap-3">
+                <div key={pi.id} className="glass subtle px-3 py-3 rounded-lg space-y-2 w-full">
+                  <div className="flex items-start justify-between gap-3 w-full">
                     <div className="space-y-1 min-w-0">
-                      <div className="font-semibold text-slate-100 truncate max-w-[16rem]" title={pi.filename}>
+                      <div className="font-semibold text-slate-100 truncate max-w-[14rem]" title={pi.filename}>
                         {pi.filename}
                       </div>
                       <div className="flex flex-wrap gap-2 text-xs text-slate-500">
@@ -1794,7 +1794,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                         <span className="text-slate-500">id {pi.id}</span>
                       </div>
                     </div>
-                    <div className="flex flex-col gap-1 items-end">
+                    <div className="flex flex-col gap-2 items-end shrink-0">
                       {pi.status === "pending" && (
                         <button
                           className="btn btn-secondary px-2 py-1 text-xs"
