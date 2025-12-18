@@ -2086,7 +2086,7 @@ const enqueuePlanForInput = async (pi, verb) => {
         subtitle="Review planned DAGs, inspect nodes, and manually enqueue builds when auto-build is off."
         badge={planListBadge}
       />
-      <div className="grid lg:grid-cols-[360px,1fr] gap-4 items-start">
+      <div className="grid lg:grid-cols-[360px,minmax(0,1fr)] gap-4 items-start">
         <div className="glass p-4 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <div className="text-lg font-semibold flex items-center gap-2">
@@ -2146,7 +2146,7 @@ const enqueuePlanForInput = async (pi, verb) => {
           )}
           {planListError && <div className="text-xs text-amber-200">{planListError}</div>}
         </div>
-        <div className="glass subtle p-4 space-y-3">
+        <div className="glass subtle p-4 space-y-3 w-full overflow-hidden">
           <div className="text-lg font-semibold flex items-center gap-2">
             <span>Selected plan</span>
             <span className="chip text-xs">📌</span>
