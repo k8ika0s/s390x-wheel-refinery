@@ -709,7 +709,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [bulkUploading, setBulkUploading] = useState(false);
   const apiToastShown = useRef(false);
   const viewKey = view || "overview";
-  const hintPageSize = 200;
+  const hintPageSize = 10;
   const [isVisible, setIsVisible] = useState(
     () => (typeof document !== "undefined" ? document.visibilityState === "visible" : true),
   );

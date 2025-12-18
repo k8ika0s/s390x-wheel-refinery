@@ -1457,12 +1457,20 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		if snap.Queued {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "plan already enqueued"})
+			return
+		}
 		if err := h.Store.QueueBuildsFromPlan(r.Context(), snap.RunID, snap.ID, snap.Plan); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		if h.Store != nil {
-			_, _ = h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "queued")
+			// Mark any linked pending inputs as queued so the UI reflects progress.
+			if count, err := h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "queued"); err == nil && count == 0 {
+				// If nothing was updated, the linkage might be missing; fall back to clearing any "planned" rows for this plan.
+				_, _ = h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "build_queued")
+			}
 		}
 		count := 0
 		for _, node := range snap.Plan {
@@ -1729,7 +1737,7 @@ func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		q := r.URL.Query()
-		limit := parseIntDefault(q.Get("limit"), 200, 1000)
+		limit := parseIntDefault(q.Get("limit"), 10, 200)
 		offset := parseIntDefault(q.Get("offset"), 0, 100_000)
 		query := strings.TrimSpace(q.Get("q"))
 		var hints []store.Hint

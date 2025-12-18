@@ -38,6 +38,7 @@ type Hint struct {
 	AppliesTo  map[string][]string `json:"applies_to,omitempty" yaml:"applies_to,omitempty"`
 	Confidence string              `json:"confidence,omitempty" yaml:"confidence,omitempty"`
 	Examples   []string            `json:"examples,omitempty" yaml:"examples,omitempty"`
+	DeletedAt  *time.Time          `json:"deleted_at,omitempty" yaml:"deleted_at,omitempty"`
 }
 
 // LogEntry represents stored log metadata/content.
@@ -105,10 +106,11 @@ type PlanNode struct {
 
 // PlanSnapshot captures a stored plan with optional DAG payload.
 type PlanSnapshot struct {
-	ID    int64           `json:"id"`
-	RunID string          `json:"run_id,omitempty"`
-	Plan  []PlanNode      `json:"plan"`
-	DAG   json.RawMessage `json:"dag,omitempty"`
+	ID     int64           `json:"id"`
+	RunID  string          `json:"run_id,omitempty"`
+	Plan   []PlanNode      `json:"plan"`
+	DAG    json.RawMessage `json:"dag,omitempty"`
+	Queued bool            `json:"queued,omitempty"`
 }
 
 // PlanSummary provides a compact plan list entry.
@@ -118,6 +120,7 @@ type PlanSummary struct {
 	CreatedAt  int64  `json:"created_at"`
 	NodeCount  int    `json:"node_count"`
 	BuildCount int    `json:"build_count"`
+	Queued     bool   `json:"queued,omitempty"`
 }
 
 // BuildStatus tracks a build job derived from a plan.

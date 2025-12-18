@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS hints (
     severity TEXT,
     applies_to JSONB,
     confidence TEXT,
-    examples JSONB
+    examples JSONB,
+    deleted_at TIMESTAMPTZ
 );
 
 ALTER TABLE hints ADD COLUMN IF NOT EXISTS tags JSONB;
@@ -69,6 +70,7 @@ ALTER TABLE hints ADD COLUMN IF NOT EXISTS severity TEXT;
 ALTER TABLE hints ADD COLUMN IF NOT EXISTS applies_to JSONB;
 ALTER TABLE hints ADD COLUMN IF NOT EXISTS confidence TEXT;
 ALTER TABLE hints ADD COLUMN IF NOT EXISTS examples JSONB;
+ALTER TABLE hints ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_hints_pattern_trgm ON hints USING GIN (pattern gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_hints_note_trgm ON hints USING GIN (note gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_hints_tags_trgm ON hints USING GIN ((tags::text) gin_trgm_ops);
@@ -841,7 +843,7 @@ func (p *PostgresStore) ListHints(ctx context.Context) ([]Hint, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT id,pattern,recipes,note,tags,severity,applies_to,confidence,examples FROM hints`)
+	rows, err := p.db.QueryContext(ctx, `SELECT id,pattern,recipes,note,tags,severity,applies_to,confidence,examples,deleted_at FROM hints WHERE deleted_at IS NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -855,31 +857,32 @@ func (p *PostgresStore) ListHintsPaged(ctx context.Context, limit, offset int, q
 		return nil, err
 	}
 	if limit <= 0 {
-		limit = 200
+		limit = 10
 	}
-	if limit > 1000 {
-		limit = 1000
+	if limit > 200 {
+		limit = 200
 	}
 	if offset < 0 {
 		offset = 0
 	}
 	args := []any{}
-	whereClause := ""
+	whereClause := "WHERE deleted_at IS NULL"
 	if strings.TrimSpace(query) != "" {
 		args = append(args, "%"+query+"%")
 		whereClause = `
-			WHERE id ILIKE $1
-			   OR pattern ILIKE $1
-			   OR note ILIKE $1
-			   OR tags::text ILIKE $1
-			   OR recipes::text ILIKE $1
-			   OR applies_to::text ILIKE $1
-			   OR examples::text ILIKE $1`
+			WHERE deleted_at IS NULL AND (
+				   id ILIKE $1
+				OR pattern ILIKE $1
+				OR note ILIKE $1
+				OR tags::text ILIKE $1
+				OR recipes::text ILIKE $1
+				OR applies_to::text ILIKE $1
+				OR examples::text ILIKE $1)`
 	}
 	limitIdx := len(args) + 1
 	offsetIdx := len(args) + 2
 	args = append(args, limit, offset)
-	querySQL := fmt.Sprintf(`SELECT id,pattern,recipes,note,tags,severity,applies_to,confidence,examples
+	querySQL := fmt.Sprintf(`SELECT id,pattern,recipes,note,tags,severity,applies_to,confidence,examples,deleted_at
 		FROM hints %s ORDER BY id LIMIT $%d OFFSET $%d`, whereClause, limitIdx, offsetIdx)
 	rows, err := p.db.QueryContext(ctx, querySQL, args...)
 	if err != nil {
@@ -897,7 +900,8 @@ func scanHints(rows *sql.Rows) ([]Hint, error) {
 		var tags json.RawMessage
 		var applies json.RawMessage
 		var examples json.RawMessage
-		if err := rows.Scan(&h.ID, &h.Pattern, &recipes, &h.Note, &tags, &h.Severity, &applies, &h.Confidence, &examples); err != nil {
+		var deletedAt sql.NullTime
+		if err := rows.Scan(&h.ID, &h.Pattern, &recipes, &h.Note, &tags, &h.Severity, &applies, &h.Confidence, &examples, &deletedAt); err != nil {
 			return nil, err
 		}
 		if len(recipes) > 0 {
@@ -911,6 +915,10 @@ func scanHints(rows *sql.Rows) ([]Hint, error) {
 		}
 		if len(examples) > 0 {
 			_ = json.Unmarshal(examples, &h.Examples)
+		}
+		if deletedAt.Valid {
+			t := deletedAt.Time
+			h.DeletedAt = &t
 		}
 		out = append(out, h)
 	}
@@ -977,7 +985,8 @@ func (p *PostgresStore) PutHint(ctx context.Context, hint Hint) error {
 	        severity=EXCLUDED.severity,
 	        applies_to=EXCLUDED.applies_to,
 	        confidence=EXCLUDED.confidence,
-	        examples=EXCLUDED.examples`,
+	        examples=EXCLUDED.examples,
+	        deleted_at=NULL`,
 		hint.ID, hint.Pattern, recipes, hint.Note, tags, hint.Severity, applies, hint.Confidence, examples)
 	return err
 }
@@ -986,7 +995,7 @@ func (p *PostgresStore) DeleteHint(ctx context.Context, id string) error {
 	if err := p.ensureDB(); err != nil {
 		return err
 	}
-	_, err := p.db.ExecContext(ctx, `DELETE FROM hints WHERE id=$1`, id)
+	_, err := p.db.ExecContext(ctx, `UPDATE hints SET deleted_at=NOW() WHERE id=$1`, id)
 	return err
 }
 
@@ -1171,8 +1180,20 @@ func (p *PostgresStore) PlanSnapshot(ctx context.Context, planID int64) (PlanSna
 	var snap PlanSnapshot
 	var planRaw json.RawMessage
 	var dagRaw json.RawMessage
-	row := p.db.QueryRowContext(ctx, `SELECT id, run_id, plan, dag FROM plans WHERE id = $1`, planID)
-	if err := row.Scan(&snap.ID, &snap.RunID, &planRaw, &dagRaw); err != nil {
+	row := p.db.QueryRowContext(ctx, `
+		SELECT p.id,
+		       p.run_id,
+		       p.plan,
+		       p.dag,
+		       EXISTS (
+		         SELECT 1 FROM build_status bs
+		         WHERE bs.plan_id = p.id
+		           AND bs.status IN ('pending','retry','building')
+		       ) AS queued
+		FROM plans p
+		WHERE p.id = $1
+	`, planID)
+	if err := row.Scan(&snap.ID, &snap.RunID, &planRaw, &dagRaw, &snap.Queued); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return PlanSnapshot{}, ErrNotFound
 		}
@@ -1195,8 +1216,20 @@ func (p *PostgresStore) LatestPlanSnapshot(ctx context.Context) (PlanSnapshot, e
 	var snap PlanSnapshot
 	var planRaw json.RawMessage
 	var dagRaw json.RawMessage
-	row := p.db.QueryRowContext(ctx, `SELECT id, run_id, plan, dag FROM plans ORDER BY created_at DESC LIMIT 1`)
-	if err := row.Scan(&snap.ID, &snap.RunID, &planRaw, &dagRaw); err != nil {
+	row := p.db.QueryRowContext(ctx, `
+		SELECT p.id,
+		       p.run_id,
+		       p.plan,
+		       p.dag,
+		       EXISTS (
+		         SELECT 1 FROM build_status bs
+		         WHERE bs.plan_id = p.id
+		           AND bs.status IN ('pending','retry','building')
+		       ) AS queued
+		FROM plans p
+		ORDER BY created_at DESC
+		LIMIT 1`)
+	if err := row.Scan(&snap.ID, &snap.RunID, &planRaw, &dagRaw, &snap.Queued); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return PlanSnapshot{}, ErrNotFound
 		}
@@ -1220,15 +1253,20 @@ func (p *PostgresStore) ListPlans(ctx context.Context, limit int) ([]PlanSummary
 		limit = 20
 	}
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT id,
-		       run_id,
-		       EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at,
-		       CASE WHEN jsonb_typeof(plan) = 'array' THEN jsonb_array_length(plan) ELSE 0 END AS node_count,
-		       CASE WHEN jsonb_typeof(plan) = 'array'
-		            THEN (SELECT COUNT(*) FROM jsonb_array_elements(plan) elem WHERE lower(elem->>'action') = 'build')
-		            ELSE 0 END AS build_count
-		FROM plans
-		ORDER BY created_at DESC
+		SELECT p.id,
+		       p.run_id,
+		       EXTRACT(EPOCH FROM p.created_at)::BIGINT AS created_at,
+		       CASE WHEN jsonb_typeof(p.plan) = 'array' THEN jsonb_array_length(p.plan) ELSE 0 END AS node_count,
+		       CASE WHEN jsonb_typeof(p.plan) = 'array'
+		            THEN (SELECT COUNT(*) FROM jsonb_array_elements(p.plan) elem WHERE lower(elem->>'action') = 'build')
+		            ELSE 0 END AS build_count,
+		       EXISTS (
+		         SELECT 1 FROM build_status bs
+		         WHERE bs.plan_id = p.id
+		           AND bs.status IN ('pending','retry','building')
+		       ) AS queued
+		FROM plans p
+		ORDER BY p.created_at DESC
 		LIMIT $1
 	`, limit)
 	if err != nil {
@@ -1238,7 +1276,7 @@ func (p *PostgresStore) ListPlans(ctx context.Context, limit int) ([]PlanSummary
 	var out []PlanSummary
 	for rows.Next() {
 		var entry PlanSummary
-		if err := rows.Scan(&entry.ID, &entry.RunID, &entry.CreatedAt, &entry.NodeCount, &entry.BuildCount); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.RunID, &entry.CreatedAt, &entry.NodeCount, &entry.BuildCount, &entry.Queued); err != nil {
 			return nil, err
 		}
 		out = append(out, entry)
