@@ -241,11 +241,10 @@ body {
   color: #e2e8f0;
   line-height: 1.2;
   min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
 }
 
 .dag-node-sub {
