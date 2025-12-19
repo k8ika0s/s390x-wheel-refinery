@@ -250,10 +250,43 @@ func (p *PostgresStore) SaveSettings(ctx context.Context, s settings.Settings) e
 	return err
 }
 
-// AddPendingInput inserts a new pending input.
+// AddPendingInput inserts a new pending input or restores a deleted match by digest.
 func (p *PostgresStore) AddPendingInput(ctx context.Context, pi PendingInput) (int64, error) {
 	if err := p.ensureDB(); err != nil {
 		return 0, err
+	}
+	if pi.Digest != "" {
+		var restoredID int64
+		restoreErr := p.db.QueryRowContext(ctx, `
+			UPDATE pending_inputs
+			SET filename = $2,
+				size_bytes = $3,
+				status = $4,
+				error = '',
+				source_type = $5,
+				object_bucket = $6,
+				object_key = $7,
+				content_type = $8,
+				metadata = $9,
+				loaded_at = NULL,
+				planned_at = NULL,
+				processed_at = NULL,
+				deleted_at = NULL,
+				updated_at = NOW()
+			WHERE id = (
+				SELECT id FROM pending_inputs
+				WHERE digest = $1 AND deleted_at IS NOT NULL
+				ORDER BY deleted_at DESC
+				LIMIT 1
+			)
+			RETURNING id
+		`, pi.Digest, pi.Filename, pi.SizeBytes, pi.Status, pi.SourceType, pi.ObjectBucket, pi.ObjectKey, pi.ContentType, pi.Metadata).Scan(&restoredID)
+		if restoreErr == nil && restoredID > 0 {
+			return restoredID, nil
+		}
+		if restoreErr != nil && !errors.Is(restoreErr, sql.ErrNoRows) {
+			return 0, restoreErr
+		}
 	}
 	var id int64
 	err := p.db.QueryRowContext(ctx, `
