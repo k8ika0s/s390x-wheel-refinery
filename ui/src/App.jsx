@@ -146,7 +146,58 @@ const dagNodeLabel = (node) => {
   return { title: meta.name || type, subtitle: meta.version || "" };
 };
 
-const buildDagLayout = (dag, orientation = "horizontal", focusId = "") => {
+const collectDagFocusSet = (nodes, focusId) => {
+  if (!focusId) return null;
+  const inputsById = new Map();
+  const childrenById = new Map();
+  for (const node of nodes) {
+    const id = dagNodeId(node);
+    if (!id) continue;
+    const inputs = toArray(node.inputs).map(dagInputId).filter(Boolean);
+    inputsById.set(id, inputs);
+    for (const input of inputs) {
+      if (!childrenById.has(input)) childrenById.set(input, []);
+      childrenById.get(input).push(id);
+    }
+  }
+  if (!inputsById.has(focusId)) return null;
+
+  const activeSet = new Set([focusId]);
+  const parentStack = [focusId];
+  while (parentStack.length) {
+    const current = parentStack.pop();
+    const parents = inputsById.get(current) || [];
+    for (const parent of parents) {
+      if (!inputsById.has(parent) || activeSet.has(parent)) continue;
+      activeSet.add(parent);
+      parentStack.push(parent);
+    }
+  }
+  const childStack = [focusId];
+  while (childStack.length) {
+    const current = childStack.pop();
+    const children = childrenById.get(current) || [];
+    for (const child of children) {
+      if (!inputsById.has(child) || activeSet.has(child)) continue;
+      activeSet.add(child);
+      childStack.push(child);
+    }
+  }
+  return activeSet;
+};
+
+const filterDagNodes = (dag, focusId) => {
+  const nodes = normalizeDag(dag);
+  if (!focusId || !nodes.length) return { nodes, focusSet: null };
+  const focusSet = collectDagFocusSet(nodes, focusId);
+  if (!focusSet) return { nodes, focusSet: null };
+  return {
+    nodes: nodes.filter((node) => focusSet.has(dagNodeId(node))),
+    focusSet,
+  };
+};
+
+const buildDagLayout = (dag, orientation = "horizontal") => {
   const nodes = normalizeDag(dag);
   if (!nodes.length) return null;
   const layout = {
@@ -158,48 +209,14 @@ const buildDagLayout = (dag, orientation = "horizontal", focusId = "") => {
   };
   const items = [];
   const inputsById = new Map();
-  const childrenById = new Map();
   for (const node of nodes) {
     const id = dagNodeId(node);
     if (!id) continue;
     const inputs = toArray(node.inputs).map(dagInputId).filter(Boolean);
     inputsById.set(id, inputs);
     items.push({ id, node, label: dagNodeLabel(node) });
-    for (const input of inputs) {
-      if (!childrenById.has(input)) childrenById.set(input, []);
-      childrenById.get(input).push(id);
-    }
   }
   if (!items.length) return null;
-
-  let activeSet = null;
-  if (focusId && inputsById.has(focusId)) {
-    activeSet = new Set([focusId]);
-    const parentStack = [focusId];
-    while (parentStack.length) {
-      const current = parentStack.pop();
-      const parents = inputsById.get(current) || [];
-      for (const parent of parents) {
-        if (!inputsById.has(parent) || activeSet.has(parent)) continue;
-        activeSet.add(parent);
-        parentStack.push(parent);
-      }
-    }
-    const childStack = [focusId];
-    while (childStack.length) {
-      const current = childStack.pop();
-      const children = childrenById.get(current) || [];
-      for (const child of children) {
-        if (!inputsById.has(child) || activeSet.has(child)) continue;
-        activeSet.add(child);
-        childStack.push(child);
-      }
-    }
-  }
-
-  const isActive = (id) => !activeSet || activeSet.has(id);
-  const activeItems = activeSet ? items.filter((item) => activeSet.has(item.id)) : items;
-  if (!activeItems.length) return null;
 
   const depth = new Map();
   const visiting = new Set();
@@ -210,7 +227,7 @@ const buildDagLayout = (dag, orientation = "horizontal", focusId = "") => {
     const inputs = inputsById.get(id) || [];
     let max = 0;
     for (const input of inputs) {
-      if (!inputsById.has(input) || !isActive(input)) continue;
+      if (!inputsById.has(input)) continue;
       const d = depthFor(input);
       if (d + 1 > max) max = d + 1;
     }
@@ -218,10 +235,10 @@ const buildDagLayout = (dag, orientation = "horizontal", focusId = "") => {
     depth.set(id, max);
     return max;
   };
-  activeItems.forEach((item) => depthFor(item.id));
+  items.forEach((item) => depthFor(item.id));
 
   const typeRank = { runtime: 0, pack: 1, wheel: 2, repair: 3 };
-  const sorted = activeItems.slice().sort((a, b) => {
+  const sorted = items.slice().sort((a, b) => {
     const da = depth.get(a.id) ?? 0;
     const db = depth.get(b.id) ?? 0;
     if (da !== db) return da - db;
@@ -248,10 +265,9 @@ const buildDagLayout = (dag, orientation = "horizontal", focusId = "") => {
   });
 
   const edges = [];
-  for (const item of activeItems) {
+  for (const item of items) {
     const inputs = inputsById.get(item.id) || [];
     for (const input of inputs) {
-      if (!isActive(input)) continue;
       if (positions[input]) {
         edges.push({ from: input, to: item.id });
       }
@@ -1756,7 +1772,8 @@ const enqueuePlanForInput = async (pi, verb) => {
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
-  const planDag = buildDagLayout(selectedPlan?.dag, planGraphLayout, planGraphFocus);
+  const { nodes: planDagNodes } = filterDagNodes(selectedPlan?.dag, planGraphFocus);
+  const planDag = buildDagLayout(planDagNodes, planGraphLayout);
   const planPanelHeightClass = "max-h-80";
   const planPythonVersion =
     selectedPlanNodes.find((n) => n?.python_version)?.python_version ||
