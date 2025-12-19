@@ -186,17 +186,6 @@ const collectDagFocusSet = (nodes, focusId) => {
   return activeSet;
 };
 
-const filterDagNodes = (dag, focusId) => {
-  const nodes = normalizeDag(dag);
-  if (!focusId || !nodes.length) return { nodes, focusSet: null };
-  const focusSet = collectDagFocusSet(nodes, focusId);
-  if (!focusSet) return { nodes, focusSet: null };
-  return {
-    nodes: nodes.filter((node) => focusSet.has(dagNodeId(node))),
-    focusSet,
-  };
-};
-
 const buildDagLayout = (dag, orientation = "horizontal") => {
   const nodes = normalizeDag(dag);
   if (!nodes.length) return null;
@@ -1772,7 +1761,11 @@ const enqueuePlanForInput = async (pi, verb) => {
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
-  const { nodes: planDagNodes } = filterDagNodes(selectedPlan?.dag, planGraphFocus);
+  const planDagRaw = normalizeDag(selectedPlan?.dag);
+  const planGraphFocusSet = collectDagFocusSet(planDagRaw, planGraphFocus);
+  const planDagNodes = planGraphFocusSet
+    ? planDagRaw.filter((node) => planGraphFocusSet.has(dagNodeId(node)))
+    : planDagRaw;
   const planDag = buildDagLayout(planDagNodes, planGraphLayout);
   const planPanelHeightClass = "max-h-80";
   const planPythonVersion =
