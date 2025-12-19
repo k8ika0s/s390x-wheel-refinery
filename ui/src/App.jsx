@@ -54,14 +54,37 @@ const formatBytes = (value) => {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+const toTimestampMs = (value) => {
+  if (value === undefined || value === null) return 0;
+  if (typeof value === "number") {
+    return value > 1e12 ? value : value * 1000;
+  }
+  const num = Number(value);
+  if (Number.isFinite(num)) {
+    return num > 1e12 ? num : num * 1000;
+  }
+  const parsed = new Date(value);
+  const ms = parsed.getTime();
+  return Number.isFinite(ms) ? ms : 0;
+};
+
+const formatTimestamp = (value) => {
+  const ms = toTimestampMs(value);
+  if (!ms) return "";
+  return new Date(ms).toLocaleString();
+};
+
 const formatAutomationSummary = (meta) => {
   const auto = meta?.automation;
   if (!auto) return "";
   const hints = Array.isArray(auto.hint_ids) ? auto.hint_ids.length : 0;
+  const blocked = Array.isArray(auto.blocked_hints) ? auto.blocked_hints.length : 0;
   const recipes = Array.isArray(auto.recipes) ? auto.recipes.length : 0;
   const parts = [];
   if (recipes) parts.push(`${recipes} recipe${recipes === 1 ? "" : "s"}`);
   if (hints) parts.push(`${hints} hint${hints === 1 ? "" : "s"}`);
+  if (blocked) parts.push(`${blocked} blocked`);
+  if (auto.impact === "high") parts.push("high impact");
   if (auto.blocked) parts.push(`blocked: ${auto.blocked}`);
   if (!parts.length) return "auto-fix attempted";
   return `auto-fix: ${parts.join(", ")}`;
@@ -637,6 +660,33 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const variantsPaged = paged(variantsArr, variantPage);
   const failuresPaged = paged(failuresArr, failurePage);
   const hintsPaged = paged(hintsArr, hintsPage);
+  const automationTimeline = eventsArr
+    .map((event) => {
+      const meta = event.metadata || {};
+      const automation = meta.automation || null;
+      const attempt = meta.attempt ?? meta.attempts ?? null;
+      const autoRecipes = toArray(automation?.recipes);
+      const recipes = autoRecipes.length ? autoRecipes : toArray(meta.recipes);
+      return {
+        key: `${event.name}-${event.version}-${event.timestamp}`,
+        event,
+        status: event.status,
+        version: event.version,
+        timestamp: event.timestamp,
+        attempt,
+        summary: formatAutomationSummary(meta),
+        recipes,
+        hints: toArray(automation?.hint_ids),
+        savedHints: toArray(automation?.saved_hint_ids),
+        blockedHints: toArray(automation?.blocked_hints),
+        automation,
+      };
+    })
+    .filter((entry) => {
+      const hasAttempt = entry.attempt !== null && entry.attempt !== undefined;
+      return hasAttempt || entry.summary || entry.automation || entry.recipes.length || entry.hints.length || entry.savedHints.length || entry.blockedHints.length;
+    })
+    .sort((a, b) => toTimestampMs(b.timestamp) - toTimestampMs(a.timestamp));
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -701,6 +751,51 @@ function PackageDetail({ token, pushToast, apiBase }) {
 
       {tab === "events" && (
         <div className="space-y-3">
+          <StatCard title="Automation timeline">
+            {automationTimeline.length ? (
+              <div className="space-y-2">
+                {automationTimeline.map((entry) => (
+                  <div key={entry.key} className="border border-border rounded-lg p-3 space-y-1 text-sm text-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`status ${entry.status}`}>{entry.status}</span>
+                        <span className="text-slate-100">{entry.version}</span>
+                        {entry.attempt !== null && entry.attempt !== undefined && (
+                          <span className="chip">Attempt {entry.attempt}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        {entry.timestamp && <span>{formatTimestamp(entry.timestamp) || entry.timestamp}</span>}
+                        <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => loadLog(entry.event)}>
+                          View log
+                        </button>
+                      </div>
+                    </div>
+                    {entry.summary && <div className="text-slate-300">{entry.summary}</div>}
+                    {entry.automation && (
+                      <div className="text-slate-400">Applied: {entry.automation.applied ? "yes" : "no"}</div>
+                    )}
+                    {entry.automation?.reason && <div className="text-slate-400">{entry.automation.reason}</div>}
+                    {entry.recipes.length > 0 && <div className="text-slate-400">Recipes: {entry.recipes.join(", ")}</div>}
+                    {entry.hints.length > 0 && <div className="text-slate-400">Hints: {entry.hints.join(", ")}</div>}
+                    {entry.savedHints.length > 0 && <div className="text-slate-400">Saved hints: {entry.savedHints.join(", ")}</div>}
+                    {entry.blockedHints.length > 0 && <div className="text-amber-200">Blocked hints: {entry.blockedHints.join(", ")}</div>}
+                    {entry.automation?.impact && (
+                      <div className={entry.automation.impact === "high" ? "text-amber-200" : "text-slate-400"}>
+                        Impact: {entry.automation.impact}
+                        {entry.automation.impact_reason ? ` (${entry.automation.impact_reason})` : ""}
+                      </div>
+                    )}
+                    {entry.automation?.blocked && (
+                      <div className="text-amber-200">Blocked: {entry.automation.blocked}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="No automation history" detail="Builds have not reported auto-fix activity yet." />
+            )}
+          </StatCard>
           <div className="glass p-4 space-y-3 min-w-0">
             <div className="flex items-center justify-between">
               <div className="text-lg font-semibold">Events</div>
@@ -738,7 +833,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
               <div className="flex items-center justify-between">
                 <div className="text-base font-semibold">Log: {selectedEvent.name} {selectedEvent.version}</div>
                 <div className="flex items-center gap-2 text-xs text-slate-400">
-                  <span>{selectedEvent.timestamp}</span>
+                  <span>{formatTimestamp(selectedEvent.timestamp) || selectedEvent.timestamp}</span>
                   <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setAutoScroll((v) => !v)}>
                     Autoscroll: {autoScroll ? "on" : "off"}
                   </button>
@@ -774,8 +869,17 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   {Array.isArray(selectedEvent.metadata.automation.hint_ids) && selectedEvent.metadata.automation.hint_ids.length > 0 && (
                     <div className="text-slate-300">Hints: {selectedEvent.metadata.automation.hint_ids.join(", ")}</div>
                   )}
+                  {Array.isArray(selectedEvent.metadata.automation.blocked_hints) && selectedEvent.metadata.automation.blocked_hints.length > 0 && (
+                    <div className="text-amber-200">Blocked hints: {selectedEvent.metadata.automation.blocked_hints.join(", ")}</div>
+                  )}
                   {Array.isArray(selectedEvent.metadata.automation.saved_hint_ids) && selectedEvent.metadata.automation.saved_hint_ids.length > 0 && (
                     <div className="text-slate-300">Saved hints: {selectedEvent.metadata.automation.saved_hint_ids.join(", ")}</div>
+                  )}
+                  {selectedEvent.metadata.automation.impact && (
+                    <div className={selectedEvent.metadata.automation.impact === "high" ? "text-amber-200" : "text-slate-300"}>
+                      Impact: {selectedEvent.metadata.automation.impact}
+                      {selectedEvent.metadata.automation.impact_reason ? ` (${selectedEvent.metadata.automation.impact_reason})` : ""}
+                    </div>
                   )}
                   {selectedEvent.metadata.automation.blocked && (
                     <div className="text-amber-200">Blocked: {selectedEvent.metadata.automation.blocked}</div>

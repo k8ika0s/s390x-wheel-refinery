@@ -36,16 +36,18 @@ import (
 
 // Worker drains the queue and runs jobs.
 type Worker struct {
-	Queue    queue.Backend
-	Runner   runner.Runner
-	Reporter *reporter.Client
-	Cfg      Config
-	Store    objectstore.Store
-	Fetcher  cas.Fetcher
-	Pusher   cas.Pusher
-	packPath map[string]string
-	mu       sync.Mutex
-	planSnap plan.Snapshot
+	Queue        queue.Backend
+	Runner       runner.Runner
+	Reporter     *reporter.Client
+	Cfg          Config
+	Store        objectstore.Store
+	Fetcher      cas.Fetcher
+	Pusher       cas.Pusher
+	packPath     map[string]string
+	mu           sync.Mutex
+	planSnap     plan.Snapshot
+	autoHintMu   sync.Mutex
+	autoHintLast map[string]time.Time
 	// buildPoolSize allows dynamic overrides from control-plane settings.
 	buildPoolSize *atomic.Int32
 }
@@ -199,7 +201,10 @@ func (w *Worker) Drain(ctx context.Context) error {
 	}
 	for _, res := range results {
 		status := "built"
-		meta := map[string]any{"duration_ms": res.duration.Milliseconds()}
+		meta := map[string]any{
+			"duration_ms": res.duration.Milliseconds(),
+			"attempt":     res.attempt,
+		}
 		detail := ""
 		recipesForStatus := res.job.Recipes
 		autoFix := autoFixResult{}
@@ -227,6 +232,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 		if status == "retry" {
 			backoffUntil = backoffTime(res.attempt)
 		}
+		if len(recipesForStatus) > 0 {
+			meta["recipes"] = recipesForStatus
+		}
 		if autoFix.Applied || len(autoFix.HintIDs) > 0 || len(autoFix.SavedHintIDs) > 0 {
 			meta["automation"] = map[string]any{
 				"applied":        autoFix.Applied,
@@ -235,6 +243,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"saved_hint_ids": autoFix.SavedHintIDs,
 				"reason":         autoFix.Reason,
 				"blocked":        autoFix.BlockedReason,
+				"blocked_hints":  autoFix.BlockedHints,
+				"impact":         autoFix.Impact,
+				"impact_reason":  autoFix.ImpactReason,
 			}
 		}
 		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, res.attempt, backoffUntil, recipesForStatus, autoFix.HintIDs)
@@ -781,7 +792,8 @@ func BuildWorker(cfg Config) (*Worker, error) {
 			Username: cfg.CASRegistryUser,
 			Password: cfg.CASRegistryPass,
 		},
-		packPath: make(map[string]string),
+		packPath:     make(map[string]string),
+		autoHintLast: make(map[string]time.Time),
 		buildPoolSize: func() *atomic.Int32 {
 			var v atomic.Int32
 			if cfg.BuildPoolSize > 0 {

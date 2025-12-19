@@ -8,7 +8,9 @@ import (
 	"log"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
@@ -21,6 +23,9 @@ type autoFixResult struct {
 	SavedHintIDs  []string
 	Reason        string
 	BlockedReason string
+	BlockedHints  []string
+	Impact        string
+	ImpactReason  string
 }
 
 func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string, hints []plan.Hint, knownHints map[string]bool) autoFixResult {
@@ -38,12 +43,21 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		PythonTag:     job.PythonTag,
 		PlatformTag:   job.PlatformTag,
 	}
+	threshold := autoFixThreshold(w.Cfg.AutoFixMinConfidence)
 
 	var matchedIDs []string
+	var blocked []string
 	var recipes []string
 	for _, h := range hints {
-		match, recs, ok := plan.MatchHintForLog(h, ctxHint, logScan)
+		_, recs, ok := plan.MatchHintForLog(h, ctxHint, logScan)
 		if !ok {
+			continue
+		}
+		score := confidenceScore(h.Confidence)
+		if score < threshold {
+			blocked = append(blocked, h.ID)
+			autoFixBlocked := fmt.Sprintf("%s (confidence %.2f)", h.ID, score)
+			log.Printf("auto-fix: %s@%s skip hint %s", job.Name, job.Version, autoFixBlocked)
 			continue
 		}
 		matchedIDs = append(matchedIDs, h.ID)
@@ -61,13 +75,39 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 			if hint.ID == "" {
 				hint.ID = autoHintID(hint, ctxHint)
 			}
+			if confidenceScore(hint.Confidence) < threshold {
+				log.Printf("auto-fix: %s@%s skip inferred hint confidence=%s", job.Name, job.Version, hint.Confidence)
+				blocked = append(blocked, hint.ID)
+				return autoFixResult{BlockedReason: "confidence below threshold", BlockedHints: dedupeStrings(blocked)}
+			}
+			if existing, merged, ok := findSimilarHint(hints, hint); ok {
+				hint = existing
+				if merged {
+					if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
+						if err := upsertHint(ctx, nil, w.Cfg, hint); err != nil {
+							log.Printf("auto-fix: hint merge save failed for %s: %v", hint.ID, err)
+						} else {
+							saved = append(saved, hint.ID)
+						}
+					}
+				}
+			}
+			if hint.ID == "" {
+				hint.ID = autoHintID(hint, ctxHint)
+			}
 			if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
-				if knownHints == nil || !knownHints[hint.ID] {
+				if w.canSaveAutoHint(job.Name) && (knownHints == nil || !knownHints[hint.ID]) {
 					if err := upsertHint(ctx, nil, w.Cfg, hint); err != nil {
 						log.Printf("auto-fix: hint save failed for %s: %v", hint.ID, err)
 					} else {
 						knownHints[hint.ID] = true
+						w.markAutoHintSaved(job.Name)
 						saved = append(saved, hint.ID)
+					}
+				} else if !w.canSaveAutoHint(job.Name) {
+					log.Printf("auto-fix: rate limit hit for %s; hint not saved", job.Name)
+					if reason == "" {
+						reason = "rate limit: hint not saved"
 					}
 				}
 			}
@@ -85,12 +125,79 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 	if applied {
 		log.Printf("auto-fix: %s@%s applied recipes=%v hints=%v", job.Name, job.Version, merged, dedupeStrings(matchedIDs))
 	}
+	impact, impactReason := recipeImpact(merged)
 	return autoFixResult{
 		Applied:      applied,
 		Recipes:      merged,
 		HintIDs:      dedupeStrings(matchedIDs),
 		SavedHintIDs: dedupeStrings(saved),
 		Reason:       reason,
+		BlockedHints: dedupeStrings(blocked),
+		Impact:       impact,
+		ImpactReason: impactReason,
+	}
+}
+
+func (w *Worker) canSaveAutoHint(pkg string) bool {
+	window := time.Duration(w.Cfg.AutoHintRateLimitMin) * time.Minute
+	if window <= 0 || pkg == "" {
+		return true
+	}
+	w.autoHintMu.Lock()
+	defer w.autoHintMu.Unlock()
+	last, ok := w.autoHintLast[strings.ToLower(pkg)]
+	if !ok {
+		return true
+	}
+	return time.Since(last) >= window
+}
+
+func (w *Worker) markAutoHintSaved(pkg string) {
+	if pkg == "" {
+		return
+	}
+	w.autoHintMu.Lock()
+	w.autoHintLast[strings.ToLower(pkg)] = time.Now()
+	w.autoHintMu.Unlock()
+}
+
+func autoFixThreshold(raw string) float64 {
+	if raw == "" {
+		return 0.0
+	}
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if v, err := strconv.ParseFloat(raw, 64); err == nil {
+		return v
+	}
+	switch raw {
+	case "low":
+		return 0.3
+	case "medium":
+		return 0.6
+	case "high":
+		return 0.9
+	default:
+		return 0.0
+	}
+}
+
+func confidenceScore(conf string) float64 {
+	conf = strings.TrimSpace(strings.ToLower(conf))
+	if conf == "" {
+		return 0.3
+	}
+	if v, err := strconv.ParseFloat(conf, 64); err == nil {
+		return v
+	}
+	switch conf {
+	case "low":
+		return 0.3
+	case "medium":
+		return 0.6
+	case "high":
+		return 0.9
+	default:
+		return 0.3
 	}
 }
 
@@ -150,6 +257,7 @@ func inferHintFromLog(logContent string, ctx plan.HintContext) (plan.Hint, []str
 		}
 		hint := baseAutoHint(ctx, fmt.Sprintf(`ModuleNotFoundError: No module named ['"]%s['"]`, regexp.QuoteMeta(mod)))
 		hint.Tags = append(hint.Tags, "missing-module", "python")
+		hint.Confidence = "low"
 		hint.Note = fmt.Sprintf("Auto-detected missing Python module %s from build logs.", mod)
 		hint.Recipes = map[string][]string{"pip": {mod}}
 		hint.Examples = []string{m[0]}
@@ -163,6 +271,7 @@ func inferHintFromLog(logContent string, ctx plan.HintContext) (plan.Hint, []str
 		recipes := headerRecipes(base)
 		hint := baseAutoHint(ctx, fmt.Sprintf(`fatal error: %s: No such file or directory`, regexp.QuoteMeta(header)))
 		hint.Tags = append(hint.Tags, "missing-header")
+		hint.Confidence = "medium"
 		hint.Note = fmt.Sprintf("Auto-detected missing header %s from build logs.", header)
 		hint.Recipes = recipes
 		hint.Examples = []string{m[0]}
@@ -175,10 +284,47 @@ func inferHintFromLog(logContent string, ctx plan.HintContext) (plan.Hint, []str
 		recipes := libraryRecipes(lib)
 		hint := baseAutoHint(ctx, fmt.Sprintf(`cannot find -l%s`, regexp.QuoteMeta(lib)))
 		hint.Tags = append(hint.Tags, "missing-lib")
+		hint.Confidence = "medium"
 		hint.Note = fmt.Sprintf("Auto-detected missing linker library %s from build logs.", lib)
 		hint.Recipes = recipes
 		hint.Examples = []string{m[0]}
 		return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
+	}
+
+	pkgConfigMissing := regexp.MustCompile(`No package '([^']+)' found|Package '([^']+)', required by 'virtual:world', not found`)
+	if m := pkgConfigMissing.FindStringSubmatch(logContent); len(m) > 0 {
+		name := ""
+		for _, val := range m[1:] {
+			if val != "" {
+				name = val
+				break
+			}
+		}
+		if name != "" {
+			recipes := libraryRecipes(name)
+			hint := baseAutoHint(ctx, fmt.Sprintf(`No package '%s' found`, regexp.QuoteMeta(name)))
+			hint.Tags = append(hint.Tags, "pkg-config", "missing-lib")
+			hint.Confidence = "medium"
+			hint.Note = fmt.Sprintf("Auto-detected missing pkg-config package %s from build logs.", name)
+			hint.Recipes = recipes
+			hint.Examples = []string{m[0]}
+			return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
+		}
+	}
+
+	cmakeMissing := regexp.MustCompile(`Could NOT find ([A-Za-z0-9_+.-]+)`)
+	if m := cmakeMissing.FindStringSubmatch(logContent); len(m) == 2 {
+		name := strings.TrimSpace(m[1])
+		if name != "" {
+			recipes := libraryRecipes(name)
+			hint := baseAutoHint(ctx, fmt.Sprintf(`Could NOT find %s`, regexp.QuoteMeta(name)))
+			hint.Tags = append(hint.Tags, "cmake", "missing-lib")
+			hint.Confidence = "medium"
+			hint.Note = fmt.Sprintf("Auto-detected missing CMake dependency %s from build logs.", name)
+			hint.Recipes = recipes
+			hint.Examples = []string{m[0]}
+			return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
+		}
 	}
 
 	missingTool := regexp.MustCompile(`(?:/bin/sh: )?([A-Za-z0-9_\-]+): command not found`)
@@ -188,7 +334,22 @@ func inferHintFromLog(logContent string, ctx plan.HintContext) (plan.Hint, []str
 		if len(recipes) > 0 {
 			hint := baseAutoHint(ctx, fmt.Sprintf(`%s: command not found`, regexp.QuoteMeta(tool)))
 			hint.Tags = append(hint.Tags, "missing-tool")
+			hint.Confidence = "medium"
 			hint.Note = fmt.Sprintf("Auto-detected missing tool %s from build logs.", tool)
+			hint.Recipes = recipes
+			hint.Examples = []string{m[0]}
+			return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
+		}
+	}
+
+	rustMissing := regexp.MustCompile(`(?i)rust compiler not found|rustc.*not found|cargo.*not found`)
+	if m := rustMissing.FindStringSubmatch(logContent); len(m) > 0 {
+		recipes := toolRecipes("cargo")
+		if len(recipes) > 0 {
+			hint := baseAutoHint(ctx, "rust compiler not found")
+			hint.Tags = append(hint.Tags, "missing-tool", "rust")
+			hint.Confidence = "medium"
+			hint.Note = "Auto-detected missing Rust toolchain from build logs."
 			hint.Recipes = recipes
 			hint.Examples = []string{m[0]}
 			return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
@@ -344,6 +505,110 @@ func toolRecipes(tool string) map[string][]string {
 	default:
 		return nil
 	}
+}
+
+func findSimilarHint(existing []plan.Hint, candidate plan.Hint) (plan.Hint, bool, bool) {
+	candPattern := strings.TrimSpace(strings.ToLower(candidate.Pattern))
+	candKey := hintRecipeKey(candidate)
+	candPkg := hintPackage(candidate)
+	for _, h := range existing {
+		if candPattern != "" && strings.TrimSpace(strings.ToLower(h.Pattern)) == candPattern {
+			merged, updated := mergeHintExamples(h, candidate.Examples)
+			return merged, true, updated
+		}
+		if candKey != "" && hintRecipeKey(h) == candKey {
+			if candPkg == "" || candPkg == hintPackage(h) {
+				merged, updated := mergeHintExamples(h, candidate.Examples)
+				return merged, true, updated
+			}
+		}
+	}
+	return plan.Hint{}, false, false
+}
+
+func hintRecipeKey(h plan.Hint) string {
+	if len(h.Recipes) == 0 {
+		return ""
+	}
+	return strings.ToLower(strings.Join(flattenRecipeMap(h.Recipes), "|"))
+}
+
+func hintPackage(h plan.Hint) string {
+	if len(h.AppliesTo) == 0 {
+		return ""
+	}
+	for k, vals := range h.AppliesTo {
+		key := strings.ToLower(strings.TrimSpace(k))
+		if key == "packages" || key == "package" || key == "package_names" {
+			if len(vals) > 0 {
+				return strings.ToLower(strings.TrimSpace(vals[0]))
+			}
+		}
+	}
+	return ""
+}
+
+func mergeHintExamples(h plan.Hint, examples []string) (plan.Hint, bool) {
+	if len(examples) == 0 {
+		return h, false
+	}
+	seen := make(map[string]bool)
+	for _, ex := range h.Examples {
+		seen[ex] = true
+	}
+	updated := false
+	for _, ex := range examples {
+		ex = strings.TrimSpace(ex)
+		if ex == "" || seen[ex] {
+			continue
+		}
+		seen[ex] = true
+		h.Examples = append(h.Examples, ex)
+		updated = true
+	}
+	return h, updated
+}
+
+func recipeImpact(recipes []string) (string, string) {
+	if len(recipes) == 0 {
+		return "", ""
+	}
+	if len(recipes) >= 6 {
+		return "high", "bulk dependency install"
+	}
+	high := map[string]bool{
+		"build-essential": true,
+		"gcc":             true,
+		"g++":             true,
+		"clang":           true,
+		"llvm":            true,
+		"rust":            true,
+		"rustc":           true,
+		"cargo":           true,
+		"gcc-c++":         true,
+	}
+	for _, recipe := range recipes {
+		parts := strings.SplitN(recipe, ":", 2)
+		if len(parts) == 0 {
+			continue
+		}
+		mgr := strings.TrimSpace(parts[0])
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		if mgr == "env" {
+			return "high", "environment override"
+		}
+		if mgr == "apt" || mgr == "dnf" || mgr == "pip" {
+			for _, tok := range strings.Fields(arg) {
+				if high[strings.ToLower(tok)] {
+					return "high", fmt.Sprintf("installs %s", tok)
+				}
+			}
+		}
+	}
+	return "normal", ""
 }
 
 func archFromPlatformTag(tag string) string {
