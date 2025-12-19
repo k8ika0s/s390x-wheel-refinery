@@ -1175,8 +1175,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         setPendingInputs(pendingArr);
       }
       if (wantsBuilds) {
-        const buildsList = await fetchBuilds({ status: buildStatus || undefined }, authToken).catch(() => []);
-        setBuilds(Array.isArray(buildsList) ? buildsList : []);
+        const buildsList = await fetchBuilds({ status: buildStatus || undefined }, authToken).catch(() => null);
+        if (Array.isArray(buildsList)) {
+          setBuilds(buildsList);
+        }
       }
       setDashboard((prev) => ({
         summary: data.summary ?? prev?.summary ?? null,
@@ -3026,6 +3028,19 @@ const enqueuePlanForInput = async (pi, verb) => {
               ))}
             </div>
             <div className="text-xs text-slate-400">Oldest queued: {buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}</div>
+            {buildQueueLength > 0 && settingsData?.auto_build === false && (
+              <div className="glass subtle px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 text-xs flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <span>Auto-build is off; queued builds will not start until you run the worker or enable auto-build.</span>
+                <div className="flex items-center gap-2">
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleTriggerWorker}>
+                    Run worker now
+                  </button>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => navigate("/settings")}>
+                    Open settings
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="min-w-full w-full table-fixed text-xs border border-border rounded-lg" aria-busy={buildsLoading}>
                 <thead className="bg-slate-900 text-slate-400 sticky top-0">
@@ -3041,17 +3056,17 @@ const enqueuePlanForInput = async (pi, verb) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {buildsLoading && (
+                  {buildsLoading && !builds.length && (
                     <tr>
                       <td className="px-2 py-3 text-slate-400 text-center" colSpan="8">
                         Loading builds…
                       </td>
                     </tr>
                   )}
-                  {!buildsLoading && builds.length
+                  {builds.length
                     ? builds.map((b, idx) => (
                         <tr
-                          key={`${b.package}-${b.version}-${idx}`}
+                          key={b.id ?? `${b.package}-${b.version}-${idx}`}
                           className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
                           onClick={() => navigate(`/package/${encodeURIComponent(b.package)}`)}
                           title="View package details"
