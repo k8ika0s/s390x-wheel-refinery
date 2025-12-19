@@ -9,7 +9,7 @@ flowchart TD
   G -->|inferred| I[Assign hint ID]
   I --> J[Check confidence threshold]
   J -->|blocked| E
-  J -->|allowed| K[Auto-save hint (rate-limited)]
+  J -->|allowed| K[Auto-save hint - rate limited]
   K --> L[Merge recipes with existing]
   F --> L
   L --> M{Recipes increased?}
