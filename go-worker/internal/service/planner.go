@@ -333,16 +333,26 @@ func parseRequirementsBytes(data []byte) []plan.DepSpec {
 		}
 		name := line
 		version := ""
-		for _, op := range []string{"==", ">=", "~="} {
-			if idx := strings.Index(line, op); idx > 0 {
-				name = strings.TrimSpace(line[:idx])
-				version = line[idx:]
-				if op == "==" {
-					version = strings.TrimPrefix(version, "==")
+
+		// Handle direct URL or VCS references (`package @ url`)
+		if at := strings.Index(line, "@"); at > 0 {
+			name = strings.TrimSpace(line[:at])
+			version = strings.TrimSpace(line[at:])
+		} else {
+			// Handle comparison operators, including <= and <
+			for _, op := range []string{"==", ">=", "<=", "~=", "<", ">"} {
+				if idx := strings.Index(line, op); idx > 0 {
+					name = strings.TrimSpace(line[:idx])
+					version = strings.TrimSpace(line[idx:])
+					// strip leading == for consistency
+					if op == "==" {
+						version = strings.TrimPrefix(version, "==")
+					}
+					break
 				}
-				break
 			}
 		}
+
 		name = normalizeReqName(name)
 		if name == "" {
 			continue
