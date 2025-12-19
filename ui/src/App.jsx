@@ -2058,7 +2058,7 @@ const enqueuePlanForInput = async (pi, verb) => {
     alerts.push("Auto-plan is off; uploads require manual plan enqueue.");
   }
   if (settingsData?.auto_build === false) {
-    alerts.push("Auto-build is off; planned builds will wait for manual start.");
+    alerts.push("Auto-build is off; plans require manual build enqueue.");
   }
   if (!authToken) {
     alerts.push("No worker token set; worker actions may be rejected.");
@@ -3042,10 +3042,10 @@ const enqueuePlanForInput = async (pi, verb) => {
             <div className="text-xs text-slate-400">Oldest queued: {buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}</div>
             {buildQueueLength > 0 && settingsData?.auto_build === false && (
               <div className="glass subtle px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 text-xs flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <span>Auto-build is off; queued builds will not start until you run the worker or enable auto-build.</span>
+                <span>Auto-build is off; make sure builds were enqueued manually from the Plans page.</span>
                 <div className="flex items-center gap-2">
-                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleTriggerWorker}>
-                    Run worker now
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => navigate("/plans")}>
+                    Open plans
                   </button>
                   <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => navigate("/settings")}>
                     Open settings
