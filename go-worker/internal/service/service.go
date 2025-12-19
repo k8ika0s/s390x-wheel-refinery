@@ -32,6 +32,14 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	var drainInProgress atomic.Bool
+	runDrain := func(ctx context.Context) (bool, error) {
+		if !drainInProgress.CompareAndSwap(false, true) {
+			return false, nil
+		}
+		defer drainInProgress.Store(false)
+		return true, w.RunOnce(ctx)
+	}
 	// allow dynamic pool overrides from settings poller
 	w.buildPoolSize = &buildPool
 	ctx, cancel := context.WithCancel(context.Background())
@@ -52,6 +60,9 @@ func Run() error {
 		go plannerLoop(ctx, cfg, popURL, statusURL, listURL, &planPool, &pyVersion, &platformTag)
 	}
 	go pollSettings(ctx, cfg, &planPool, &buildPool, &pyVersion, &platformTag)
+	if cfg.AutoBuild {
+		go buildLoop(ctx, cfg, runDrain)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(wr http.ResponseWriter, r *http.Request) {
 		wr.WriteHeader(http.StatusOK)
@@ -78,7 +89,13 @@ func Run() error {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
 		defer cancel()
-		if err := w.RunOnce(ctx); err != nil {
+		ran, err := runDrain(ctx)
+		if !ran {
+			wr.WriteHeader(http.StatusConflict)
+			_, _ = wr.Write([]byte(`{"error":"worker already running"}`))
+			return
+		}
+		if err != nil {
 			wr.WriteHeader(http.StatusInternalServerError)
 			_, _ = wr.Write([]byte(err.Error()))
 			return

@@ -24,6 +24,7 @@ type Config struct {
 	PlanPollIntervalSec  int
 	PlanPopBatch         int
 	AutoBuild            bool
+	BuildPollIntervalSec int
 	BuildPopURL          string
 	BuildStatusURL       string
 	KafkaBrokers         string
@@ -96,6 +97,7 @@ func fromEnv() Config {
 		PlanPollIntervalSec:  getenvInt("PLAN_POLL_INTERVAL_SEC", 15),
 		PlanPopBatch:         getenvInt("PLAN_POP_BATCH", 5),
 		AutoBuild:            getenvBool("AUTO_BUILD", true),
+		BuildPollIntervalSec: getenvInt("BUILD_POLL_INTERVAL_SEC", 5),
 		BuildPopURL:          getenv("BUILD_POP_URL", ""),
 		BuildStatusURL:       getenv("BUILD_STATUS_URL", ""),
 		KafkaBrokers:         getenv("KAFKA_BROKERS", ""),
