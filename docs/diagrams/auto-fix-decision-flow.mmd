@@ -1,0 +1,17 @@
+flowchart TD
+  A[Build failed] --> B[Scan last log lines]
+  B --> C[Match known hints]
+  C -->|match| D[Check applies_to + confidence]
+  D -->|below threshold| E[Block hint + record metadata]
+  D -->|meets threshold| F[Collect recipes]
+  C -->|no match| G[Infer hint from patterns]
+  G -->|no inference| H[No auto-fix applied]
+  G -->|inferred| I[Assign hint ID]
+  I --> J[Check confidence threshold]
+  J -->|blocked| E
+  J -->|allowed| K[Auto-save hint (rate-limited)]
+  K --> L[Merge recipes with existing]
+  F --> L
+  L --> M{Recipes increased?}
+  M -->|yes| N[Apply auto-fix + requeue]
+  M -->|no| H

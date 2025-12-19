@@ -1,0 +1,9 @@
+flowchart TD
+  A[Wheel built] --> B{Repair enabled?}
+  B -->|no| C[Done]
+  B -->|yes| D[Locate repair output]
+  D -->|exists| E[Verify digest + push]
+  D -->|missing| F[Run repair tool]
+  F --> G[Verify digest + push]
+  E --> C
+  G --> C

@@ -1,0 +1,7 @@
+flowchart LR
+  A[Worker] -->|events, metadata| B[Control-plane DB]
+  A -->|logs, manifests| B
+  B --> C[UI Events table]
+  B --> D[Automation timeline]
+  B --> E[Build queue view]
+  B --> F[Hints catalog]
