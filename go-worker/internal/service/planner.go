@@ -9,13 +9,14 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/objectstore"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
 	"golang.org/x/sync/errgroup"
-	"sync/atomic"
 )
 
 type pendingInput struct {
@@ -251,9 +252,13 @@ func planOne(ctx context.Context, client *http.Client, cfg Config, store objects
 	if err != nil {
 		log.Printf("planner: fetch hints failed: %v", err)
 	}
+	cacheDir := cfg.CacheDir
+	if cacheDir != "" && pi.ID > 0 {
+		cacheDir = filepath.Join(cacheDir, "plans", fmt.Sprintf("%d", pi.ID))
+	}
 	snap, err := plan.GenerateFromInputs(
 		inputs,
-		cfg.CacheDir,
+		cacheDir,
 		cfg.PythonVersion,
 		cfg.PlatformTag,
 		cfg.IndexURL,

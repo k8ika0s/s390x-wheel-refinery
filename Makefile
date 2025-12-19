@@ -27,7 +27,7 @@ build-devcontainer:
 	$(ENGINE) build -t $(DEV_IMAGE) -f .devcontainer/Containerfile .
 
 prep-dirs:
-	mkdir -p input output cache
+	mkdir -p input output cache cache/cas cache/pip cache/plans
 
 up: prep-dirs
 	$(ENGINE) compose -f $(COMPOSE_FILE) up
