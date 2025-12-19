@@ -62,6 +62,7 @@ type PendingInput struct {
 	ObjectKey    string          `json:"object_key,omitempty"`
 	ContentType  string          `json:"content_type,omitempty"`
 	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	PlanID       *int64          `json:"plan_id,omitempty"`
 	LoadedAt     *time.Time      `json:"loaded_at,omitempty"`
 	PlannedAt    *time.Time      `json:"planned_at,omitempty"`
 	ProcessedAt  *time.Time      `json:"processed_at,omitempty"`

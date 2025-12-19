@@ -304,10 +304,18 @@ func (p *PostgresStore) ListPendingInputs(ctx context.Context, status string) ([
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	q := `SELECT id, filename, digest, size_bytes, status, COALESCE(error,''),
-		source_type, object_bucket, object_key, content_type, COALESCE(metadata,'{}'),
-		loaded_at, planned_at, processed_at, deleted_at, created_at, updated_at
-		FROM pending_inputs WHERE deleted_at IS NULL`
+	q := `SELECT pi.id, pi.filename, pi.digest, pi.size_bytes, pi.status, COALESCE(pi.error,''),
+		pi.source_type, pi.object_bucket, pi.object_key, pi.content_type, COALESCE(pi.metadata,'{}'),
+		pi.loaded_at, pi.planned_at, pi.processed_at, pi.deleted_at, pi.created_at, pi.updated_at,
+		pm.plan_id
+		FROM pending_inputs pi
+		LEFT JOIN LATERAL (
+			SELECT plan_id FROM plan_metadata pm
+			WHERE pm.pending_input = pi.id
+			ORDER BY pm.created_at DESC
+			LIMIT 1
+		) pm ON true
+		WHERE pi.deleted_at IS NULL`
 	args := []any{}
 	if status != "" {
 		q += ` AND status = $1`
@@ -322,6 +330,7 @@ func (p *PostgresStore) ListPendingInputs(ctx context.Context, status string) ([
 	var out []PendingInput
 	for rows.Next() {
 		var pi PendingInput
+		var planID sql.NullInt64
 		if err := rows.Scan(
 			&pi.ID,
 			&pi.Filename,
@@ -340,8 +349,12 @@ func (p *PostgresStore) ListPendingInputs(ctx context.Context, status string) ([
 			&pi.DeletedAt,
 			&pi.CreatedAt,
 			&pi.UpdatedAt,
+			&planID,
 		); err != nil {
 			return nil, err
+		}
+		if planID.Valid {
+			pi.PlanID = &planID.Int64
 		}
 		out = append(out, pi)
 	}

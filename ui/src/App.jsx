@@ -318,6 +318,18 @@ function Toasts({ toasts, onDismiss }) {
         >
           <div className="font-semibold">{t.title || (t.type === "error" ? "Error" : "Success")}</div>
           <div className="text-sm text-slate-200">{t.message}</div>
+          {t.link && (
+            <Link
+              to={t.link.to}
+              className="mt-1 inline-flex text-sm text-sky-200 underline decoration-sky-400/70 hover:text-sky-100"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDismiss(t.id);
+              }}
+            >
+              {t.link.label || "View"}
+            </Link>
+          )}
         </div>
       ))}
     </div>
@@ -1006,6 +1018,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [apiBlocked, setApiBlocked] = useState(false);
   const [pendingInputs, setPendingInputs] = useState([]);
   const pendingPrevRef = useRef([]);
+  const manualPlanQueueRef = useRef(new Map());
+  const manualPlanToastRef = useRef(new Set());
   const [pendingHighlight, setPendingHighlight] = useState({});
   const [builds, setBuilds] = useState([]);
   const [buildsLoading, setBuildsLoading] = useState(false);
@@ -1019,6 +1033,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planListLoading, setPlanListLoading] = useState(false);
   const [planListError, setPlanListError] = useState("");
   const [clearingPlans, setClearingPlans] = useState(false);
+  const desiredPlanIdRef = useRef(null);
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [planDetailsLoading, setPlanDetailsLoading] = useState(false);
@@ -1117,7 +1132,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       if (wantsInputs || wantsOverview) {
         const pending = await fetchPendingInputs(authToken).catch(() => []);
         const pendingArr = Array.isArray(pending) ? pending : [];
-        const prevIds = new Set((pendingPrevRef.current || []).map((pi) => pi.id));
+        const prevPending = pendingPrevRef.current || [];
+        const prevById = new Map(prevPending.map((pi) => [pi.id, pi]));
+        const prevIds = new Set(prevPending.map((pi) => pi.id));
         const newOnes = pendingArr.filter((pi) => pi?.id && !prevIds.has(pi.id));
         if (newOnes.length) {
           const add = {};
@@ -1133,6 +1150,27 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             });
           }, 1400);
         }
+        const completedStatuses = new Set(["planned", "queued", "build_queued"]);
+        const manualReady = [];
+        pendingArr.forEach((pi) => {
+          if (!pi?.id) return;
+          if (!manualPlanQueueRef.current.has(pi.id)) return;
+          if (manualPlanToastRef.current.has(pi.id)) return;
+          if (!completedStatuses.has(pi.status)) return;
+          const prev = prevById.get(pi.id);
+          if (prev && completedStatuses.has(prev.status)) return;
+          manualReady.push(pi);
+        });
+        manualReady.forEach((pi) => {
+          const planId = Number(pi.plan_id);
+          const label = pi.filename || `Pending input ${pi.id}`;
+          const link = planId
+            ? { to: `/plans?plan=${planId}`, label: `Open plan #${planId}` }
+            : { to: "/plans", label: "Open plans" };
+          pushToast?.({ type: "success", title: "Plan ready", message: `${label} planned`, link });
+          manualPlanToastRef.current.add(pi.id);
+          manualPlanQueueRef.current.delete(pi.id);
+        });
         pendingPrevRef.current = pendingArr;
         setPendingInputs(pendingArr);
       }
@@ -1246,6 +1284,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     setApiBaseInput(apiBase || getApiBase());
   }, [apiBase]);
 
+  const parsePlanIdFromSearch = (searchValue) => {
+    if (!searchValue) return null;
+    const params = new URLSearchParams(searchValue);
+    const raw = params.get("plan") || params.get("plan_id");
+    const id = Number(raw);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  };
+
   const loadPlanList = async () => {
     setPlanListLoading(true);
     setPlanListError("");
@@ -1255,7 +1301,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       setPlanList(items);
       if (items.length > 0) {
         const ids = new Set(items.map((p) => p.id));
-        if (!selectedPlanId || !ids.has(selectedPlanId)) {
+        const desiredPlanId = desiredPlanIdRef.current;
+        if (desiredPlanId && ids.has(desiredPlanId)) {
+          setSelectedPlanId(desiredPlanId);
+          desiredPlanIdRef.current = null;
+        } else if (!selectedPlanId || !ids.has(selectedPlanId)) {
           setSelectedPlanId(items[0].id);
         }
       } else {
@@ -1268,6 +1318,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       setPlanListLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (view !== "plans") return;
+    const planId = parsePlanIdFromSearch(location.search);
+    if (!planId) return;
+    desiredPlanIdRef.current = planId;
+    setSelectedPlanId(planId);
+  }, [view, location.search]);
 
   const loadPlanDetails = async (planId) => {
     if (!planId) return;
@@ -1523,6 +1581,8 @@ const enqueuePlanForInput = async (pi, verb) => {
     setPendingActions((m) => ({ ...m, [pi.id]: "enqueue" }));
     try {
       await enqueuePlan(pi.id, authToken);
+      manualPlanQueueRef.current.set(pi.id, { filename: pi.filename || `Pending input ${pi.id}` });
+      manualPlanToastRef.current.delete(pi.id);
       pushToast?.({ type: "success", title: verb, message: pi.filename });
       await load();
     } catch (e) {
@@ -3550,9 +3610,9 @@ export default function App() {
   const [apiStatus, setApiStatus] = useState("unknown");
 
   const dismissToast = (id) => setToasts((ts) => ts.filter((t) => t.id !== id));
-  const pushToast = ({ type = "success", title, message }) => {
+  const pushToast = ({ type = "success", title, message, link }) => {
     const id = `${Date.now()}-${Math.random()}`;
-    setToasts((ts) => [...ts, { id, type, title, message }]);
+    setToasts((ts) => [...ts, { id, type, title, message, link }]);
     setTimeout(() => dismissToast(id), 4000);
   };
 
