@@ -115,6 +115,15 @@ body {
   gap: 0.75rem;
 }
 
+.dag-wrap--vertical .dag-columns {
+  flex-direction: column;
+}
+
+.dag-wrap--vertical .dag-column {
+  flex-direction: row;
+  align-items: flex-start;
+}
+
 .dag-legend {
   display: flex;
   flex-wrap: wrap;
@@ -160,6 +169,8 @@ body {
     rgba(15, 23, 42, 0.55);
   box-shadow: inset 0 0 40px rgba(2, 6, 23, 0.35);
   overflow: visible;
+  transform-origin: 0 0;
+  transition: transform 320ms ease;
 }
 
 .dag-columns {
@@ -188,6 +199,12 @@ body {
   justify-content: space-between;
   gap: 0.35rem;
   box-shadow: 0 12px 30px rgba(2, 6, 23, 0.35);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.dag-node--focus {
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.45), 0 12px 30px rgba(2, 6, 23, 0.35);
 }
 
 .dag-node--runtime {
@@ -215,6 +232,7 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.4rem;
+  min-width: 0;
 }
 
 .dag-node-title {
@@ -222,6 +240,12 @@ body {
   font-weight: 600;
   color: #e2e8f0;
   line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .dag-node-sub {
@@ -229,12 +253,18 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: rgba(148, 163, 184, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dag-node-digest {
   font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 0.65rem;
   color: rgba(148, 163, 184, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dag-edges {

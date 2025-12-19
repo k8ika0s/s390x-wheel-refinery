@@ -92,11 +92,11 @@ const formatAutomationSummary = (meta) => {
 };
 
 const DAG_LAYOUT = {
-  nodeWidth: 200,
-  nodeHeight: 64,
-  nodeGap: 16,
-  colGap: 28,
-  pad: 16,
+  nodeWidth: 210,
+  nodeHeight: 72,
+  nodeGap: 20,
+  colGap: 36,
+  pad: 18,
 };
 
 const normalizeDag = (dag) => {
@@ -146,9 +146,16 @@ const dagNodeLabel = (node) => {
   return { title: meta.name || type, subtitle: meta.version || "" };
 };
 
-const buildDagLayout = (dag) => {
+const buildDagLayout = (dag, orientation = "horizontal") => {
   const nodes = normalizeDag(dag);
   if (!nodes.length) return null;
+  const layout = {
+    nodeWidth: DAG_LAYOUT.nodeWidth,
+    nodeHeight: DAG_LAYOUT.nodeHeight,
+    colGap: orientation === "vertical" ? DAG_LAYOUT.nodeGap : DAG_LAYOUT.colGap,
+    rowGap: orientation === "vertical" ? DAG_LAYOUT.colGap : DAG_LAYOUT.nodeGap,
+    pad: DAG_LAYOUT.pad,
+  };
   const items = [];
   const inputsById = new Map();
   for (const node of nodes) {
@@ -192,7 +199,7 @@ const buildDagLayout = (dag) => {
 
   const columns = [];
   const positions = {};
-  let maxRows = 0;
+  let maxBucketSize = 0;
   sorted.forEach((item) => {
     const col = depth.get(item.id) ?? 0;
     if (!columns[col]) columns[col] = [];
@@ -200,9 +207,9 @@ const buildDagLayout = (dag) => {
   });
   columns.forEach((colItems, colIdx) => {
     if (!colItems) return;
-    maxRows = Math.max(maxRows, colItems.length);
+    maxBucketSize = Math.max(maxBucketSize, colItems.length);
     colItems.forEach((item, rowIdx) => {
-      positions[item.id] = { col: colIdx, row: rowIdx };
+      positions[item.id] = orientation === "vertical" ? { col: rowIdx, row: colIdx } : { col: colIdx, row: rowIdx };
     });
   });
 
@@ -216,17 +223,19 @@ const buildDagLayout = (dag) => {
     }
   }
 
-  const colCount = Math.max(columns.length, 1);
+  const depthCount = Math.max(columns.length, 1);
+  const colCount = Math.max(1, orientation === "vertical" ? maxBucketSize : depthCount);
+  const rowCount = Math.max(1, orientation === "vertical" ? depthCount : maxBucketSize);
   const width =
-    DAG_LAYOUT.pad * 2 +
-    colCount * DAG_LAYOUT.nodeWidth +
-    Math.max(0, colCount - 1) * DAG_LAYOUT.colGap;
+    layout.pad * 2 +
+    colCount * layout.nodeWidth +
+    Math.max(0, colCount - 1) * layout.colGap;
   const height =
-    DAG_LAYOUT.pad * 2 +
-    Math.max(1, maxRows) * DAG_LAYOUT.nodeHeight +
-    Math.max(0, maxRows - 1) * DAG_LAYOUT.nodeGap;
+    layout.pad * 2 +
+    rowCount * layout.nodeHeight +
+    Math.max(0, rowCount - 1) * layout.rowGap;
 
-  return { columns, edges, positions, size: { width, height } };
+  return { columns, edges, positions, size: { width, height }, layout, orientation };
 };
 
 function ArtifactBadges({ meta }) {
@@ -976,6 +985,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planDetailsError, setPlanDetailsError] = useState("");
   const [enqueueingBuilds, setEnqueueingBuilds] = useState(false);
   const [planTab, setPlanTab] = useState("builds");
+  const [planGraphOpen, setPlanGraphOpen] = useState(false);
+  const [planGraphLayout, setPlanGraphLayout] = useState("horizontal");
+  const [planGraphFocus, setPlanGraphFocus] = useState(null);
+  const [planGraphTransform, setPlanGraphTransform] = useState("translate(0px, 0px) scale(1)");
+  const planGraphViewportRef = useRef(null);
   const [hintSearch, setHintSearch] = useState("");
   const [hintPage, setHintPage] = useState(1);
   const [hintQuery, setHintQuery] = useState("");
@@ -1299,7 +1313,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
 
   useEffect(() => {
     setPlanTab("builds");
+    setPlanGraphOpen(false);
+    setPlanGraphFocus(null);
+    setPlanGraphTransform("translate(0px, 0px) scale(1)");
   }, [selectedPlanId]);
+
+  useEffect(() => {
+    setPlanGraphFocus(null);
+    setPlanGraphTransform("translate(0px, 0px) scale(1)");
+  }, [planGraphLayout]);
 
   const handleTriggerWorker = async () => {
     setMessage("");
@@ -1649,6 +1671,12 @@ const enqueuePlanForInput = async (pi, verb) => {
     pushToast?.({ type: "success", title: "Token saved", message: "Worker token stored locally" });
   };
 
+  const closePlanGraph = () => {
+    setPlanGraphOpen(false);
+    setPlanGraphFocus(null);
+    setPlanGraphTransform("translate(0px, 0px) scale(1)");
+  };
+
   const queueObj = dashboard?.queue && typeof dashboard.queue === "object" && !Array.isArray(dashboard.queue) ? dashboard.queue : null;
   const queueItems = toArray(queueObj?.items);
   const queueLength = Number.isFinite(queueObj?.length) ? queueObj.length : queueItems.length;
@@ -1693,8 +1721,8 @@ const enqueuePlanForInput = async (pi, verb) => {
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
-  const planDag = buildDagLayout(selectedPlan?.dag);
-  const planPanelHeightClass = planTab === "graph" ? "max-h-[26rem]" : "max-h-80";
+  const planDag = buildDagLayout(selectedPlan?.dag, planGraphLayout);
+  const planPanelHeightClass = "max-h-80";
   const planPythonVersion =
     selectedPlanNodes.find((n) => n?.python_version)?.python_version ||
     selectedPlanNodes.find((n) => n?.python_tag)?.python_tag ||
@@ -1704,6 +1732,139 @@ const enqueuePlanForInput = async (pi, verb) => {
     selectedPlanNodes.find((n) => n?.platform_tag)?.platform_tag ||
     settingsData?.platform_tag ||
     "-";
+  const planGraphContent = planDag ? (() => {
+    const layout = planDag.layout;
+    const isVertical = planGraphLayout === "vertical";
+    const outerGap = isVertical ? layout.rowGap : layout.colGap;
+    const innerGap = isVertical ? layout.colGap : layout.rowGap;
+    return (
+      <div className={`dag-wrap ${isVertical ? "dag-wrap--vertical" : ""}`}>
+        <div className="dag-legend">
+          <span className="dag-legend-item dag-runtime">Runtime</span>
+          <span className="dag-legend-item dag-pack">Pack</span>
+          <span className="dag-legend-item dag-wheel">Wheel</span>
+          <span className="dag-legend-item dag-repair">Repair</span>
+        </div>
+        <div
+          className="dag-canvas"
+          style={{
+            minWidth: planDag.size.width,
+            minHeight: planDag.size.height,
+            transform: planGraphTransform,
+            "--dag-node-width": `${layout.nodeWidth}px`,
+            "--dag-node-height": `${layout.nodeHeight}px`,
+            "--dag-node-gap": `${innerGap}px`,
+            "--dag-col-gap": `${outerGap}px`,
+            "--dag-pad": `${layout.pad}px`,
+          }}
+        >
+          <svg className="dag-edges" width={planDag.size.width} height={planDag.size.height}>
+            <defs>
+              <marker
+                id="dag-arrow"
+                markerWidth="8"
+                markerHeight="8"
+                refX="6"
+                refY="3"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
+                <path d="M0,0 L0,6 L6,3 z" className="dag-edge-head" />
+              </marker>
+            </defs>
+            {planDag.edges.map((edge, idx) => {
+              const from = planDag.positions[edge.from];
+              const to = planDag.positions[edge.to];
+              if (!from || !to) return null;
+              if (isVertical) {
+                const x1 = layout.pad + from.col * (layout.nodeWidth + layout.colGap) + layout.nodeWidth / 2;
+                const y1 = layout.pad + from.row * (layout.nodeHeight + layout.rowGap) + layout.nodeHeight;
+                const x2 = layout.pad + to.col * (layout.nodeWidth + layout.colGap) + layout.nodeWidth / 2;
+                const y2 = layout.pad + to.row * (layout.nodeHeight + layout.rowGap);
+                const c1 = y1 + layout.rowGap * 0.4;
+                const c2 = y2 - layout.rowGap * 0.4;
+                const path = `M ${x1} ${y1} C ${x1} ${c1}, ${x2} ${c2}, ${x2} ${y2}`;
+                return <path key={`${edge.from}-${edge.to}-${idx}`} d={path} className="dag-edge" markerEnd="url(#dag-arrow)" />;
+              }
+              const x1 = layout.pad + from.col * (layout.nodeWidth + layout.colGap) + layout.nodeWidth;
+              const y1 = layout.pad + from.row * (layout.nodeHeight + layout.rowGap) + layout.nodeHeight / 2;
+              const x2 = layout.pad + to.col * (layout.nodeWidth + layout.colGap);
+              const y2 = layout.pad + to.row * (layout.nodeHeight + layout.rowGap) + layout.nodeHeight / 2;
+              const c1 = x1 + layout.colGap * 0.4;
+              const c2 = x2 - layout.colGap * 0.4;
+              const path = `M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}`;
+              return <path key={`${edge.from}-${edge.to}-${idx}`} d={path} className="dag-edge" markerEnd="url(#dag-arrow)" />;
+            })}
+          </svg>
+          <div className="dag-columns">
+            {planDag.columns.map((col, colIdx) => (
+              <div key={`col-${colIdx}`} className="dag-column">
+                {col.map((item) => {
+                  const focused = planGraphFocus === item.id;
+                  return (
+                    <div
+                      key={item.id}
+                      className={`dag-node dag-node--${item.node?.type || "unknown"} ${focused ? "dag-node--focus" : ""}`}
+                      onClick={() => setPlanGraphFocus((prev) => (prev === item.id ? null : item.id))}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setPlanGraphFocus((prev) => (prev === item.id ? null : item.id));
+                        }
+                      }}
+                    >
+                      <div className="dag-node-head">
+                        <div className="dag-node-title" title={item.label.title}>{item.label.title}</div>
+                        {item.node?.action && <span className="chip chip-muted text-[10px]">{item.node.action}</span>}
+                      </div>
+                      <div className="dag-node-sub" title={item.label.subtitle}>{item.label.subtitle || "—"}</div>
+                      <div className="dag-node-digest">{item.id.slice(0, 10)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  })() : (
+    <div className="glass subtle px-3 py-2 rounded-lg text-slate-400 text-sm">
+      No DAG data available. Replan to capture graph nodes.
+    </div>
+  );
+
+  useEffect(() => {
+    const updateTransform = () => {
+      if (!planGraphOpen || !planDag || !planGraphFocus) {
+        setPlanGraphTransform("translate(0px, 0px) scale(1)");
+        return;
+      }
+      const viewport = planGraphViewportRef.current;
+      if (!viewport) return;
+      const pos = planDag.positions[planGraphFocus];
+      if (!pos) {
+        setPlanGraphTransform("translate(0px, 0px) scale(1)");
+        return;
+      }
+      const rect = viewport.getBoundingClientRect();
+      const layout = planDag.layout;
+      const centerX = layout.pad + pos.col * (layout.nodeWidth + layout.colGap) + layout.nodeWidth / 2;
+      const centerY = layout.pad + pos.row * (layout.nodeHeight + layout.rowGap) + layout.nodeHeight / 2;
+      const scale = 1.35;
+      const tx = rect.width / 2 - centerX * scale;
+      const ty = rect.height / 2 - centerY * scale;
+      setPlanGraphTransform(`translate(${tx}px, ${ty}px) scale(${scale})`);
+    };
+    updateTransform();
+    if (!planGraphOpen) return;
+    window.addEventListener("resize", updateTransform);
+    return () => {
+      window.removeEventListener("resize", updateTransform);
+    };
+  }, [planGraphOpen, planDag, planGraphFocus, planGraphLayout]);
   const pendingByStatus = pendingInputs.reduce(
     (acc, cur) => {
       acc[cur.status] = (acc[cur.status] || 0) + 1;
@@ -2501,6 +2662,9 @@ const enqueuePlanForInput = async (pi, verb) => {
                 <button className="btn btn-secondary" onClick={() => loadPlanDetails(selectedPlan.id)} disabled={planDetailsLoading}>
                   Refresh details
                 </button>
+                <button className="btn btn-secondary" onClick={() => setPlanGraphOpen(true)}>
+                  Plan graph
+                </button>
                 <button className="btn btn-secondary" onClick={() => handleClearPlans(selectedPlan.id)} disabled={clearingPlans}>
                   {clearingPlans ? "Clearing..." : "Clear selected"}
                 </button>
@@ -2540,7 +2704,7 @@ const enqueuePlanForInput = async (pi, verb) => {
               {selectedPlanNodes.length > 0 ? (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
-                    {["builds", "hints", "recipes", "graph"].map((tab) => (
+                    {["builds", "hints", "recipes"].map((tab) => (
                       <button
                         key={tab}
                         className={`chip ${planTab === tab ? "chip-active" : "hover:bg-slate-800"}`}
@@ -2603,88 +2767,6 @@ const enqueuePlanForInput = async (pi, verb) => {
                         )}
                       </div>
                     )}
-                    {planTab === "graph" && (
-                      <div className="dag-wrap">
-                        <div className="dag-legend">
-                          <span className="dag-legend-item dag-runtime">Runtime</span>
-                          <span className="dag-legend-item dag-pack">Pack</span>
-                          <span className="dag-legend-item dag-wheel">Wheel</span>
-                          <span className="dag-legend-item dag-repair">Repair</span>
-                        </div>
-                        {planDag ? (
-                          <div
-                            className="dag-canvas"
-                            style={{
-                              minWidth: planDag.size.width,
-                              minHeight: planDag.size.height,
-                              "--dag-node-width": `${DAG_LAYOUT.nodeWidth}px`,
-                              "--dag-node-height": `${DAG_LAYOUT.nodeHeight}px`,
-                              "--dag-node-gap": `${DAG_LAYOUT.nodeGap}px`,
-                              "--dag-col-gap": `${DAG_LAYOUT.colGap}px`,
-                              "--dag-pad": `${DAG_LAYOUT.pad}px`,
-                            }}
-                          >
-                            <svg className="dag-edges" width={planDag.size.width} height={planDag.size.height}>
-                              <defs>
-                                <marker
-                                  id="dag-arrow"
-                                  markerWidth="8"
-                                  markerHeight="8"
-                                  refX="6"
-                                  refY="3"
-                                  orient="auto"
-                                  markerUnits="strokeWidth"
-                                >
-                                  <path d="M0,0 L0,6 L6,3 z" className="dag-edge-head" />
-                                </marker>
-                              </defs>
-                              {planDag.edges.map((edge, idx) => {
-                                const from = planDag.positions[edge.from];
-                                const to = planDag.positions[edge.to];
-                                if (!from || !to) return null;
-                                const x1 =
-                                  DAG_LAYOUT.pad +
-                                  from.col * (DAG_LAYOUT.nodeWidth + DAG_LAYOUT.colGap) +
-                                  DAG_LAYOUT.nodeWidth;
-                                const y1 =
-                                  DAG_LAYOUT.pad +
-                                  from.row * (DAG_LAYOUT.nodeHeight + DAG_LAYOUT.nodeGap) +
-                                  DAG_LAYOUT.nodeHeight / 2;
-                                const x2 = DAG_LAYOUT.pad + to.col * (DAG_LAYOUT.nodeWidth + DAG_LAYOUT.colGap);
-                                const y2 =
-                                  DAG_LAYOUT.pad +
-                                  to.row * (DAG_LAYOUT.nodeHeight + DAG_LAYOUT.nodeGap) +
-                                  DAG_LAYOUT.nodeHeight / 2;
-                                const c1 = x1 + DAG_LAYOUT.colGap * 0.4;
-                                const c2 = x2 - DAG_LAYOUT.colGap * 0.4;
-                                const path = `M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}`;
-                                return <path key={`${edge.from}-${edge.to}-${idx}`} d={path} className="dag-edge" markerEnd="url(#dag-arrow)" />;
-                              })}
-                            </svg>
-                            <div className="dag-columns">
-                              {planDag.columns.map((col, colIdx) => (
-                                <div key={`col-${colIdx}`} className="dag-column">
-                                  {col.map((item) => (
-                                    <div key={item.id} className={`dag-node dag-node--${item.node?.type || "unknown"}`}>
-                                      <div className="dag-node-head">
-                                        <div className="dag-node-title" title={item.label.title}>{item.label.title}</div>
-                                        {item.node?.action && <span className="chip chip-muted text-[10px]">{item.node.action}</span>}
-                                      </div>
-                                      <div className="dag-node-sub">{item.label.subtitle || "—"}</div>
-                                      <div className="dag-node-digest">{item.id.slice(0, 10)}</div>
-                                    </div>
-                                  ))}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="glass subtle px-3 py-2 rounded-lg text-slate-400 text-sm">
-                            No DAG data available. Replan to capture graph nodes.
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 </div>
               ) : (
@@ -2697,6 +2779,49 @@ const enqueuePlanForInput = async (pi, verb) => {
           {planDetailsError && selectedPlan && <div className="text-xs text-amber-200">{planDetailsError}</div>}
         </div>
       </div>
+      {planGraphOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm"
+          onClick={closePlanGraph}
+        >
+          <div
+            className="glass subtle w-[min(1100px,95vw)] max-h-[85vh] overflow-hidden border border-slate-800/80 shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Plan graph"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/70">
+              <div className="text-sm font-semibold text-slate-100">Plan graph</div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-slate-400">Layout</span>
+                {["horizontal", "vertical"].map((layout) => (
+                  <button
+                    key={layout}
+                    className={`chip text-xs ${planGraphLayout === layout ? "chip-active" : "hover:bg-slate-800"}`}
+                    onClick={() => setPlanGraphLayout(layout)}
+                  >
+                    {layout === "horizontal" ? "Horizontal" : "Vertical"}
+                  </button>
+                ))}
+                <button
+                  className="btn btn-secondary px-3 py-1 text-xs"
+                  onClick={() => setPlanGraphFocus(null)}
+                  disabled={!planGraphFocus}
+                >
+                  Reset zoom
+                </button>
+                <button className="btn btn-secondary px-3 py-1 text-xs" onClick={closePlanGraph}>
+                  Close
+                </button>
+              </div>
+            </div>
+            <div ref={planGraphViewportRef} className="p-4 overflow-auto max-h-[75vh]">
+              {planGraphContent}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
