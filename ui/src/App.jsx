@@ -29,6 +29,7 @@ import {
   uploadRequirements,
   uploadWheel,
   deletePendingInput,
+  restorePendingInput,
   enqueuePlan,
   enqueueBuildsFromPlan,
   fetchPlans,
@@ -1499,6 +1500,8 @@ const enqueuePlanForInput = async (pi, verb) => {
       .join("");
   };
 
+  const pendingVisibleStatuses = new Set(["pending", "planning", "failed"]);
+
   const handleUploadReqs = async (trigger = false) => {
     setReqError("");
     const lintErr = await lintReqFile(reqFile);
@@ -1513,13 +1516,34 @@ const enqueuePlanForInput = async (pi, verb) => {
       const digest = `sha256:${digestHex}`;
       const dup = pendingInputs.find((pi) => pi.digest === digest);
       if (dup) {
-        pushToast?.({
-          type: "info",
-          title: "Already uploaded",
-          message: `${reqFile.name} matches an existing pending upload (id ${dup.id}).`,
-        });
         setReqFile(null);
         if (reqInputRef.current) reqInputRef.current.value = "";
+        if (!pendingVisibleStatuses.has(dup.status)) {
+          try {
+            const resp = await restorePendingInput(dup.id, authToken);
+            pushToast?.({
+              type: "success",
+              title: "Pending input restored",
+              message: resp.detail || `${reqFile.name} restored (id ${dup.id}).`,
+            });
+            if (trigger) {
+              await handleTriggerWorker();
+            } else {
+              await load();
+            }
+          } catch (e) {
+            pushToast?.({ type: "error", title: "Restore failed", message: e.message });
+          }
+        } else {
+          pushToast?.({
+            type: "info",
+            title: "Already uploaded",
+            message: `${reqFile.name} matches an existing pending upload (id ${dup.id}).`,
+          });
+          if (trigger) {
+            await handleTriggerWorker();
+          }
+        }
         return;
       }
     } catch {
@@ -1561,13 +1585,34 @@ const enqueuePlanForInput = async (pi, verb) => {
       const digest = `sha256:${digestHex}`;
       const dup = pendingInputs.find((pi) => pi.digest === digest);
       if (dup) {
-        pushToast?.({
-          type: "info",
-          title: "Already uploaded",
-          message: `${wheelFile.name} matches an existing pending upload (id ${dup.id}).`,
-        });
         setWheelFile(null);
         if (wheelInputRef.current) wheelInputRef.current.value = "";
+        if (!pendingVisibleStatuses.has(dup.status)) {
+          try {
+            const resp = await restorePendingInput(dup.id, authToken);
+            pushToast?.({
+              type: "success",
+              title: "Pending input restored",
+              message: resp.detail || `${wheelFile.name} restored (id ${dup.id}).`,
+            });
+            if (trigger) {
+              await handleTriggerWorker();
+            } else {
+              await load();
+            }
+          } catch (e) {
+            pushToast?.({ type: "error", title: "Restore failed", message: e.message });
+          }
+        } else {
+          pushToast?.({
+            type: "info",
+            title: "Already uploaded",
+            message: `${wheelFile.name} matches an existing pending upload (id ${dup.id}).`,
+          });
+          if (trigger) {
+            await handleTriggerWorker();
+          }
+        }
         return;
       }
     } catch {

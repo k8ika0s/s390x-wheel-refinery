@@ -27,6 +27,7 @@ type fakeStore struct {
 		status string
 		errMsg string
 	}
+	restoredPendingID int64
 	queuedBuilds []store.PlanNode
 }
 
@@ -136,6 +137,10 @@ func (f *fakeStore) UpdatePendingInputStatus(ctx context.Context, id int64, stat
 }
 func (f *fakeStore) DeletePendingInput(ctx context.Context, id int64) (store.PendingInput, error) {
 	return store.PendingInput{ID: id}, nil
+}
+func (f *fakeStore) RestorePendingInput(ctx context.Context, id int64) (store.PendingInput, error) {
+	f.restoredPendingID = id
+	return store.PendingInput{ID: id, Status: "pending"}, nil
 }
 func (f *fakeStore) LinkPlanToPendingInput(ctx context.Context, pendingID, planID int64) error {
 	return nil
@@ -429,6 +434,27 @@ func TestPendingInputStatusUpdate(t *testing.T) {
 	}
 	if len(fs.pendingStatuses) != 1 || fs.pendingStatuses[0].id != 9 || fs.pendingStatuses[0].status != "planned" {
 		t.Fatalf("expected planned update, got %+v", fs.pendingStatuses)
+	}
+}
+
+func TestPendingInputRestore(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{Store: fs, Queue: &fakeQueue{}, Config: config.Config{}}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/pending-inputs/12/restore", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	if fs.restoredPendingID != 12 {
+		t.Fatalf("expected restore id 12, got %d", fs.restoredPendingID)
 	}
 }
 

@@ -924,6 +924,28 @@ func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = h.Store.UpdatePendingInputStatus(r.Context(), id, "planning", "")
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "enqueued for planning"})
+	case "restore":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		if h.Store == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store not configured"})
+			return
+		}
+		if _, err := h.Store.RestorePendingInput(r.Context(), id); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "pending input not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"detail": "pending input restored", "id": id})
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
 	}

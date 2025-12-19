@@ -223,6 +223,7 @@ type Store interface {
 	ListPendingInputs(ctx context.Context, status string) ([]PendingInput, error)
 	UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error
 	DeletePendingInput(ctx context.Context, id int64) (PendingInput, error)
+	RestorePendingInput(ctx context.Context, id int64) (PendingInput, error)
 	LinkPlanToPendingInput(ctx context.Context, pendingID, planID int64) error
 	UpdatePendingInputsForPlan(ctx context.Context, planID int64, status string) (int64, error)
 

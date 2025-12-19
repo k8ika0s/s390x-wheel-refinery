@@ -147,6 +147,10 @@ export function deletePendingInput(id, token) {
   return request(`/api/pending-inputs/${id}`, { method: "DELETE" }, token);
 }
 
+export function restorePendingInput(id, token) {
+  return request(`/api/pending-inputs/${id}/restore`, { method: "POST" }, token);
+}
+
 export function clearPendingInputs(status = "pending", token) {
   const params = new URLSearchParams();
   if (status) params.set("status", status);

@@ -414,6 +414,50 @@ func (p *PostgresStore) DeletePendingInput(ctx context.Context, id int64) (Pendi
 	return pi, err
 }
 
+// RestorePendingInput resets a pending input to pending and clears deletion state.
+func (p *PostgresStore) RestorePendingInput(ctx context.Context, id int64) (PendingInput, error) {
+	if err := p.ensureDB(); err != nil {
+		return PendingInput{}, err
+	}
+	var pi PendingInput
+	err := p.db.QueryRowContext(ctx, `
+		UPDATE pending_inputs
+		SET status = 'pending',
+			error = '',
+			loaded_at = NULL,
+			planned_at = NULL,
+			processed_at = NULL,
+			deleted_at = NULL,
+			updated_at = NOW()
+		WHERE id = $1
+		RETURNING id, filename, digest, size_bytes, status, COALESCE(error,''),
+			source_type, object_bucket, object_key, content_type, COALESCE(metadata,'{}'),
+			loaded_at, planned_at, processed_at, deleted_at, created_at, updated_at
+	`, id).Scan(
+		&pi.ID,
+		&pi.Filename,
+		&pi.Digest,
+		&pi.SizeBytes,
+		&pi.Status,
+		&pi.Error,
+		&pi.SourceType,
+		&pi.ObjectBucket,
+		&pi.ObjectKey,
+		&pi.ContentType,
+		&pi.Metadata,
+		&pi.LoadedAt,
+		&pi.PlannedAt,
+		&pi.ProcessedAt,
+		&pi.DeletedAt,
+		&pi.CreatedAt,
+		&pi.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PendingInput{}, ErrNotFound
+	}
+	return pi, err
+}
+
 // LinkPlanToPendingInput records a plan association for a pending input.
 func (p *PostgresStore) LinkPlanToPendingInput(ctx context.Context, pendingID, planID int64) error {
 	if err := p.ensureDB(); err != nil {
