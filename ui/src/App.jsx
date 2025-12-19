@@ -532,6 +532,7 @@ function Summary({ summary }) {
 }
 
 function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
+  const location = useLocation();
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState("timestamp");
   const [sortDir, setSortDir] = useState("desc");
@@ -593,7 +594,15 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
             {pageItems.map((e) => (
               <tr key={`${e.name}-${e.version}-${e.timestamp}`} className="border-b border-slate-800">
                 <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
-                <td className="py-2"><Link className="text-accent hover:underline" to={`/package/${e.name}`}>{e.name} {e.version}</Link></td>
+                <td className="py-2">
+                  <Link
+                    className="text-accent hover:underline"
+                    to={`/package/${e.name}`}
+                    state={{ from: `${location.pathname}${location.search}` }}
+                  >
+                    {e.name} {e.version}
+                  </Link>
+                </td>
                 <td className="py-2 text-slate-400">{e.python_tag}/{e.platform_tag}</td>
                 <td className="py-2 text-slate-300"><ArtifactBadges meta={e.metadata} /></td>
                 <td className="py-2 text-slate-400">
@@ -620,6 +629,8 @@ function TopList({ title, items, render }) {
 
 function PackageDetail({ token, pushToast, apiBase }) {
   const { name } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [data, setData] = useState(null);
   const [logContent, setLogContent] = useState("");
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -633,6 +644,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const [failurePage, setFailurePage] = useState(1);
   const [hintsPage, setHintsPage] = useState(1);
   const pageSize = 10;
+  const backTarget = location.state?.from || "/builds";
 
   const load = async () => {
     setLoading(true);
@@ -758,7 +770,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
           <div className="text-slate-400 text-sm">Status counts: {Object.entries(summary.status_counts || {}).map(([k, v]) => `${k}:${v}`).join("  ")}</div>
           {summary.latest && <div className="text-slate-400 text-sm">Latest: {summary.latest.status} {summary.latest.version} at {summary.latest.timestamp}</div>}
         </div>
-        <Link to="/" className="btn btn-secondary">Back</Link>
+        <button className="btn btn-secondary" onClick={() => navigate(backTarget)}>Back</button>
       </div>
       <div className="flex gap-2">
         {["overview", "events", "hints"].map((t) => (
@@ -3068,7 +3080,11 @@ const enqueuePlanForInput = async (pi, verb) => {
                         <tr
                           key={b.id ?? `${b.package}-${b.version}-${idx}`}
                           className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
-                          onClick={() => navigate(`/package/${encodeURIComponent(b.package)}`)}
+                          onClick={() =>
+                            navigate(`/package/${encodeURIComponent(b.package)}`, {
+                              state: { from: `${location.pathname}${location.search}` },
+                            })
+                          }
                           title="View package details"
                         >
                           <td className="px-2 py-2">{b.package}</td>
