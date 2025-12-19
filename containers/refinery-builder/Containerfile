@@ -12,7 +12,8 @@ RUN dnf -y update && \
     dnf clean all
 
 # auditwheel + patchelf for repair step
-RUN python3 -m pip install --no-cache-dir setuptools_scm auditwheel patchelf \
+RUN python3 -m pip install --no-cache-dir setuptools_scm \
+ && python3 -m pip install --no-cache-dir auditwheel patchelf \
  && rm -rf /root/.cache/pip
 
 WORKDIR /app
