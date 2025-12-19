@@ -1069,12 +1069,14 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Package      string `json:"package"`
-		Version      string `json:"version"`
-		Status       string `json:"status"`
-		Error        string `json:"error,omitempty"`
-		Attempts     int    `json:"attempts,omitempty"`
-		BackoffUntil int64  `json:"backoff_until,omitempty"`
+		Package      string   `json:"package"`
+		Version      string   `json:"version"`
+		Status       string   `json:"status"`
+		Error        string   `json:"error,omitempty"`
+		Attempts     int      `json:"attempts,omitempty"`
+		BackoffUntil int64    `json:"backoff_until,omitempty"`
+		Recipes      []string `json:"recipes,omitempty"`
+		HintIDs      []string `json:"hint_ids,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -1084,7 +1086,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package, version, and status required"})
 		return
 	}
-	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.Attempts, body.BackoffUntil); err != nil {
+	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.Attempts, body.BackoffUntil, body.Recipes, body.HintIDs); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1107,13 +1109,15 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type job struct {
-		Package     string `json:"package"`
-		Version     string `json:"version"`
-		PythonTag   string `json:"python_tag"`
-		PlatformTag string `json:"platform_tag"`
-		Attempts    int    `json:"attempts"`
-		RunID       string `json:"run_id,omitempty"`
-		PlanID      int64  `json:"plan_id,omitempty"`
+		Package     string   `json:"package"`
+		Version     string   `json:"version"`
+		PythonTag   string   `json:"python_tag"`
+		PlatformTag string   `json:"platform_tag"`
+		Attempts    int      `json:"attempts"`
+		RunID       string   `json:"run_id,omitempty"`
+		PlanID      int64    `json:"plan_id,omitempty"`
+		Recipes     []string `json:"recipes,omitempty"`
+		HintIDs     []string `json:"hint_ids,omitempty"`
 	}
 	var out []job
 	for _, b := range builds {
@@ -1125,6 +1129,8 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 			Attempts:    b.Attempts,
 			RunID:       b.RunID,
 			PlanID:      b.PlanID,
+			Recipes:     b.Recipes,
+			HintIDs:     b.HintIDs,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"builds": out})

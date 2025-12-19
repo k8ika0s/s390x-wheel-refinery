@@ -46,6 +46,16 @@ type hintContext struct {
 	BuildBackend  string
 }
 
+// HintContext provides context for matching hints outside of plan generation.
+type HintContext struct {
+	Package       string
+	Version       string
+	PythonVersion string
+	PythonTag     string
+	PlatformTag   string
+	BuildBackend  string
+}
+
 // AttachHints applies hint matches to plan nodes.
 func AttachHints(snap *Snapshot, hints []Hint) {
 	if snap == nil || len(hints) == 0 || len(snap.Plan) == 0 {
@@ -67,6 +77,42 @@ func AttachHints(snap *Snapshot, hints []Hint) {
 		node.Recipes = recipes
 		snap.Plan[i] = node
 	}
+}
+
+// MatchHintForLog matches a hint against build logs and context, returning any recipes to apply.
+func MatchHintForLog(h Hint, ctx HintContext, logContent string) (HintMatch, []RecipeMatch, bool) {
+	if h.Pattern == "" {
+		return HintMatch{}, nil, false
+	}
+	re, err := regexp.Compile(h.Pattern)
+	if err != nil || !re.MatchString(logContent) {
+		return HintMatch{}, nil, false
+	}
+	internal := hintContext{
+		Package:       ctx.Package,
+		Version:       ctx.Version,
+		PythonVersion: ctx.PythonVersion,
+		PythonTag:     ctx.PythonTag,
+		PlatformTag:   ctx.PlatformTag,
+		BuildBackend:  ctx.BuildBackend,
+	}
+	ok, reasons := hintAppliesTo(h, internal)
+	if !ok {
+		return HintMatch{}, nil, false
+	}
+	reason := "log pattern"
+	if len(reasons) > 0 {
+		reason = fmt.Sprintf("%s; %s", reason, strings.Join(reasons, "; "))
+	}
+	match := HintMatch{
+		ID:      h.ID,
+		Pattern: h.Pattern,
+		Note:    h.Note,
+		Reason:  reason,
+		Tags:    h.Tags,
+		Recipes: h.Recipes,
+	}
+	return match, recipesFromHint(h, reason), true
 }
 
 func matchHints(hints []Hint, ctx hintContext) ([]HintMatch, []RecipeMatch) {
@@ -176,6 +222,71 @@ func matchHint(h Hint, ctx hintContext) (HintMatch, []RecipeMatch, bool) {
 		Recipes: h.Recipes,
 	}
 	return match, recipesFromHint(h, match.Reason), true
+}
+
+func hintAppliesTo(h Hint, ctx hintContext) (bool, []string) {
+	applies := normalizeAppliesTo(h.AppliesTo)
+	if len(applies) == 0 {
+		return true, nil
+	}
+	pkg := normalizeName(ctx.Package)
+	pyVersion := strings.TrimSpace(ctx.PythonVersion)
+	if pyVersion == "" {
+		pyVersion = pythonVersionFromTag(ctx.PythonTag)
+	}
+	platform := platformFamily(ctx.PlatformTag)
+	arch := archFromPlatformTag(ctx.PlatformTag)
+	var reasons []string
+
+	if vals := valuesForKeys(applies, "packages", "package", "package_names"); len(vals) > 0 {
+		if !matchExact(pkg, vals) {
+			return false, nil
+		}
+		reasons = append(reasons, fmt.Sprintf("package=%s", pkg))
+	}
+	if vals := valuesForKeys(applies, "package_patterns", "package_pattern"); len(vals) > 0 {
+		if !matchAnyPattern(pkg, vals) {
+			return false, nil
+		}
+		reasons = append(reasons, "package pattern")
+	}
+	if vals := valuesForKeys(applies, "platforms", "platform"); len(vals) > 0 {
+		if !matchPlatform(platform, ctx.PlatformTag, vals) {
+			return false, nil
+		}
+		reasons = append(reasons, fmt.Sprintf("platform=%s", platform))
+	}
+	if vals := valuesForKeys(applies, "arch", "archs"); len(vals) > 0 {
+		if !matchExact(arch, vals) {
+			return false, nil
+		}
+		reasons = append(reasons, fmt.Sprintf("arch=%s", arch))
+	}
+	if vals := valuesForKeys(applies, "python_versions", "python_version"); len(vals) > 0 {
+		if !matchExact(pyVersion, vals) {
+			return false, nil
+		}
+		reasons = append(reasons, fmt.Sprintf("python=%s", pyVersion))
+	}
+	if vals := valuesForKeys(applies, "python_tags", "python_tag"); len(vals) > 0 {
+		if !matchExact(strings.ToLower(ctx.PythonTag), vals) {
+			return false, nil
+		}
+		reasons = append(reasons, fmt.Sprintf("tag=%s", ctx.PythonTag))
+	}
+	if vals := valuesForKeys(applies, "platform_tags", "platform_tag"); len(vals) > 0 {
+		if !matchExact(strings.ToLower(ctx.PlatformTag), vals) {
+			return false, nil
+		}
+		reasons = append(reasons, fmt.Sprintf("platform_tag=%s", ctx.PlatformTag))
+	}
+	if vals := valuesForKeys(applies, "build_backends", "build_backend"); len(vals) > 0 {
+		if ctx.BuildBackend == "" || !matchExact(strings.ToLower(ctx.BuildBackend), vals) {
+			return false, nil
+		}
+		reasons = append(reasons, fmt.Sprintf("backend=%s", ctx.BuildBackend))
+	}
+	return true, reasons
 }
 
 func recipesFromHint(h Hint, reason string) []RecipeMatch {

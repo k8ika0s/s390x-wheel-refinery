@@ -42,6 +42,8 @@ type Config struct {
 	RunnerTimeoutSec    int
 	RequeueOnFailure    bool
 	MaxRequeueAttempts  int
+	AutoFixEnabled      bool
+	AutoSaveHints       bool
 	AutorunInterval     int
 	BatchSize           int
 	RunCmd              []string
@@ -110,6 +112,8 @@ func fromEnv() Config {
 		RunnerTimeoutSec:    getenvInt("RUNNER_TIMEOUT_SEC", 900),
 		RequeueOnFailure:    getenvBool("REQUEUE_ON_FAILURE", false),
 		MaxRequeueAttempts:  getenvInt("MAX_REQUEUE_ATTEMPTS", 3),
+		AutoFixEnabled:      getenvBool("AUTO_FIX_ENABLED", true),
+		AutoSaveHints:       getenvBool("AUTO_SAVE_HINTS", true),
 		BatchSize:           getenvInt("BATCH_SIZE", 50),
 		RunCmd:              parseCmd(getenv("WORKER_RUN_CMD", "")),
 		IndexURL:            getenv("INDEX_URL", ""),

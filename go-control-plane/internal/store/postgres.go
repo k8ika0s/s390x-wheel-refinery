@@ -138,6 +138,8 @@ CREATE TABLE IF NOT EXISTS build_status (
     attempts      INT NOT NULL DEFAULT 0,
     backoff_until TIMESTAMPTZ,
     last_error    TEXT,
+    recipes       JSONB,
+    hint_ids      TEXT[],
     run_id        TEXT,
     plan_id       BIGINT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -178,6 +180,9 @@ ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS loaded_at TIMESTAMPTZ;
 ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS planned_at TIMESTAMPTZ;
 ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ;
 ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE build_status ADD COLUMN IF NOT EXISTS recipes JSONB;
+ALTER TABLE build_status ADD COLUMN IF NOT EXISTS hint_ids TEXT[];
 
 CREATE TABLE IF NOT EXISTS plan_metadata (
     id             BIGSERIAL PRIMARY KEY,
@@ -431,7 +436,7 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	q := `SELECT id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), run_id, plan_id, extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint, COALESCE(extract(epoch from backoff_until),0)::bigint FROM build_status`
+	q := `SELECT id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), run_id, plan_id, extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint, COALESCE(extract(epoch from backoff_until),0)::bigint, COALESCE(recipes, '[]'::jsonb), COALESCE(hint_ids, '{}'::text[]) FROM build_status`
 	args := []any{}
 	if status != "" {
 		q += ` WHERE status = $1`
@@ -454,8 +459,16 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 	var out []BuildStatus
 	for rows.Next() {
 		var bs BuildStatus
-		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.RunID, &bs.PlanID, &bs.OldestAgeSec, &bs.CreatedAt, &bs.UpdatedAt, &bs.BackoffUntil); err != nil {
+		var recipes json.RawMessage
+		var hints pq.StringArray
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.RunID, &bs.PlanID, &bs.OldestAgeSec, &bs.CreatedAt, &bs.UpdatedAt, &bs.BackoffUntil, &recipes, &hints); err != nil {
 			return nil, err
+		}
+		if len(recipes) > 0 {
+			_ = json.Unmarshal(recipes, &bs.Recipes)
+		}
+		if len(hints) > 0 {
+			bs.HintIDs = hints
 		}
 		out = append(out, bs)
 	}
@@ -484,7 +497,7 @@ func (p *PostgresStore) DeleteBuilds(ctx context.Context, status string) (int64,
 }
 
 // UpdateBuildStatus upserts build status by package/version.
-func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error {
+func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error {
 	if err := p.ensureDB(); err != nil {
 		return err
 	}
@@ -495,16 +508,28 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 	if backoffUntil > 0 {
 		backoff = time.Unix(backoffUntil, 0)
 	}
+	var recipesRaw any
+	if recipes != nil {
+		if data, err := json.Marshal(recipes); err == nil {
+			recipesRaw = data
+		}
+	}
+	var hints any
+	if hintIDs != nil {
+		hints = pqStringArrayParam(hintIDs)
+	}
 	_, err := p.db.ExecContext(ctx, `
-		INSERT INTO build_status (package, version, status, last_error, attempts, backoff_until)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO build_status (package, version, status, last_error, attempts, backoff_until, recipes, hint_ids)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		ON CONFLICT (package, version) DO UPDATE
 		SET status = EXCLUDED.status,
 		    last_error = EXCLUDED.last_error,
 		    attempts = EXCLUDED.attempts,
 		    backoff_until = EXCLUDED.backoff_until,
+		    recipes = COALESCE(EXCLUDED.recipes, build_status.recipes),
+		    hint_ids = COALESCE(EXCLUDED.hint_ids, build_status.hint_ids),
 		    updated_at = NOW()
-	`, pkg, version, status, errMsg, attempts, backoff)
+	`, pkg, version, status, errMsg, attempts, backoff, recipesRaw, hints)
 	return err
 }
 
@@ -1298,8 +1323,8 @@ func (p *PostgresStore) QueueBuildsFromPlan(ctx context.Context, runID string, p
 	}
 	defer tx.Rollback()
 	stmt := `
-		INSERT INTO build_status (package, version, python_tag, platform_tag, status, attempts, run_id, plan_id, backoff_until, last_error)
-		VALUES ($1,$2,$3,$4,'pending',0,$5,$6,NULL,'')
+		INSERT INTO build_status (package, version, python_tag, platform_tag, status, attempts, run_id, plan_id, backoff_until, last_error, recipes)
+		VALUES ($1,$2,$3,$4,'pending',0,$5,$6,NULL,'',$7)
 		ON CONFLICT (package, version) DO UPDATE
 		SET python_tag = EXCLUDED.python_tag,
 		    platform_tag = EXCLUDED.platform_tag,
@@ -1308,13 +1333,21 @@ func (p *PostgresStore) QueueBuildsFromPlan(ctx context.Context, runID string, p
 		    status = 'pending',
 		    attempts = 0,
 		    backoff_until = NULL,
-		    last_error = ''
+		    last_error = '',
+		    recipes = COALESCE(EXCLUDED.recipes, build_status.recipes)
 	`
 	for _, n := range nodes {
 		if strings.ToLower(n.Action) != "build" || n.Name == "" || n.Version == "" {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, stmt, n.Name, n.Version, n.PythonTag, n.PlatformTag, runID, planID); err != nil {
+		recipes := planRecipeNames(n.Recipes)
+		var recipesRaw any
+		if recipes != nil {
+			if data, err := json.Marshal(recipes); err == nil {
+				recipesRaw = data
+			}
+		}
+		if _, err := tx.ExecContext(ctx, stmt, n.Name, n.Version, n.PythonTag, n.PlatformTag, runID, planID, recipesRaw); err != nil {
 			return err
 		}
 	}
@@ -1350,7 +1383,7 @@ func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int) ([]BuildStatus
 		    updated_at = NOW()
 		FROM cte
 		WHERE b.id = cte.id
-		RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts, COALESCE(b.last_error,''), b.run_id, b.plan_id, COALESCE(extract(epoch from b.backoff_until),0)::bigint, extract(epoch from b.created_at)::bigint, extract(epoch from b.updated_at)::bigint
+		RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts, COALESCE(b.last_error,''), b.run_id, b.plan_id, COALESCE(extract(epoch from b.backoff_until),0)::bigint, extract(epoch from b.created_at)::bigint, extract(epoch from b.updated_at)::bigint, COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[])
 	`, max)
 	if err != nil {
 		return nil, err
@@ -1359,8 +1392,16 @@ func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int) ([]BuildStatus
 	var out []BuildStatus
 	for rows.Next() {
 		var bs BuildStatus
-		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.CreatedAt, &bs.UpdatedAt); err != nil {
+		var recipes json.RawMessage
+		var hints pq.StringArray
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.CreatedAt, &bs.UpdatedAt, &recipes, &hints); err != nil {
 			return nil, err
+		}
+		if len(recipes) > 0 {
+			_ = json.Unmarshal(recipes, &bs.Recipes)
+		}
+		if len(hints) > 0 {
+			bs.HintIDs = hints
 		}
 		out = append(out, bs)
 	}
@@ -1381,6 +1422,23 @@ func (a pqStringArrayParam) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return pq.Array([]string(a)).Value()
+}
+
+func planRecipeNames(recipes []PlanRecipe) []string {
+	if len(recipes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(recipes))
+	for _, r := range recipes {
+		if r.Name == "" {
+			continue
+		}
+		out = append(out, r.Name)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func pqStringArray(dst *[]sql.NullString) any {

@@ -54,6 +54,19 @@ const formatBytes = (value) => {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+const formatAutomationSummary = (meta) => {
+  const auto = meta?.automation;
+  if (!auto) return "";
+  const hints = Array.isArray(auto.hint_ids) ? auto.hint_ids.length : 0;
+  const recipes = Array.isArray(auto.recipes) ? auto.recipes.length : 0;
+  const parts = [];
+  if (recipes) parts.push(`${recipes} recipe${recipes === 1 ? "" : "s"}`);
+  if (hints) parts.push(`${hints} hint${hints === 1 ? "" : "s"}`);
+  if (auto.blocked) parts.push(`blocked: ${auto.blocked}`);
+  if (!parts.length) return "auto-fix attempted";
+  return `auto-fix: ${parts.join(", ")}`;
+};
+
 const DAG_LAYOUT = {
   nodeWidth: 200,
   nodeHeight: 64,
@@ -498,7 +511,9 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
                 <td className="py-2"><Link className="text-accent hover:underline" to={`/package/${e.name}`}>{e.name} {e.version}</Link></td>
                 <td className="py-2 text-slate-400">{e.python_tag}/{e.platform_tag}</td>
                 <td className="py-2 text-slate-300"><ArtifactBadges meta={e.metadata} /></td>
-                <td className="py-2 text-slate-400">{e.detail || ""}</td>
+                <td className="py-2 text-slate-400">
+                  {[e.detail, formatAutomationSummary(e.metadata)].filter(Boolean).join(" · ")}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -707,7 +722,9 @@ function PackageDetail({ token, pushToast, apiBase }) {
                       <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
                       <td className="py-2 text-slate-200">{e.version}</td>
                       <td className="py-2 text-slate-300"><ArtifactBadges meta={e.metadata} /></td>
-                      <td className="py-2 text-slate-400">{e.detail || ""}</td>
+                      <td className="py-2 text-slate-400">
+                        {[e.detail, formatAutomationSummary(e.metadata)].filter(Boolean).join(" · ")}
+                      </td>
                       <td className="py-2"><button className="btn btn-secondary" onClick={() => loadLog(e)}>View log</button></td>
                     </tr>
                   ))}
@@ -747,6 +764,27 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   )}
                 </div>
               </div>
+              {selectedEvent?.metadata?.automation && (
+                <div className="glass subtle px-3 py-2 rounded-lg text-xs text-slate-200 space-y-1">
+                  <div className="font-semibold text-slate-100">Automation</div>
+                  <div>Applied: {selectedEvent.metadata.automation.applied ? "yes" : "no"}</div>
+                  {Array.isArray(selectedEvent.metadata.automation.recipes) && selectedEvent.metadata.automation.recipes.length > 0 && (
+                    <div className="text-slate-300">Recipes: {selectedEvent.metadata.automation.recipes.join(", ")}</div>
+                  )}
+                  {Array.isArray(selectedEvent.metadata.automation.hint_ids) && selectedEvent.metadata.automation.hint_ids.length > 0 && (
+                    <div className="text-slate-300">Hints: {selectedEvent.metadata.automation.hint_ids.join(", ")}</div>
+                  )}
+                  {Array.isArray(selectedEvent.metadata.automation.saved_hint_ids) && selectedEvent.metadata.automation.saved_hint_ids.length > 0 && (
+                    <div className="text-slate-300">Saved hints: {selectedEvent.metadata.automation.saved_hint_ids.join(", ")}</div>
+                  )}
+                  {selectedEvent.metadata.automation.blocked && (
+                    <div className="text-amber-200">Blocked: {selectedEvent.metadata.automation.blocked}</div>
+                  )}
+                  {selectedEvent.metadata.automation.reason && (
+                    <div className="text-slate-400">{selectedEvent.metadata.automation.reason}</div>
+                  )}
+                </div>
+              )}
               <pre
                 ref={logRef}
                 className="bg-slate-900 border border-border rounded-lg p-3 max-h-72 overflow-auto text-xs"
@@ -2619,13 +2657,14 @@ const enqueuePlanForInput = async (pi, verb) => {
                     <th className="text-left px-2 py-2">Attempts</th>
                     <th className="text-left px-2 py-2">Python</th>
                     <th className="text-left px-2 py-2">Platform</th>
+                    <th className="text-left px-2 py-2">Recipes</th>
                     <th className="text-left px-2 py-2">Error</th>
                   </tr>
                 </thead>
                 <tbody>
                   {buildsLoading && (
                     <tr>
-                      <td className="px-2 py-3 text-slate-400 text-center" colSpan="7">
+                      <td className="px-2 py-3 text-slate-400 text-center" colSpan="8">
                         Loading builds…
                       </td>
                     </tr>
@@ -2646,12 +2685,13 @@ const enqueuePlanForInput = async (pi, verb) => {
                           <td className="px-2 py-2">{b.attempts ?? 0}</td>
                           <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
                           <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
+                          <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{(b.recipes || []).join(", ") || "-"}</td>
                           <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{b.last_error || "-"}</td>
                         </tr>
                       ))
                     : !buildsLoading && (
                         <tr>
-                          <td className="px-2 py-3 text-slate-400 text-center" colSpan="7">
+                          <td className="px-2 py-3 text-slate-400 text-center" colSpan="8">
                             No builds found
                           </td>
                         </tr>

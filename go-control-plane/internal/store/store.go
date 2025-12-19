@@ -113,12 +113,12 @@ type PlanRecipe struct {
 
 // PlanNode describes a unit in the build plan/graph.
 type PlanNode struct {
-	Name          string `json:"name"`
-	Version       string `json:"version"`
-	PythonVersion string `json:"python_version,omitempty"`
-	PythonTag     string `json:"python_tag,omitempty"`
-	PlatformTag   string `json:"platform_tag,omitempty"`
-	Action        string `json:"action"`
+	Name          string       `json:"name"`
+	Version       string       `json:"version"`
+	PythonVersion string       `json:"python_version,omitempty"`
+	PythonTag     string       `json:"python_tag,omitempty"`
+	PlatformTag   string       `json:"platform_tag,omitempty"`
+	Action        string       `json:"action"`
 	Hints         []PlanHint   `json:"hints,omitempty"`
 	Recipes       []PlanRecipe `json:"recipes,omitempty"`
 }
@@ -144,20 +144,22 @@ type PlanSummary struct {
 
 // BuildStatus tracks a build job derived from a plan.
 type BuildStatus struct {
-	ID           int64  `json:"id"`
-	Package      string `json:"package"`
-	Version      string `json:"version"`
-	PythonTag    string `json:"python_tag"`
-	PlatformTag  string `json:"platform_tag"`
-	Status       string `json:"status"`
-	Attempts     int    `json:"attempts"`
-	LastError    string `json:"last_error,omitempty"`
-	OldestAgeSec int64  `json:"oldest_age_seconds,omitempty"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
-	RunID        string `json:"run_id,omitempty"`
-	PlanID       int64  `json:"plan_id,omitempty"`
-	BackoffUntil int64  `json:"backoff_until,omitempty"`
+	ID           int64    `json:"id"`
+	Package      string   `json:"package"`
+	Version      string   `json:"version"`
+	PythonTag    string   `json:"python_tag"`
+	PlatformTag  string   `json:"platform_tag"`
+	Status       string   `json:"status"`
+	Attempts     int      `json:"attempts"`
+	LastError    string   `json:"last_error,omitempty"`
+	OldestAgeSec int64    `json:"oldest_age_seconds,omitempty"`
+	CreatedAt    int64    `json:"created_at"`
+	UpdatedAt    int64    `json:"updated_at"`
+	RunID        string   `json:"run_id,omitempty"`
+	PlanID       int64    `json:"plan_id,omitempty"`
+	BackoffUntil int64    `json:"backoff_until,omitempty"`
+	Recipes      []string `json:"recipes,omitempty"`
+	HintIDs      []string `json:"hint_ids,omitempty"`
 }
 
 // PackageSummary aggregates status for a package.
@@ -226,7 +228,7 @@ type Store interface {
 
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int) ([]BuildStatus, error)
-	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)
 

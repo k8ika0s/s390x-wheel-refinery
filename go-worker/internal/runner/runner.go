@@ -138,6 +138,35 @@ if [ -n "${DEPS_PREFIXES:-}" ]; then
   done
   export PKG_CONFIG_PATH="${pc_paths}${PKG_CONFIG_PATH:-}"
 fi
+if [ -n "${RECIPES:-}" ]; then
+  IFS=',' read -r -a recipe_list <<< "${RECIPES}"
+  apt_pkgs=()
+  dnf_pkgs=()
+  pip_pkgs=()
+  for r in "${recipe_list[@]}"; do
+    r="$(echo "$r" | xargs)"
+    if [ -z "$r" ]; then
+      continue
+    fi
+    case "$r" in
+      apt:*) apt_pkgs+=("${r#apt:}") ;;
+      dnf:*) dnf_pkgs+=("${r#dnf:}") ;;
+      pip:*) pip_pkgs+=("${r#pip:}") ;;
+      env:*) export "${r#env:}" ;;
+      *) ;;
+    esac
+  done
+  if command -v dnf >/dev/null 2>&1 && [ ${#dnf_pkgs[@]} -gt 0 ]; then
+    dnf -y install "${dnf_pkgs[@]}"
+  fi
+  if command -v apt-get >/dev/null 2>&1 && [ ${#apt_pkgs[@]} -gt 0 ]; then
+    apt-get update
+    apt-get install -y "${apt_pkgs[@]}"
+  fi
+  if [ ${#pip_pkgs[@]} -gt 0 ]; then
+    "${PYBIN}" -m pip install "${pip_pkgs[@]}"
+  fi
+fi
 exec "${PYBIN}" -m pip wheel "${spec}" -w /output --no-deps`,
 	}
 }

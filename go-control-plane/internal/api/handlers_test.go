@@ -146,7 +146,7 @@ func (f *fakeStore) UpdatePendingInputsForPlan(ctx context.Context, planID int64
 func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int) ([]store.BuildStatus, error) {
 	return nil, nil
 }
-func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error {
+func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error {
 	return nil
 }
 func (f *fakeStore) LeaseBuilds(ctx context.Context, max int) ([]store.BuildStatus, error) {
