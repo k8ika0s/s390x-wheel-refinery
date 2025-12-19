@@ -1538,17 +1538,24 @@ func (h *Handler) planCompute(w http.ResponseWriter, r *http.Request) {
 	}
 	// Persist plan snapshot if provided
 	var nodes []store.PlanNode
-	if planArr, ok := snap["plan"].([]any); ok {
-		for _, raw := range planArr {
-			if m, ok := raw.(map[string]any); ok {
-				nodes = append(nodes, store.PlanNode{
-					Name:          toString(m["name"]),
-					Version:       toString(m["version"]),
-					PythonVersion: toString(m["python_version"]),
-					PythonTag:     toString(m["python_tag"]),
-					PlatformTag:   toString(m["platform_tag"]),
-					Action:        toString(m["action"]),
-				})
+	if planVal, ok := snap["plan"]; ok {
+		if data, err := json.Marshal(planVal); err == nil {
+			_ = json.Unmarshal(data, &nodes)
+		}
+	}
+	if len(nodes) == 0 {
+		if planArr, ok := snap["plan"].([]any); ok {
+			for _, raw := range planArr {
+				if m, ok := raw.(map[string]any); ok {
+					nodes = append(nodes, store.PlanNode{
+						Name:          toString(m["name"]),
+						Version:       toString(m["version"]),
+						PythonVersion: toString(m["python_version"]),
+						PythonTag:     toString(m["python_tag"]),
+						PlatformTag:   toString(m["platform_tag"]),
+						Action:        toString(m["action"]),
+					})
+				}
 			}
 		}
 	}

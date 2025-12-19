@@ -94,6 +94,23 @@ type Artifact struct {
 	URL     string
 }
 
+// PlanHint captures a matched hint attached to a plan node.
+type PlanHint struct {
+	ID      string              `json:"id"`
+	Pattern string              `json:"pattern,omitempty"`
+	Note    string              `json:"note,omitempty"`
+	Reason  string              `json:"reason,omitempty"`
+	Tags    []string            `json:"tags,omitempty"`
+	Recipes map[string][]string `json:"recipes,omitempty"`
+}
+
+// PlanRecipe captures a recipe or pack attached to a plan node.
+type PlanRecipe struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 // PlanNode describes a unit in the build plan/graph.
 type PlanNode struct {
 	Name          string `json:"name"`
@@ -102,6 +119,8 @@ type PlanNode struct {
 	PythonTag     string `json:"python_tag,omitempty"`
 	PlatformTag   string `json:"platform_tag,omitempty"`
 	Action        string `json:"action"`
+	Hints         []PlanHint   `json:"hints,omitempty"`
+	Recipes       []PlanRecipe `json:"recipes,omitempty"`
 }
 
 // PlanSnapshot captures a stored plan with optional DAG payload.

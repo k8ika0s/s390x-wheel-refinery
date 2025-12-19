@@ -117,6 +117,10 @@ func Run() error {
 					return
 				}
 			}
+			hints, err := fetchHints(r.Context(), nil, cfg)
+			if err != nil {
+				log.Printf("plan: fetch hints failed: %v", err)
+			}
 			snap, err := plan.Generate(
 				cfg.InputDir,
 				cfg.CacheDir,
@@ -127,6 +131,7 @@ func Run() error {
 				cfg.UpgradeStrategy,
 				cfg.RequirementsPath,
 				cfg.ConstraintsPath,
+				hints,
 				cfg.PackCatalog,
 				cfg.CASStore(),
 				cfg.CASRegistryURL,

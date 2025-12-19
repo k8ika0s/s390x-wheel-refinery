@@ -72,6 +72,10 @@ func (w *Worker) LoadPlan() error {
 				return fmt.Errorf("plan not found and input dir disabled")
 			}
 			// as a last resort, generate plan in Go
+			hints, hintErr := fetchHints(context.Background(), nil, w.Cfg)
+			if hintErr != nil {
+				log.Printf("worker: fetch hints failed: %v", hintErr)
+			}
 			snap, err = plan.Generate(
 				w.Cfg.InputDir,
 				w.Cfg.CacheDir,
@@ -82,6 +86,7 @@ func (w *Worker) LoadPlan() error {
 				w.Cfg.UpgradeStrategy,
 				w.Cfg.RequirementsPath,
 				w.Cfg.ConstraintsPath,
+				hints,
 				w.Cfg.PackCatalog,
 				w.Cfg.CASStore(),
 				w.Cfg.CASRegistryURL,

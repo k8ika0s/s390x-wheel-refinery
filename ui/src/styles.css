@@ -109,6 +109,152 @@ body {
   background: linear-gradient(180deg, rgba(15, 23, 42, 0.75), rgba(15, 23, 42, 0.6));
 }
 
+.dag-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.dag-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #cbd5f5;
+}
+
+.dag-legend-item {
+  @apply px-2 py-1 rounded-full border;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.dag-runtime {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #7dd3fc;
+}
+
+.dag-pack {
+  border-color: rgba(251, 191, 36, 0.5);
+  color: #facc15;
+}
+
+.dag-wheel {
+  border-color: rgba(34, 197, 94, 0.5);
+  color: #4ade80;
+}
+
+.dag-repair {
+  border-color: rgba(244, 63, 94, 0.5);
+  color: #fda4af;
+}
+
+.dag-canvas {
+  position: relative;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background:
+    radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.08), transparent 45%),
+    radial-gradient(circle at 80% 10%, rgba(34, 197, 94, 0.08), transparent 45%),
+    rgba(15, 23, 42, 0.55);
+  box-shadow: inset 0 0 40px rgba(2, 6, 23, 0.35);
+  overflow: visible;
+}
+
+.dag-columns {
+  position: relative;
+  display: flex;
+  gap: var(--dag-col-gap);
+  padding: var(--dag-pad);
+  z-index: 1;
+}
+
+.dag-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dag-node-gap);
+}
+
+.dag-node {
+  width: var(--dag-node-width);
+  min-height: var(--dag-node-height);
+  padding: 0.6rem 0.75rem;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.7);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.35rem;
+  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.35);
+}
+
+.dag-node--runtime {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: linear-gradient(135deg, rgba(2, 132, 199, 0.2), rgba(15, 23, 42, 0.75));
+}
+
+.dag-node--pack {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: linear-gradient(135deg, rgba(202, 138, 4, 0.22), rgba(15, 23, 42, 0.75));
+}
+
+.dag-node--wheel {
+  border-color: rgba(34, 197, 94, 0.45);
+  background: linear-gradient(135deg, rgba(22, 163, 74, 0.22), rgba(15, 23, 42, 0.75));
+}
+
+.dag-node--repair {
+  border-color: rgba(244, 63, 94, 0.45);
+  background: linear-gradient(135deg, rgba(225, 29, 72, 0.22), rgba(15, 23, 42, 0.75));
+}
+
+.dag-node-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.dag-node-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  line-height: 1.2;
+}
+
+.dag-node-sub {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(148, 163, 184, 0.85);
+}
+
+.dag-node-digest {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.65rem;
+  color: rgba(148, 163, 184, 0.7);
+}
+
+.dag-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  overflow: visible;
+}
+
+.dag-edge {
+  fill: none;
+  stroke: rgba(148, 163, 184, 0.45);
+  stroke-width: 1.4;
+}
+
+.dag-edge-head {
+  fill: rgba(148, 163, 184, 0.7);
+}
+
 .btn {
   @apply inline-flex items-center justify-center px-3 py-2 rounded-lg font-semibold cursor-pointer transition;
 }

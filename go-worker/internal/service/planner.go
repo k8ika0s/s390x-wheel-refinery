@@ -247,6 +247,10 @@ func planOne(ctx context.Context, client *http.Client, cfg Config, store objects
 	if err != nil {
 		return err
 	}
+	hints, err := fetchHints(ctx, client, cfg)
+	if err != nil {
+		log.Printf("planner: fetch hints failed: %v", err)
+	}
 	snap, err := plan.GenerateFromInputs(
 		inputs,
 		cfg.CacheDir,
@@ -256,6 +260,7 @@ func planOne(ctx context.Context, client *http.Client, cfg Config, store objects
 		cfg.ExtraIndexURL,
 		cfg.UpgradeStrategy,
 		cfg.ConstraintsPath,
+		hints,
 		cfg.PackCatalog,
 		cfg.CASStore(),
 		cfg.CASRegistryURL,

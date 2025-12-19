@@ -54,6 +54,144 @@ const formatBytes = (value) => {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+const DAG_LAYOUT = {
+  nodeWidth: 200,
+  nodeHeight: 64,
+  nodeGap: 16,
+  colGap: 28,
+  pad: 16,
+};
+
+const normalizeDag = (dag) => {
+  if (!dag) return [];
+  if (Array.isArray(dag)) return dag;
+  if (Array.isArray(dag.nodes)) return dag.nodes;
+  if (Array.isArray(dag.Nodes)) return dag.Nodes;
+  return [];
+};
+
+const dagNodeId = (node) => {
+  if (!node) return "";
+  const id = node.id;
+  if (!id) return "";
+  if (typeof id === "string") return id;
+  if (typeof id === "object") return id.digest || id.Digest || id.id || "";
+  return "";
+};
+
+const dagInputId = (input) => {
+  if (!input) return "";
+  if (typeof input === "string") return input;
+  if (typeof input === "object") return input.digest || input.Digest || input.id || "";
+  return "";
+};
+
+const dagNodeLabel = (node) => {
+  const meta = node?.metadata || {};
+  const type = node?.type || "node";
+  if (type === "runtime") {
+    const py = meta.python_version || "";
+    const label = py ? `runtime py${py}` : "runtime";
+    const sub = meta.platform_tag || meta.python_tag || "";
+    return { title: label, subtitle: sub };
+  }
+  if (type === "pack") {
+    return { title: meta.name || "pack", subtitle: meta.version || "" };
+  }
+  if (type === "wheel") {
+    return { title: meta.name || "wheel", subtitle: meta.version || "" };
+  }
+  if (type === "repair") {
+    const base = meta.wheel_name || "wheel";
+    const ver = meta.wheel_version || "";
+    return { title: "repair", subtitle: [base, ver].filter(Boolean).join(" ") };
+  }
+  return { title: meta.name || type, subtitle: meta.version || "" };
+};
+
+const buildDagLayout = (dag) => {
+  const nodes = normalizeDag(dag);
+  if (!nodes.length) return null;
+  const items = [];
+  const inputsById = new Map();
+  for (const node of nodes) {
+    const id = dagNodeId(node);
+    if (!id) continue;
+    const inputs = toArray(node.inputs).map(dagInputId).filter(Boolean);
+    inputsById.set(id, inputs);
+    items.push({ id, node, label: dagNodeLabel(node) });
+  }
+  if (!items.length) return null;
+
+  const depth = new Map();
+  const visiting = new Set();
+  const depthFor = (id) => {
+    if (depth.has(id)) return depth.get(id);
+    if (visiting.has(id)) return 0;
+    visiting.add(id);
+    const inputs = inputsById.get(id) || [];
+    let max = 0;
+    for (const input of inputs) {
+      if (!inputsById.has(input)) continue;
+      const d = depthFor(input);
+      if (d + 1 > max) max = d + 1;
+    }
+    visiting.delete(id);
+    depth.set(id, max);
+    return max;
+  };
+  items.forEach((item) => depthFor(item.id));
+
+  const typeRank = { runtime: 0, pack: 1, wheel: 2, repair: 3 };
+  const sorted = items.slice().sort((a, b) => {
+    const da = depth.get(a.id) ?? 0;
+    const db = depth.get(b.id) ?? 0;
+    if (da !== db) return da - db;
+    const ra = typeRank[a.node?.type] ?? 9;
+    const rb = typeRank[b.node?.type] ?? 9;
+    if (ra !== rb) return ra - rb;
+    return (a.label.title || "").localeCompare(b.label.title || "");
+  });
+
+  const columns = [];
+  const positions = {};
+  let maxRows = 0;
+  sorted.forEach((item) => {
+    const col = depth.get(item.id) ?? 0;
+    if (!columns[col]) columns[col] = [];
+    columns[col].push(item);
+  });
+  columns.forEach((colItems, colIdx) => {
+    if (!colItems) return;
+    maxRows = Math.max(maxRows, colItems.length);
+    colItems.forEach((item, rowIdx) => {
+      positions[item.id] = { col: colIdx, row: rowIdx };
+    });
+  });
+
+  const edges = [];
+  for (const item of items) {
+    const inputs = inputsById.get(item.id) || [];
+    for (const input of inputs) {
+      if (positions[input]) {
+        edges.push({ from: input, to: item.id });
+      }
+    }
+  }
+
+  const colCount = Math.max(columns.length, 1);
+  const width =
+    DAG_LAYOUT.pad * 2 +
+    colCount * DAG_LAYOUT.nodeWidth +
+    Math.max(0, colCount - 1) * DAG_LAYOUT.colGap;
+  const height =
+    DAG_LAYOUT.pad * 2 +
+    Math.max(1, maxRows) * DAG_LAYOUT.nodeHeight +
+    Math.max(0, maxRows - 1) * DAG_LAYOUT.nodeGap;
+
+  return { columns, edges, positions, size: { width, height } };
+};
+
 function ArtifactBadges({ meta }) {
   if (!meta) return null;
   const items = [];
@@ -1368,6 +1506,8 @@ const enqueuePlanForInput = async (pi, verb) => {
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
+  const planDag = buildDagLayout(selectedPlan?.dag);
+  const planPanelHeightClass = planTab === "graph" ? "max-h-[26rem]" : "max-h-80";
   const planPythonVersion =
     selectedPlanNodes.find((n) => n?.python_version)?.python_version ||
     selectedPlanNodes.find((n) => n?.python_tag)?.python_tag ||
@@ -2223,7 +2363,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                       </button>
                     ))}
                   </div>
-                  <div className="scroll-panel max-h-80 overflow-auto rounded-lg border border-slate-800/60 p-2 space-y-2">
+                  <div className={`scroll-panel ${planPanelHeightClass} overflow-auto rounded-lg border border-slate-800/60 p-2 space-y-2`}>
                     {planTab === "builds" &&
                       selectedPlanNodes.map((node, idx) => (
                         <div
@@ -2277,8 +2417,85 @@ const enqueuePlanForInput = async (pi, verb) => {
                       </div>
                     )}
                     {planTab === "graph" && (
-                      <div className="glass subtle px-3 py-2 rounded-lg text-slate-300 text-sm">
-                        Graph view coming soon. Nodes and edges will render here.
+                      <div className="dag-wrap">
+                        <div className="dag-legend">
+                          <span className="dag-legend-item dag-runtime">Runtime</span>
+                          <span className="dag-legend-item dag-pack">Pack</span>
+                          <span className="dag-legend-item dag-wheel">Wheel</span>
+                          <span className="dag-legend-item dag-repair">Repair</span>
+                        </div>
+                        {planDag ? (
+                          <div
+                            className="dag-canvas"
+                            style={{
+                              minWidth: planDag.size.width,
+                              minHeight: planDag.size.height,
+                              "--dag-node-width": `${DAG_LAYOUT.nodeWidth}px`,
+                              "--dag-node-height": `${DAG_LAYOUT.nodeHeight}px`,
+                              "--dag-node-gap": `${DAG_LAYOUT.nodeGap}px`,
+                              "--dag-col-gap": `${DAG_LAYOUT.colGap}px`,
+                              "--dag-pad": `${DAG_LAYOUT.pad}px`,
+                            }}
+                          >
+                            <svg className="dag-edges" width={planDag.size.width} height={planDag.size.height}>
+                              <defs>
+                                <marker
+                                  id="dag-arrow"
+                                  markerWidth="8"
+                                  markerHeight="8"
+                                  refX="6"
+                                  refY="3"
+                                  orient="auto"
+                                  markerUnits="strokeWidth"
+                                >
+                                  <path d="M0,0 L0,6 L6,3 z" className="dag-edge-head" />
+                                </marker>
+                              </defs>
+                              {planDag.edges.map((edge, idx) => {
+                                const from = planDag.positions[edge.from];
+                                const to = planDag.positions[edge.to];
+                                if (!from || !to) return null;
+                                const x1 =
+                                  DAG_LAYOUT.pad +
+                                  from.col * (DAG_LAYOUT.nodeWidth + DAG_LAYOUT.colGap) +
+                                  DAG_LAYOUT.nodeWidth;
+                                const y1 =
+                                  DAG_LAYOUT.pad +
+                                  from.row * (DAG_LAYOUT.nodeHeight + DAG_LAYOUT.nodeGap) +
+                                  DAG_LAYOUT.nodeHeight / 2;
+                                const x2 = DAG_LAYOUT.pad + to.col * (DAG_LAYOUT.nodeWidth + DAG_LAYOUT.colGap);
+                                const y2 =
+                                  DAG_LAYOUT.pad +
+                                  to.row * (DAG_LAYOUT.nodeHeight + DAG_LAYOUT.nodeGap) +
+                                  DAG_LAYOUT.nodeHeight / 2;
+                                const c1 = x1 + DAG_LAYOUT.colGap * 0.4;
+                                const c2 = x2 - DAG_LAYOUT.colGap * 0.4;
+                                const path = `M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}`;
+                                return <path key={`${edge.from}-${edge.to}-${idx}`} d={path} className="dag-edge" markerEnd="url(#dag-arrow)" />;
+                              })}
+                            </svg>
+                            <div className="dag-columns">
+                              {planDag.columns.map((col, colIdx) => (
+                                <div key={`col-${colIdx}`} className="dag-column">
+                                  {col.map((item) => (
+                                    <div key={item.id} className={`dag-node dag-node--${item.node?.type || "unknown"}`}>
+                                      <div className="dag-node-head">
+                                        <div className="dag-node-title" title={item.label.title}>{item.label.title}</div>
+                                        {item.node?.action && <span className="chip chip-muted text-[10px]">{item.node.action}</span>}
+                                      </div>
+                                      <div className="dag-node-sub">{item.label.subtitle || "—"}</div>
+                                      <div className="dag-node-digest">{item.id.slice(0, 10)}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="glass subtle px-3 py-2 rounded-lg text-slate-400 text-sm">
+                            No DAG data available. Replan to capture graph nodes.
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
