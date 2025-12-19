@@ -2890,7 +2890,7 @@ const enqueuePlanForInput = async (pi, verb) => {
           onClick={closePlanGraph}
         >
           <div
-            className="glass subtle w-[min(1100px,95vw)] max-h-[85vh] overflow-hidden border border-slate-800/80 shadow-2xl"
+            className="glass subtle w-[min(1100px,95vw)] h-[85vh] max-h-[85vh] overflow-hidden border border-slate-800/80 shadow-2xl flex flex-col"
             role="dialog"
             aria-modal="true"
             aria-label="Plan graph"
@@ -2921,7 +2921,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                 </button>
               </div>
             </div>
-            <div ref={planGraphViewportRef} className="p-4 overflow-auto max-h-[75vh]">
+            <div ref={planGraphViewportRef} className="flex-1 p-4 overflow-auto">
               {planGraphContent}
             </div>
           </div>
