@@ -174,17 +174,25 @@ const buildDagLayout = (dag, orientation = "horizontal", focusId = "") => {
 
   let activeSet = null;
   if (focusId && inputsById.has(focusId)) {
-    activeSet = new Set();
-    const queue = [focusId];
-    while (queue.length) {
-      const current = queue.pop();
-      if (!current || activeSet.has(current)) continue;
-      activeSet.add(current);
+    activeSet = new Set([focusId]);
+    const parentStack = [focusId];
+    while (parentStack.length) {
+      const current = parentStack.pop();
       const parents = inputsById.get(current) || [];
+      for (const parent of parents) {
+        if (!inputsById.has(parent) || activeSet.has(parent)) continue;
+        activeSet.add(parent);
+        parentStack.push(parent);
+      }
+    }
+    const childStack = [focusId];
+    while (childStack.length) {
+      const current = childStack.pop();
       const children = childrenById.get(current) || [];
-      for (const next of [...parents, ...children]) {
-        if (!inputsById.has(next) || activeSet.has(next)) continue;
-        queue.push(next);
+      for (const child of children) {
+        if (!inputsById.has(child) || activeSet.has(child)) continue;
+        activeSet.add(child);
+        childStack.push(child);
       }
     }
   }
