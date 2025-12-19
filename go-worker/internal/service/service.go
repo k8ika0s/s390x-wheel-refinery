@@ -18,6 +18,10 @@ func Run() error {
 	cfg := overlaySettingsFromControlPlane(fromEnv())
 	planPool := atomic.Int32{}
 	buildPool := atomic.Int32{}
+	var pyVersion atomic.Value
+	var platformTag atomic.Value
+	pyVersion.Store(cfg.PythonVersion)
+	platformTag.Store(cfg.PlatformTag)
 	if cfg.PlanPoolSize > 0 {
 		planPool.Store(int32(cfg.PlanPoolSize))
 	}
@@ -45,9 +49,9 @@ func Run() error {
 		if listURL == "" {
 			listURL = strings.TrimRight(cfg.ControlPlaneURL, "/") + "/api/pending-inputs"
 		}
-		go plannerLoop(ctx, cfg, popURL, statusURL, listURL, &planPool)
+		go plannerLoop(ctx, cfg, popURL, statusURL, listURL, &planPool, &pyVersion, &platformTag)
 	}
-	go pollSettings(ctx, cfg, &planPool, &buildPool)
+	go pollSettings(ctx, cfg, &planPool, &buildPool, &pyVersion, &platformTag)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(wr http.ResponseWriter, r *http.Request) {
 		wr.WriteHeader(http.StatusOK)
@@ -113,6 +117,10 @@ func Run() error {
 					return
 				}
 			}
+			hints, err := fetchHints(r.Context(), nil, cfg)
+			if err != nil {
+				log.Printf("plan: fetch hints failed: %v", err)
+			}
 			snap, err := plan.Generate(
 				cfg.InputDir,
 				cfg.CacheDir,
@@ -123,6 +131,7 @@ func Run() error {
 				cfg.UpgradeStrategy,
 				cfg.RequirementsPath,
 				cfg.ConstraintsPath,
+				hints,
 				cfg.PackCatalog,
 				cfg.CASStore(),
 				cfg.CASRegistryURL,
@@ -154,7 +163,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // pollSettings periodically refreshes pool sizes from control-plane settings.
-func pollSettings(ctx context.Context, cfg Config, planPool, buildPool *atomic.Int32) {
+func pollSettings(ctx context.Context, cfg Config, planPool, buildPool *atomic.Int32, pyVersion, platformTag *atomic.Value) {
 	if cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -171,6 +180,12 @@ func pollSettings(ctx context.Context, cfg Config, planPool, buildPool *atomic.I
 			}
 			if updated.BuildPoolSize > 0 && buildPool != nil {
 				buildPool.Store(int32(updated.BuildPoolSize))
+			}
+			if pyVersion != nil && updated.PythonVersion != "" {
+				pyVersion.Store(updated.PythonVersion)
+			}
+			if platformTag != nil && updated.PlatformTag != "" {
+				platformTag.Store(updated.PlatformTag)
 			}
 		}
 	}
@@ -202,8 +217,10 @@ func overlaySettingsFromControlPlane(cfg Config) Config {
 		return cfg
 	}
 	var payload struct {
-		PlanPoolSize  int `json:"plan_pool_size"`
-		BuildPoolSize int `json:"build_pool_size"`
+		PlanPoolSize  int    `json:"plan_pool_size"`
+		BuildPoolSize int    `json:"build_pool_size"`
+		PythonVersion string `json:"python_version"`
+		PlatformTag   string `json:"platform_tag"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		log.Printf("settings decode failed: %v", err)
@@ -215,5 +232,30 @@ func overlaySettingsFromControlPlane(cfg Config) Config {
 	if payload.BuildPoolSize > 0 {
 		cfg.BuildPoolSize = payload.BuildPoolSize
 	}
+	if payload.PythonVersion != "" && validPythonVersion(payload.PythonVersion) {
+		cfg.PythonVersion = payload.PythonVersion
+	}
+	if payload.PlatformTag != "" && validPlatformTag(payload.PlatformTag) {
+		cfg.PlatformTag = payload.PlatformTag
+	}
 	return cfg
+}
+
+func validPythonVersion(v string) bool {
+	if v == "" {
+		return false
+	}
+	return strings.HasPrefix(v, "3.") && len(v) <= 5
+}
+
+func validPlatformTag(tag string) bool {
+	if tag == "" || len(tag) > 64 {
+		return false
+	}
+	for _, r := range tag {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.') {
+			return false
+		}
+	}
+	return true
 }

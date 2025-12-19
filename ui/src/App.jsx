@@ -54,6 +54,180 @@ const formatBytes = (value) => {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+const toTimestampMs = (value) => {
+  if (value === undefined || value === null) return 0;
+  if (typeof value === "number") {
+    return value > 1e12 ? value : value * 1000;
+  }
+  const num = Number(value);
+  if (Number.isFinite(num)) {
+    return num > 1e12 ? num : num * 1000;
+  }
+  const parsed = new Date(value);
+  const ms = parsed.getTime();
+  return Number.isFinite(ms) ? ms : 0;
+};
+
+const formatTimestamp = (value) => {
+  const ms = toTimestampMs(value);
+  if (!ms) return "";
+  return new Date(ms).toLocaleString();
+};
+
+const formatAutomationSummary = (meta) => {
+  const auto = meta?.automation;
+  if (!auto) return "";
+  const hints = Array.isArray(auto.hint_ids) ? auto.hint_ids.length : 0;
+  const blocked = Array.isArray(auto.blocked_hints) ? auto.blocked_hints.length : 0;
+  const recipes = Array.isArray(auto.recipes) ? auto.recipes.length : 0;
+  const parts = [];
+  if (recipes) parts.push(`${recipes} recipe${recipes === 1 ? "" : "s"}`);
+  if (hints) parts.push(`${hints} hint${hints === 1 ? "" : "s"}`);
+  if (blocked) parts.push(`${blocked} blocked`);
+  if (auto.impact === "high") parts.push("high impact");
+  if (auto.blocked) parts.push(`blocked: ${auto.blocked}`);
+  if (!parts.length) return "auto-fix attempted";
+  return `auto-fix: ${parts.join(", ")}`;
+};
+
+const DAG_LAYOUT = {
+  nodeWidth: 200,
+  nodeHeight: 64,
+  nodeGap: 16,
+  colGap: 28,
+  pad: 16,
+};
+
+const normalizeDag = (dag) => {
+  if (!dag) return [];
+  if (Array.isArray(dag)) return dag;
+  if (Array.isArray(dag.nodes)) return dag.nodes;
+  if (Array.isArray(dag.Nodes)) return dag.Nodes;
+  return [];
+};
+
+const dagNodeId = (node) => {
+  if (!node) return "";
+  const id = node.id;
+  if (!id) return "";
+  if (typeof id === "string") return id;
+  if (typeof id === "object") return id.digest || id.Digest || id.id || "";
+  return "";
+};
+
+const dagInputId = (input) => {
+  if (!input) return "";
+  if (typeof input === "string") return input;
+  if (typeof input === "object") return input.digest || input.Digest || input.id || "";
+  return "";
+};
+
+const dagNodeLabel = (node) => {
+  const meta = node?.metadata || {};
+  const type = node?.type || "node";
+  if (type === "runtime") {
+    const py = meta.python_version || "";
+    const label = py ? `runtime py${py}` : "runtime";
+    const sub = meta.platform_tag || meta.python_tag || "";
+    return { title: label, subtitle: sub };
+  }
+  if (type === "pack") {
+    return { title: meta.name || "pack", subtitle: meta.version || "" };
+  }
+  if (type === "wheel") {
+    return { title: meta.name || "wheel", subtitle: meta.version || "" };
+  }
+  if (type === "repair") {
+    const base = meta.wheel_name || "wheel";
+    const ver = meta.wheel_version || "";
+    return { title: "repair", subtitle: [base, ver].filter(Boolean).join(" ") };
+  }
+  return { title: meta.name || type, subtitle: meta.version || "" };
+};
+
+const buildDagLayout = (dag) => {
+  const nodes = normalizeDag(dag);
+  if (!nodes.length) return null;
+  const items = [];
+  const inputsById = new Map();
+  for (const node of nodes) {
+    const id = dagNodeId(node);
+    if (!id) continue;
+    const inputs = toArray(node.inputs).map(dagInputId).filter(Boolean);
+    inputsById.set(id, inputs);
+    items.push({ id, node, label: dagNodeLabel(node) });
+  }
+  if (!items.length) return null;
+
+  const depth = new Map();
+  const visiting = new Set();
+  const depthFor = (id) => {
+    if (depth.has(id)) return depth.get(id);
+    if (visiting.has(id)) return 0;
+    visiting.add(id);
+    const inputs = inputsById.get(id) || [];
+    let max = 0;
+    for (const input of inputs) {
+      if (!inputsById.has(input)) continue;
+      const d = depthFor(input);
+      if (d + 1 > max) max = d + 1;
+    }
+    visiting.delete(id);
+    depth.set(id, max);
+    return max;
+  };
+  items.forEach((item) => depthFor(item.id));
+
+  const typeRank = { runtime: 0, pack: 1, wheel: 2, repair: 3 };
+  const sorted = items.slice().sort((a, b) => {
+    const da = depth.get(a.id) ?? 0;
+    const db = depth.get(b.id) ?? 0;
+    if (da !== db) return da - db;
+    const ra = typeRank[a.node?.type] ?? 9;
+    const rb = typeRank[b.node?.type] ?? 9;
+    if (ra !== rb) return ra - rb;
+    return (a.label.title || "").localeCompare(b.label.title || "");
+  });
+
+  const columns = [];
+  const positions = {};
+  let maxRows = 0;
+  sorted.forEach((item) => {
+    const col = depth.get(item.id) ?? 0;
+    if (!columns[col]) columns[col] = [];
+    columns[col].push(item);
+  });
+  columns.forEach((colItems, colIdx) => {
+    if (!colItems) return;
+    maxRows = Math.max(maxRows, colItems.length);
+    colItems.forEach((item, rowIdx) => {
+      positions[item.id] = { col: colIdx, row: rowIdx };
+    });
+  });
+
+  const edges = [];
+  for (const item of items) {
+    const inputs = inputsById.get(item.id) || [];
+    for (const input of inputs) {
+      if (positions[input]) {
+        edges.push({ from: input, to: item.id });
+      }
+    }
+  }
+
+  const colCount = Math.max(columns.length, 1);
+  const width =
+    DAG_LAYOUT.pad * 2 +
+    colCount * DAG_LAYOUT.nodeWidth +
+    Math.max(0, colCount - 1) * DAG_LAYOUT.colGap;
+  const height =
+    DAG_LAYOUT.pad * 2 +
+    Math.max(1, maxRows) * DAG_LAYOUT.nodeHeight +
+    Math.max(0, maxRows - 1) * DAG_LAYOUT.nodeGap;
+
+  return { columns, edges, positions, size: { width, height } };
+};
+
 function ArtifactBadges({ meta }) {
   if (!meta) return null;
   const items = [];
@@ -130,12 +304,16 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, apiBase,
   const totalQueue =
     (metrics?.queue?.length ?? 0) + (metrics?.pending?.plan_queue ?? 0) + (metrics?.build?.length ?? 0);
   const queueLevel = totalQueue === 0 ? 0 : totalQueue < 5 ? 1 : totalQueue < 20 ? 2 : totalQueue < 50 ? 3 : totalQueue < 100 ? 4 : 5;
+  const planQueueLength = metrics?.pending?.plan_queue ?? 0;
+  const buildQueueLength = metrics?.build?.length ?? 0;
+  const pendingInputsCount = metrics?.pending?.inputs ?? 0;
+  const autoPlanEnabled = Boolean(metrics?.settings?.auto_plan ?? false);
+  const autoBuildEnabled = Boolean(metrics?.settings?.auto_build ?? false);
   const navItems = [
     { to: "/", label: "Overview", aliases: ["/overview"] },
     { to: "/inputs", label: "Inputs" },
     { to: "/plans", label: "Plans" },
     { to: "/builds", label: "Builds" },
-    { to: "/queues", label: "Queues" },
     { to: "/hints", label: "Hints" },
     { to: "/settings", label: "Settings" },
   ];
@@ -177,18 +355,31 @@ function Layout({ children, tokenActive, theme, onToggleTheme, metrics, apiBase,
                 <span className="text-slate-300">{apiLabel}</span>
               </span>
             </span>
-            <span className="chip status-chip bg-slate-800 border-border text-xs">
-              <span className="text-slate-400">Queue</span>
+            <span
+              className={`chip status-chip text-xs ${autoPlanEnabled ? "bg-emerald-900/70 border-emerald-600" : "bg-amber-900/60 border-amber-600"}`}
+              title={`Plan queue (${autoPlanEnabled ? "auto" : "manual"})`}
+            >
+              <span className="text-slate-200">Plan q</span>
               <span className="inline-flex items-center gap-2">
-                <span className="inline-flex items-center gap-1">
-                  {Array.from({ length: 5 }).map((_, idx) => (
-                    <span
-                      key={idx}
-                      className={`inline-block h-2 w-2 rounded-full ${idx < queueLevel ? "bg-cyan-300" : "bg-slate-700"}`}
-                    />
-                  ))}
-                </span>
-                <span className="text-slate-300">{totalQueue}</span>
+                <span className={`inline-block h-2 w-2 rounded-full ${autoPlanEnabled ? "bg-emerald-400" : "bg-amber-300"}`} />
+                <span className="text-slate-100">{planQueueLength}</span>
+              </span>
+            </span>
+            <span
+              className={`chip status-chip text-xs ${autoBuildEnabled ? "bg-emerald-900/70 border-emerald-600" : "bg-amber-900/60 border-amber-600"}`}
+              title={`Build queue (${autoBuildEnabled ? "auto" : "manual"})`}
+            >
+              <span className="text-slate-200">Build q</span>
+              <span className="inline-flex items-center gap-2">
+                <span className={`inline-block h-2 w-2 rounded-full ${autoBuildEnabled ? "bg-emerald-400" : "bg-amber-300"}`} />
+                <span className="text-slate-100">{buildQueueLength}</span>
+              </span>
+            </span>
+            <span className="chip status-chip bg-slate-800 border-border text-xs" title="Pending inputs">
+              <span className="text-slate-200">Inputs</span>
+              <span className="inline-flex items-center gap-2">
+                <span className={`inline-block h-2 w-2 rounded-full ${pendingInputsCount > 0 ? "bg-amber-300" : "bg-emerald-400"}`} />
+                <span className="text-slate-100">{pendingInputsCount}</span>
               </span>
             </span>
             <span className="chip status-chip bg-slate-800 border-border text-xs">
@@ -343,7 +534,9 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
                 <td className="py-2"><Link className="text-accent hover:underline" to={`/package/${e.name}`}>{e.name} {e.version}</Link></td>
                 <td className="py-2 text-slate-400">{e.python_tag}/{e.platform_tag}</td>
                 <td className="py-2 text-slate-300"><ArtifactBadges meta={e.metadata} /></td>
-                <td className="py-2 text-slate-400">{e.detail || ""}</td>
+                <td className="py-2 text-slate-400">
+                  {[e.detail, formatAutomationSummary(e.metadata)].filter(Boolean).join(" · ")}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -467,6 +660,33 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const variantsPaged = paged(variantsArr, variantPage);
   const failuresPaged = paged(failuresArr, failurePage);
   const hintsPaged = paged(hintsArr, hintsPage);
+  const automationTimeline = eventsArr
+    .map((event) => {
+      const meta = event.metadata || {};
+      const automation = meta.automation || null;
+      const attempt = meta.attempt ?? meta.attempts ?? null;
+      const autoRecipes = toArray(automation?.recipes);
+      const recipes = autoRecipes.length ? autoRecipes : toArray(meta.recipes);
+      return {
+        key: `${event.name}-${event.version}-${event.timestamp}`,
+        event,
+        status: event.status,
+        version: event.version,
+        timestamp: event.timestamp,
+        attempt,
+        summary: formatAutomationSummary(meta),
+        recipes,
+        hints: toArray(automation?.hint_ids),
+        savedHints: toArray(automation?.saved_hint_ids),
+        blockedHints: toArray(automation?.blocked_hints),
+        automation,
+      };
+    })
+    .filter((entry) => {
+      const hasAttempt = entry.attempt !== null && entry.attempt !== undefined;
+      return hasAttempt || entry.summary || entry.automation || entry.recipes.length || entry.hints.length || entry.savedHints.length || entry.blockedHints.length;
+    })
+    .sort((a, b) => toTimestampMs(b.timestamp) - toTimestampMs(a.timestamp));
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -531,6 +751,51 @@ function PackageDetail({ token, pushToast, apiBase }) {
 
       {tab === "events" && (
         <div className="space-y-3">
+          <StatCard title="Automation timeline">
+            {automationTimeline.length ? (
+              <div className="space-y-2">
+                {automationTimeline.map((entry) => (
+                  <div key={entry.key} className="border border-border rounded-lg p-3 space-y-1 text-sm text-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`status ${entry.status}`}>{entry.status}</span>
+                        <span className="text-slate-100">{entry.version}</span>
+                        {entry.attempt !== null && entry.attempt !== undefined && (
+                          <span className="chip">Attempt {entry.attempt}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        {entry.timestamp && <span>{formatTimestamp(entry.timestamp) || entry.timestamp}</span>}
+                        <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => loadLog(entry.event)}>
+                          View log
+                        </button>
+                      </div>
+                    </div>
+                    {entry.summary && <div className="text-slate-300">{entry.summary}</div>}
+                    {entry.automation && (
+                      <div className="text-slate-400">Applied: {entry.automation.applied ? "yes" : "no"}</div>
+                    )}
+                    {entry.automation?.reason && <div className="text-slate-400">{entry.automation.reason}</div>}
+                    {entry.recipes.length > 0 && <div className="text-slate-400">Recipes: {entry.recipes.join(", ")}</div>}
+                    {entry.hints.length > 0 && <div className="text-slate-400">Hints: {entry.hints.join(", ")}</div>}
+                    {entry.savedHints.length > 0 && <div className="text-slate-400">Saved hints: {entry.savedHints.join(", ")}</div>}
+                    {entry.blockedHints.length > 0 && <div className="text-amber-200">Blocked hints: {entry.blockedHints.join(", ")}</div>}
+                    {entry.automation?.impact && (
+                      <div className={entry.automation.impact === "high" ? "text-amber-200" : "text-slate-400"}>
+                        Impact: {entry.automation.impact}
+                        {entry.automation.impact_reason ? ` (${entry.automation.impact_reason})` : ""}
+                      </div>
+                    )}
+                    {entry.automation?.blocked && (
+                      <div className="text-amber-200">Blocked: {entry.automation.blocked}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState title="No automation history" detail="Builds have not reported auto-fix activity yet." />
+            )}
+          </StatCard>
           <div className="glass p-4 space-y-3 min-w-0">
             <div className="flex items-center justify-between">
               <div className="text-lg font-semibold">Events</div>
@@ -552,7 +817,9 @@ function PackageDetail({ token, pushToast, apiBase }) {
                       <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
                       <td className="py-2 text-slate-200">{e.version}</td>
                       <td className="py-2 text-slate-300"><ArtifactBadges meta={e.metadata} /></td>
-                      <td className="py-2 text-slate-400">{e.detail || ""}</td>
+                      <td className="py-2 text-slate-400">
+                        {[e.detail, formatAutomationSummary(e.metadata)].filter(Boolean).join(" · ")}
+                      </td>
                       <td className="py-2"><button className="btn btn-secondary" onClick={() => loadLog(e)}>View log</button></td>
                     </tr>
                   ))}
@@ -566,7 +833,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
               <div className="flex items-center justify-between">
                 <div className="text-base font-semibold">Log: {selectedEvent.name} {selectedEvent.version}</div>
                 <div className="flex items-center gap-2 text-xs text-slate-400">
-                  <span>{selectedEvent.timestamp}</span>
+                  <span>{formatTimestamp(selectedEvent.timestamp) || selectedEvent.timestamp}</span>
                   <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setAutoScroll((v) => !v)}>
                     Autoscroll: {autoScroll ? "on" : "off"}
                   </button>
@@ -592,6 +859,36 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   )}
                 </div>
               </div>
+              {selectedEvent?.metadata?.automation && (
+                <div className="glass subtle px-3 py-2 rounded-lg text-xs text-slate-200 space-y-1">
+                  <div className="font-semibold text-slate-100">Automation</div>
+                  <div>Applied: {selectedEvent.metadata.automation.applied ? "yes" : "no"}</div>
+                  {Array.isArray(selectedEvent.metadata.automation.recipes) && selectedEvent.metadata.automation.recipes.length > 0 && (
+                    <div className="text-slate-300">Recipes: {selectedEvent.metadata.automation.recipes.join(", ")}</div>
+                  )}
+                  {Array.isArray(selectedEvent.metadata.automation.hint_ids) && selectedEvent.metadata.automation.hint_ids.length > 0 && (
+                    <div className="text-slate-300">Hints: {selectedEvent.metadata.automation.hint_ids.join(", ")}</div>
+                  )}
+                  {Array.isArray(selectedEvent.metadata.automation.blocked_hints) && selectedEvent.metadata.automation.blocked_hints.length > 0 && (
+                    <div className="text-amber-200">Blocked hints: {selectedEvent.metadata.automation.blocked_hints.join(", ")}</div>
+                  )}
+                  {Array.isArray(selectedEvent.metadata.automation.saved_hint_ids) && selectedEvent.metadata.automation.saved_hint_ids.length > 0 && (
+                    <div className="text-slate-300">Saved hints: {selectedEvent.metadata.automation.saved_hint_ids.join(", ")}</div>
+                  )}
+                  {selectedEvent.metadata.automation.impact && (
+                    <div className={selectedEvent.metadata.automation.impact === "high" ? "text-amber-200" : "text-slate-300"}>
+                      Impact: {selectedEvent.metadata.automation.impact}
+                      {selectedEvent.metadata.automation.impact_reason ? ` (${selectedEvent.metadata.automation.impact_reason})` : ""}
+                    </div>
+                  )}
+                  {selectedEvent.metadata.automation.blocked && (
+                    <div className="text-amber-200">Blocked: {selectedEvent.metadata.automation.blocked}</div>
+                  )}
+                  {selectedEvent.metadata.automation.reason && (
+                    <div className="text-slate-400">{selectedEvent.metadata.automation.reason}</div>
+                  )}
+                </div>
+              )}
               <pre
                 ref={logRef}
                 className="bg-slate-900 border border-border rounded-lg p-3 max-h-72 overflow-auto text-xs"
@@ -658,12 +955,16 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [apiBaseInput, setApiBaseInput] = useState(apiBase || "");
   const [apiBlocked, setApiBlocked] = useState(false);
   const [pendingInputs, setPendingInputs] = useState([]);
+  const pendingPrevRef = useRef([]);
+  const [pendingHighlight, setPendingHighlight] = useState({});
   const [builds, setBuilds] = useState([]);
   const [buildsLoading, setBuildsLoading] = useState(false);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
   const [clearingBuilds, setClearingBuilds] = useState(false);
   const [clearingPendingInputs, setClearingPendingInputs] = useState(false);
   const [clearingPlanQueue, setClearingPlanQueue] = useState(false);
+  const [pendingActions, setPendingActions] = useState({});
+  const [pendingRefreshing, setPendingRefreshing] = useState(false);
   const [planList, setPlanList] = useState([]);
   const [planListLoading, setPlanListLoading] = useState(false);
   const [planListError, setPlanListError] = useState("");
@@ -673,6 +974,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planDetailsLoading, setPlanDetailsLoading] = useState(false);
   const [planDetailsError, setPlanDetailsError] = useState("");
   const [enqueueingBuilds, setEnqueueingBuilds] = useState(false);
+  const [planTab, setPlanTab] = useState("builds");
   const [hintSearch, setHintSearch] = useState("");
   const [hintPage, setHintPage] = useState(1);
   const [hintQuery, setHintQuery] = useState("");
@@ -688,7 +990,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [bulkUploading, setBulkUploading] = useState(false);
   const apiToastShown = useRef(false);
   const viewKey = view || "overview";
-  const hintPageSize = 200;
+  const hintPageSize = 10;
   const [isVisible, setIsVisible] = useState(
     () => (typeof document !== "undefined" ? document.visibilityState === "visible" : true),
   );
@@ -713,7 +1015,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     setLoading(true);
     const activeView = opts.view || viewKey;
     const wantsOverview = activeView === "overview";
-    const wantsQueues = activeView === "queues";
+    const wantsQueues = activeView === "queues" || activeView === "builds";
     const wantsInputs = activeView === "inputs";
     const wantsBuilds = activeView === "builds";
     const wantsRecent = wantsOverview || wantsBuilds;
@@ -759,7 +1061,25 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       }
       if (wantsInputs || wantsOverview) {
         const pending = await fetchPendingInputs(authToken).catch(() => []);
-        setPendingInputs(Array.isArray(pending) ? pending : []);
+        const pendingArr = Array.isArray(pending) ? pending : [];
+        const prevIds = new Set((pendingPrevRef.current || []).map((pi) => pi.id));
+        const newOnes = pendingArr.filter((pi) => pi?.id && !prevIds.has(pi.id));
+        if (newOnes.length) {
+          const add = {};
+          newOnes.forEach((pi) => {
+            add[pi.id] = true;
+          });
+          setPendingHighlight((prev) => ({ ...prev, ...add }));
+          setTimeout(() => {
+            setPendingHighlight((prev) => {
+              const next = { ...prev };
+              newOnes.forEach((pi) => delete next[pi.id]);
+              return next;
+            });
+          }, 1400);
+        }
+        pendingPrevRef.current = pendingArr;
+        setPendingInputs(pendingArr);
       }
       if (wantsBuilds) {
         const buildsList = await fetchBuilds({ status: buildStatus || undefined }, authToken).catch(() => []);
@@ -965,11 +1285,20 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   }, [view, authToken]);
 
+  // Prefetch plans once so the library stays warm even before visiting the Plans tab.
+  useEffect(() => {
+    loadPlanList();
+  }, [authToken]);
+
   useEffect(() => {
     if (view === "plans" && selectedPlanId) {
       loadPlanDetails(selectedPlanId);
     }
   }, [view, selectedPlanId, authToken]);
+
+  useEffect(() => {
+    setPlanTab("builds");
+  }, [selectedPlanId]);
 
   const handleTriggerWorker = async () => {
     setMessage("");
@@ -1055,9 +1384,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
-  const handleDeletePendingInput = async (pi) => {
+const handleDeletePendingInput = async (pi) => {
     if (!pi?.id) return;
     if (!window.confirm(`Delete pending input ${pi.filename || pi.id}?`)) return;
+    setPendingActions((m) => ({ ...m, [pi.id]: "delete" }));
     try {
       await deletePendingInput(pi.id, authToken);
       pushToast?.({ type: "success", title: "Pending input deleted", message: pi.filename || `ID ${pi.id}` });
@@ -1065,6 +1395,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     } catch (e) {
       setError(e.message);
       pushToast?.({ type: "error", title: "Delete pending input failed", message: e.message });
+    } finally {
+      setPendingActions((m) => {
+        const next = { ...m };
+        delete next[pi.id];
+        return next;
+      });
     }
   };
 
@@ -1119,13 +1455,21 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
-  const enqueuePlanForInput = async (pi, verb) => {
+const enqueuePlanForInput = async (pi, verb) => {
+    if (!pi?.id) return;
+    setPendingActions((m) => ({ ...m, [pi.id]: "enqueue" }));
     try {
       await enqueuePlan(pi.id, authToken);
       pushToast?.({ type: "success", title: verb, message: pi.filename });
       await load();
     } catch (e) {
       pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
+    } finally {
+      setPendingActions((m) => {
+        const next = { ...m };
+        delete next[pi.id];
+        return next;
+      });
     }
   };
 
@@ -1144,6 +1488,17 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     return "";
   };
 
+  const reqInputRef = useRef(null);
+  const wheelInputRef = useRef(null);
+
+  const hashFile = async (file) => {
+    const buf = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest("SHA-256", buf);
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  };
+
   const handleUploadReqs = async (trigger = false) => {
     setReqError("");
     const lintErr = await lintReqFile(reqFile);
@@ -1152,9 +1507,29 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       pushToast?.({ type: "error", title: "Upload failed", message: lintErr });
       return;
     }
+    // Detect duplicate by digest against pending inputs.
+    try {
+      const digestHex = await hashFile(reqFile);
+      const digest = `sha256:${digestHex}`;
+      const dup = pendingInputs.find((pi) => pi.digest === digest);
+      if (dup) {
+        pushToast?.({
+          type: "info",
+          title: "Already uploaded",
+          message: `${reqFile.name} matches an existing pending upload (id ${dup.id}).`,
+        });
+        setReqFile(null);
+        if (reqInputRef.current) reqInputRef.current.value = "";
+        return;
+      }
+    } catch {
+      // best effort; continue on hash failure
+    }
     try {
       const resp = await uploadRequirements(reqFile, authToken);
       pushToast?.({ type: "success", title: "Uploaded", message: resp.detail || "requirements uploaded" });
+      setReqFile(null);
+      if (reqInputRef.current) reqInputRef.current.value = "";
       if (trigger) {
         await handleTriggerWorker();
       } else {
@@ -1182,8 +1557,27 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       return;
     }
     try {
+      const digestHex = await hashFile(wheelFile);
+      const digest = `sha256:${digestHex}`;
+      const dup = pendingInputs.find((pi) => pi.digest === digest);
+      if (dup) {
+        pushToast?.({
+          type: "info",
+          title: "Already uploaded",
+          message: `${wheelFile.name} matches an existing pending upload (id ${dup.id}).`,
+        });
+        setWheelFile(null);
+        if (wheelInputRef.current) wheelInputRef.current.value = "";
+        return;
+      }
+    } catch {
+      // ignore hash failure, continue upload
+    }
+    try {
       const resp = await uploadWheel(wheelFile, authToken);
       pushToast?.({ type: "success", title: "Uploaded", message: resp.detail || "wheel uploaded" });
+      setWheelFile(null);
+      if (wheelInputRef.current) wheelInputRef.current.value = "";
       if (trigger) {
         await handleTriggerWorker();
       } else {
@@ -1218,6 +1612,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const planQueueLength = dashboard?.metrics?.pending?.plan_queue ?? 0;
   const buildQueueLength = dashboard?.metrics?.build?.length ?? 0;
   const buildQueueOldest = dashboard?.metrics?.build?.oldest_age_seconds ?? "-";
+  const autoPlanEnabled = settingsData?.auto_plan ?? false;
+  const autoBuildEnabled = settingsData?.auto_build ?? false;
+  const pendingInputsCount = toArray(pendingInputs).length;
   const clearBuildsLabel = buildStatusFilter ? `Clear ${buildStatusFilter} builds` : "Clear pending builds";
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = toArray(hintsState);
@@ -1251,6 +1648,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
+  const planDag = buildDagLayout(selectedPlan?.dag);
+  const planPanelHeightClass = planTab === "graph" ? "max-h-[26rem]" : "max-h-80";
   const planPythonVersion =
     selectedPlanNodes.find((n) => n?.python_version)?.python_version ||
     selectedPlanNodes.find((n) => n?.python_tag)?.python_tag ||
@@ -1491,6 +1890,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       setPlanDetailsError("Select a plan to enqueue.");
       return;
     }
+    if (selectedPlan?.queued) {
+      setPlanDetailsError("Plan is already enqueued for builds.");
+      pushToast?.({ type: "info", title: "Already queued", message: "This plan is already in the build queue." });
+      return;
+    }
     setEnqueueingBuilds(true);
     try {
       const resp = await enqueueBuildsFromPlan(selectedPlanId, authToken);
@@ -1499,6 +1903,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         title: "Builds enqueued",
         message: `${resp.enqueued ?? 0} builds queued`,
       });
+      setSelectedPlan((prev) => (prev ? { ...prev, queued: true } : prev));
+      setPlanList((prev) => prev.map((p) => (p.id === selectedPlanId ? { ...p, queued: true } : p)));
       await load({ packageFilter: pkgFilter, statusFilter, force: true });
     } catch (e) {
       pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
@@ -1712,6 +2118,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           </div>
           <div className="space-y-2 text-sm text-slate-200">
             <input
+              ref={reqInputRef}
               type="file"
               accept=".txt"
               className="input"
@@ -1737,6 +2144,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           </div>
           <div className="space-y-2 text-sm text-slate-200">
             <input
+              ref={wheelInputRef}
               type="file"
               accept=".whl"
               className="input"
@@ -1762,8 +2170,19 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <span className="chip text-xs">🧾</span>
             </div>
             <div className="flex flex-wrap gap-2 whitespace-nowrap">
-              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load()}>
-                Refresh
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                onClick={async () => {
+                  setPendingRefreshing(true);
+                  try {
+                    await load({ force: true });
+                  } finally {
+                    setPendingRefreshing(false);
+                  }
+                }}
+                disabled={pendingRefreshing}
+              >
+                {pendingRefreshing ? "Refreshing..." : "Refresh"}
               </button>
               {pendingInputs.some((pi) => pi.status === "pending") && (
                 <button
@@ -1781,14 +2200,19 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           ) : (
             <div className="flex flex-col gap-2 text-sm text-slate-200">
               {visiblePendingInputs.map((pi) => (
-                <div key={pi.id} className="glass subtle px-3 py-3 rounded-lg space-y-3 w-full">
+                <div
+                  key={pi.id}
+                  className={`glass subtle px-3 py-3 rounded-lg space-y-3 w-full ${pendingHighlight[pi.id] ? "flash-in" : ""}`}
+                >
                   <div className="flex items-start gap-3">
                     <div className="space-y-2 min-w-0 flex-1">
                       <div className="font-semibold text-slate-100 truncate" title={pi.filename}>
                         {pi.filename}
                       </div>
                       <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-                        <span className="chip">{pi.status}</span>
+                        <span className={`chip ${pi.status === "planning" ? "chip-animated" : ""}`}>
+                          {pi.status}
+                        </span>
                         {pi.source_type && <span className="chip">{pi.source_type}</span>}
                         {pi.size_bytes > 0 && <span className="chip">{formatBytes(pi.size_bytes)}</span>}
                         <span className="text-slate-500">id {pi.id}</span>
@@ -1799,25 +2223,30 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                       {pi.status === "pending" && (
                         <button
                           className="btn btn-secondary px-2 py-1 text-xs"
+                          disabled={!!pendingActions[pi.id]}
                           onClick={() => enqueuePlanForInput(pi, "Enqueued for planning")}
                         >
-                          Enqueue
+                          {pendingActions[pi.id] ? "Enqueuing..." : "Enqueue"}
                         </button>
                       )}
                       {pi.status === "failed" && (
                         <button
                           className="btn btn-secondary px-2 py-1 text-xs"
+                          disabled={!!pendingActions[pi.id]}
                           onClick={() => enqueuePlanForInput(pi, "Replan queued")}
                         >
-                          Replan
+                          {pendingActions[pi.id] ? "Replanning..." : "Replan"}
                         </button>
                       )}
-                      <button
-                        className="btn btn-secondary px-2 py-1 text-xs"
-                        onClick={() => handleDeletePendingInput(pi)}
-                      >
-                        Delete
-                      </button>
+                      {pi.status === "pending" && (
+                        <button
+                          className="btn btn-secondary px-2 py-1 text-xs"
+                          disabled={!!pendingActions[pi.id]}
+                          onClick={() => handleDeletePendingInput(pi)}
+                        >
+                          {pendingActions[pi.id] === "delete" ? "Deleting..." : "Delete"}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1946,7 +2375,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         subtitle="Review planned DAGs, inspect nodes, and manually enqueue builds when auto-build is off."
         badge={planListBadge}
       />
-      <div className="grid lg:grid-cols-[360px,1fr] gap-4 items-start">
+      <div className="grid lg:grid-cols-[360px,minmax(0,1fr)] gap-4 items-start">
         <div className="glass p-4 space-y-3">
           <div className="flex items-center justify-between gap-2">
             <div className="text-lg font-semibold flex items-center gap-2">
@@ -1978,17 +2407,24 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                 return (
                   <button
                     key={plan.id}
-                    className={`w-full text-left border border-border rounded-lg p-2 transition ${selected ? "bg-slate-800/60" : "hover:bg-slate-800/30"}`}
+                    aria-pressed={selected}
+                    className={`w-full text-left border rounded-lg p-2 transition ${
+                      selected ? "bg-slate-800/80 border-sky-500/70 shadow-lg shadow-sky-900/30" : "border-border hover:bg-slate-800/30"
+                    }`}
                     onClick={() => setSelectedPlanId(plan.id)}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-100">Plan #{plan.id}</span>
+                      <span className="font-semibold text-slate-100 flex items-center gap-2">
+                        {selected && <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" aria-hidden />}
+                        Plan #{plan.id}
+                      </span>
                       <span className="text-xs text-slate-500">{formatEpoch(plan.created_at)}</span>
                     </div>
                     <div className="text-xs text-slate-400 flex flex-wrap gap-2 mt-1">
                       {plan.run_id && <span className="chip">run {plan.run_id}</span>}
                       <span className="chip">{plan.build_count ?? 0} builds</span>
                       <span className="chip">{plan.node_count ?? 0} nodes</span>
+                      {plan.queued && <span className="chip bg-amber-500/20 text-amber-200 border-amber-500/40">queued</span>}
                     </div>
                   </button>
                 );
@@ -1999,7 +2435,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           )}
           {planListError && <div className="text-xs text-amber-200">{planListError}</div>}
         </div>
-        <div className="glass subtle p-4 space-y-3">
+        <div className="glass subtle p-4 space-y-3 w-full overflow-hidden min-w-0">
           <div className="text-lg font-semibold flex items-center gap-2">
             <span>Selected plan</span>
             <span className="chip text-xs">📌</span>
@@ -2008,9 +2444,31 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             <div className="text-xs text-slate-500">Loading plan details…</div>
           ) : selectedPlan ? (
             <div className="space-y-2 text-sm text-slate-200">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className="btn btn-primary"
+                  onClick={handleEnqueueBuilds}
+                  disabled={enqueueingBuilds || selectedPlan?.queued}
+                  title={selectedPlan?.queued ? "Plan already enqueued" : ""}
+                >
+                  {enqueueingBuilds ? "Enqueueing..." : selectedPlan?.queued ? "Already enqueued" : "Enqueue builds"}
+                </button>
+                <button className="btn btn-secondary" onClick={() => loadPlanDetails(selectedPlan.id)} disabled={planDetailsLoading}>
+                  Refresh details
+                </button>
+                <button className="btn btn-secondary" onClick={() => handleClearPlans(selectedPlan.id)} disabled={clearingPlans}>
+                  {clearingPlans ? "Clearing..." : "Clear selected"}
+                </button>
+              </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Plan ID</span>
                 <span className="chip">{selectedPlan.id}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Queued</span>
+                <span className={`chip ${selectedPlan.queued ? "bg-amber-500/20 text-amber-200 border-amber-500/40" : ""}`}>
+                  {selectedPlan.queued ? "yes" : "no"}
+                </span>
               </div>
               {selectedPlan.run_id && (
                 <div className="flex items-center justify-between">
@@ -2034,32 +2492,155 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                 <span className="text-slate-400">Platform tag</span>
                 <span className="chip">{planPlatformTag}</span>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button className="btn btn-primary" onClick={handleEnqueueBuilds} disabled={enqueueingBuilds}>
-                  {enqueueingBuilds ? "Enqueueing..." : "Enqueue builds"}
-                </button>
-                <button className="btn btn-secondary" onClick={() => loadPlanDetails(selectedPlan.id)} disabled={planDetailsLoading}>
-                  Refresh details
-                </button>
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => handleClearPlans(selectedPlan.id)}
-                  disabled={clearingPlans}
-                >
-                  {clearingPlans ? "Clearing..." : "Clear selected"}
-                </button>
-              </div>
               {selectedPlanNodes.length > 0 ? (
-                <div className="max-h-64 overflow-auto text-xs text-slate-300 space-y-1">
-                  {selectedPlanNodes.slice(0, 12).map((node, idx) => (
-                    <div key={`${node.name}-${node.version}-${idx}`} className="flex items-center justify-between">
-                      <span>{node.name} {node.version}</span>
-                      <span className="chip">{node.action}</span>
-                    </div>
-                  ))}
-                  {selectedPlanNodes.length > 12 && (
-                    <div className="text-slate-500">…and {selectedPlanNodes.length - 12} more</div>
-                  )}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    {["builds", "hints", "recipes", "graph"].map((tab) => (
+                      <button
+                        key={tab}
+                        className={`chip ${planTab === tab ? "chip-active" : "hover:bg-slate-800"}`}
+                        onClick={() => setPlanTab(tab)}
+                      >
+                        {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className={`scroll-panel ${planPanelHeightClass} overflow-auto rounded-lg border border-slate-800/60 p-2 space-y-2`}>
+                    {planTab === "builds" &&
+                      selectedPlanNodes.map((node, idx) => (
+                        <div
+                          key={`${node.name}-${node.version}-${idx}`}
+                          className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between"
+                        >
+                          <div className="flex flex-col min-w-0">
+                            <span className="font-semibold text-slate-100 truncate" title={node.name}>{node.name}</span>
+                            <span className="text-slate-400 truncate">{node.version || "version?"}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="chip">{node.action}</span>
+                            {node.python_version && <span className="chip chip-muted">{node.python_version}</span>}
+                          </div>
+                        </div>
+                      ))}
+                    {planTab === "hints" && (
+                      <div className="space-y-2 text-xs text-slate-200">
+                        {selectedPlanNodes.flatMap((n) => toArray(n.hints)).length === 0 ? (
+                          <div className="text-slate-500">No hints attached.</div>
+                        ) : (
+                          selectedPlanNodes.flatMap((n) => toArray(n.hints)).map((h, i) => (
+                            <div key={`${h.id || h.pattern || i}`} className="glass subtle px-3 py-2 rounded border border-emerald-500/30">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-semibold">{h.pattern || h.id || "hint"}</span>
+                                {h.reason && <span className="text-slate-400 truncate">{h.reason}</span>}
+                              </div>
+                              {Array.isArray(h.packs) && h.packs.length > 0 && (
+                                <div className="text-slate-400 text-[11px] mt-1">Packs: {(h.packs || []).join(", ")}</div>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                    {planTab === "recipes" && (
+                      <div className="space-y-2 text-xs text-slate-200">
+                        {selectedPlanNodes.flatMap((n) => toArray(n.recipes)).length === 0 ? (
+                          <div className="text-slate-500">No recipes/packs attached.</div>
+                        ) : (
+                          selectedPlanNodes.flatMap((n) => toArray(n.recipes)).map((r, i) => (
+                            <div key={`${r.name || i}`} className="glass subtle px-3 py-2 rounded border border-sky-500/30 flex items-center justify-between gap-2">
+                              <div className="flex flex-col min-w-0">
+                                <span className="font-semibold">{r.name || "recipe"}</span>
+                                {r.version && <span className="text-slate-400 text-[11px]">{r.version}</span>}
+                              </div>
+                              {r.reason && <span className="text-slate-400 text-[11px] truncate">{r.reason}</span>}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                    {planTab === "graph" && (
+                      <div className="dag-wrap">
+                        <div className="dag-legend">
+                          <span className="dag-legend-item dag-runtime">Runtime</span>
+                          <span className="dag-legend-item dag-pack">Pack</span>
+                          <span className="dag-legend-item dag-wheel">Wheel</span>
+                          <span className="dag-legend-item dag-repair">Repair</span>
+                        </div>
+                        {planDag ? (
+                          <div
+                            className="dag-canvas"
+                            style={{
+                              minWidth: planDag.size.width,
+                              minHeight: planDag.size.height,
+                              "--dag-node-width": `${DAG_LAYOUT.nodeWidth}px`,
+                              "--dag-node-height": `${DAG_LAYOUT.nodeHeight}px`,
+                              "--dag-node-gap": `${DAG_LAYOUT.nodeGap}px`,
+                              "--dag-col-gap": `${DAG_LAYOUT.colGap}px`,
+                              "--dag-pad": `${DAG_LAYOUT.pad}px`,
+                            }}
+                          >
+                            <svg className="dag-edges" width={planDag.size.width} height={planDag.size.height}>
+                              <defs>
+                                <marker
+                                  id="dag-arrow"
+                                  markerWidth="8"
+                                  markerHeight="8"
+                                  refX="6"
+                                  refY="3"
+                                  orient="auto"
+                                  markerUnits="strokeWidth"
+                                >
+                                  <path d="M0,0 L0,6 L6,3 z" className="dag-edge-head" />
+                                </marker>
+                              </defs>
+                              {planDag.edges.map((edge, idx) => {
+                                const from = planDag.positions[edge.from];
+                                const to = planDag.positions[edge.to];
+                                if (!from || !to) return null;
+                                const x1 =
+                                  DAG_LAYOUT.pad +
+                                  from.col * (DAG_LAYOUT.nodeWidth + DAG_LAYOUT.colGap) +
+                                  DAG_LAYOUT.nodeWidth;
+                                const y1 =
+                                  DAG_LAYOUT.pad +
+                                  from.row * (DAG_LAYOUT.nodeHeight + DAG_LAYOUT.nodeGap) +
+                                  DAG_LAYOUT.nodeHeight / 2;
+                                const x2 = DAG_LAYOUT.pad + to.col * (DAG_LAYOUT.nodeWidth + DAG_LAYOUT.colGap);
+                                const y2 =
+                                  DAG_LAYOUT.pad +
+                                  to.row * (DAG_LAYOUT.nodeHeight + DAG_LAYOUT.nodeGap) +
+                                  DAG_LAYOUT.nodeHeight / 2;
+                                const c1 = x1 + DAG_LAYOUT.colGap * 0.4;
+                                const c2 = x2 - DAG_LAYOUT.colGap * 0.4;
+                                const path = `M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}`;
+                                return <path key={`${edge.from}-${edge.to}-${idx}`} d={path} className="dag-edge" markerEnd="url(#dag-arrow)" />;
+                              })}
+                            </svg>
+                            <div className="dag-columns">
+                              {planDag.columns.map((col, colIdx) => (
+                                <div key={`col-${colIdx}`} className="dag-column">
+                                  {col.map((item) => (
+                                    <div key={item.id} className={`dag-node dag-node--${item.node?.type || "unknown"}`}>
+                                      <div className="dag-node-head">
+                                        <div className="dag-node-title" title={item.label.title}>{item.label.title}</div>
+                                        {item.node?.action && <span className="chip chip-muted text-[10px]">{item.node.action}</span>}
+                                      </div>
+                                      <div className="dag-node-sub">{item.label.subtitle || "—"}</div>
+                                      <div className="dag-node-digest">{item.id.slice(0, 10)}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="glass subtle px-3 py-2 rounded-lg text-slate-400 text-sm">
+                            No DAG data available. Replan to capture graph nodes.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <div className="text-xs text-slate-500">No nodes available for this plan.</div>
@@ -2105,8 +2686,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                 return (
                   <button
                     key={s}
-                    className={`chip cursor-pointer ${active ? "chip-active" : "hover:bg-slate-800"}`}
+                    className={`chip cursor-pointer ${active ? "chip-active" : "hover:bg-slate-800"} ${
+                      buildsLoading ? "opacity-60 cursor-wait" : ""
+                    }`}
                     onClick={() => setStatusFilter(active ? "" : s)}
+                    disabled={buildsLoading}
                     title="Toggle status filter"
                   >
                     {s}
@@ -2126,6 +2710,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                   setStatusFilter("");
                   load({ packageFilter: "", statusFilter: "" });
                 }}
+                disabled={buildsLoading}
               >
                 Clear all
               </button>
@@ -2154,11 +2739,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               {["", "pending", "retry", "building", "failed", "built"].map((s) => (
                 <button
                   key={s || "all"}
-                  className={`chip ${buildStatusFilter === s ? "chip-active" : "hover:bg-slate-800"}`}
+                  className={`chip ${buildStatusFilter === s ? "chip-active" : "hover:bg-slate-800"} ${buildsLoading ? "opacity-60 cursor-wait" : ""}`}
                   onClick={() => {
                     setBuildStatusFilter(s);
                     load({ packageFilter: pkgFilter, statusFilter, buildStatusFilter: s });
                   }}
+                  disabled={buildsLoading}
                 >
                   {s || "all"}
                 </button>
@@ -2175,32 +2761,143 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                     <th className="text-left px-2 py-2">Attempts</th>
                     <th className="text-left px-2 py-2">Python</th>
                     <th className="text-left px-2 py-2">Platform</th>
+                    <th className="text-left px-2 py-2">Recipes</th>
                     <th className="text-left px-2 py-2">Error</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {builds.length ? builds.map((b, idx) => (
-                    <tr
-                      key={`${b.package}-${b.version}-${idx}`}
-                      className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
-                      onClick={() => navigate(`/package/${encodeURIComponent(b.package)}`)}
-                      title="View package details"
-                    >
-                      <td className="px-2 py-2">{b.package}</td>
-                      <td className="px-2 py-2">{b.version}</td>
-                      <td className="px-2 py-2"><span className="chip">{b.status}</span></td>
-                      <td className="px-2 py-2">{b.attempts ?? 0}</td>
-                      <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
-                      <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
-                      <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{b.last_error || "-"}</td>
-                    </tr>
-                  )) : (
+                  {buildsLoading && (
                     <tr>
-                      <td className="px-2 py-3 text-slate-400" colSpan="7">No builds found</td>
+                      <td className="px-2 py-3 text-slate-400 text-center" colSpan="8">
+                        Loading builds…
+                      </td>
                     </tr>
                   )}
+                  {!buildsLoading && builds.length
+                    ? builds.map((b, idx) => (
+                        <tr
+                          key={`${b.package}-${b.version}-${idx}`}
+                          className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
+                          onClick={() => navigate(`/package/${encodeURIComponent(b.package)}`)}
+                          title="View package details"
+                        >
+                          <td className="px-2 py-2">{b.package}</td>
+                          <td className="px-2 py-2">{b.version}</td>
+                          <td className="px-2 py-2">
+                            <span className="chip">{b.status}</span>
+                          </td>
+                          <td className="px-2 py-2">{b.attempts ?? 0}</td>
+                          <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
+                          <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
+                          <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{(b.recipes || []).join(", ") || "-"}</td>
+                          <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{b.last_error || "-"}</td>
+                        </tr>
+                      ))
+                    : !buildsLoading && (
+                        <tr>
+                          <td className="px-2 py-3 text-slate-400 text-center" colSpan="8">
+                            No builds found
+                          </td>
+                        </tr>
+                      )}
                 </tbody>
               </table>
+            </div>
+          </div>
+          <div className="glass p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-lg font-semibold flex items-center gap-2">
+                <span>Retry queue</span>
+                <span className="chip text-xs">🧰</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <span className="chip">{queueLength}</span>
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleTriggerWorker}>
+                  Run worker now
+                </button>
+              </div>
+            </div>
+            <div className="grid md:grid-cols-[280px,1fr] gap-4 items-start">
+              <div className="space-y-2 text-sm text-slate-200">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Worker mode</span>
+                  <span className="chip">{workerMode}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Plan queue</span>
+                  <div className="flex items-center gap-2">
+                    <span className="chip">{metrics?.pending?.plan_queue ?? 0}</span>
+                    <button
+                      className="btn btn-secondary px-2 py-1 text-xs"
+                      onClick={handleClearPlanQueue}
+                      disabled={clearingPlanQueue || !planQueueLength}
+                    >
+                      {clearingPlanQueue ? "Clearing..." : "Clear plan queue"}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
+                    Retry selected
+                  </button>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
+                    Clear retry queue
+                  </button>
+                </div>
+                <div className="glass subtle p-3 space-y-2">
+                  <div className="text-xs text-slate-400">Enqueue retry</div>
+                  <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
+                  <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
+                  <button className="btn btn-primary w-full" onClick={handleRetry}>Enqueue</button>
+                  <div className="text-slate-500 text-xs">Uses API: POST /package/&lt;name&gt;/retry</div>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm text-slate-400">
+                  <span>Retry queue items</span>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>
+                    Refresh
+                  </button>
+                </div>
+                {queueItemsSorted.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-xs border border-border rounded-lg">
+                      <thead className="bg-slate-900 text-slate-400 sticky top-0">
+                        <tr>
+                          <th className="px-2 py-2"></th>
+                          <th className="text-left px-2 py-2">Package</th>
+                          <th className="text-left px-2 py-2">Version</th>
+                          <th className="text-left px-2 py-2">Python</th>
+                          <th className="text-left px-2 py-2">Platform</th>
+                          <th className="text-left px-2 py-2">Recipes</th>
+                          <th className="text-left px-2 py-2">Attempts</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {queueItemsSorted.map((q, idx) => {
+                          const key = `${q.package}@${q.version || "latest"}`;
+                          const checked = Boolean(selectedQueue[key]);
+                          return (
+                            <tr key={`${q.package}-${q.version}-${idx}`} className="border-t border-slate-800">
+                              <td className="px-2 py-2">
+                                <input type="checkbox" checked={checked} onChange={() => toggleSelectQueue(q)} />
+                              </td>
+                              <td className="px-2 py-2">{q.package}</td>
+                              <td className="px-2 py-2">{q.version || "latest"}</td>
+                              <td className="px-2 py-2 text-slate-400">{q.python_tag || "-"}</td>
+                              <td className="px-2 py-2 text-slate-400">{q.platform_tag || "-"}</td>
+                              <td className="px-2 py-2 text-slate-400 truncate">{(q.recipes || []).join(", ") || "-"}</td>
+                              <td className="px-2 py-2 text-slate-400">{q.attempts ?? 0}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <EmptyState title="Retry queue is empty" detail="No retry requests pending." icon="✅" />
+                )}
+              </div>
             </div>
           </div>
           <EventsTable events={filteredRecent} />
@@ -2602,8 +3299,6 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     switch (viewKey) {
       case "inputs":
         return renderInputs();
-      case "queues":
-        return renderQueues();
       case "plans":
         return renderPlans();
       case "builds":
@@ -2661,7 +3356,6 @@ export default function App() {
         <Route path="/overview" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="overview" />} />
         <Route path="/inputs" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="inputs" />} />
         <Route path="/plans" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="plans" />} />
-        <Route path="/queues" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="queues" />} />
         <Route path="/builds" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="builds" />} />
         <Route path="/hints" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="hints" />} />
         <Route path="/settings" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="settings" />} />

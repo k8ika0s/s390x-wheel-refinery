@@ -46,6 +46,7 @@ func TestPlanEndpointGeneratesPlan(t *testing.T) {
 				cfg.UpgradeStrategy,
 				cfg.RequirementsPath,
 				cfg.ConstraintsPath,
+				nil,
 				cfg.PackCatalog,
 				cfg.CASStore(),
 				cfg.CASRegistryURL,

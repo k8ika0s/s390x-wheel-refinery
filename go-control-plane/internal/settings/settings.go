@@ -2,8 +2,10 @@ package settings
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 )
 
@@ -20,6 +22,10 @@ type Settings struct {
 }
 
 var mu sync.Mutex
+var (
+	pythonVersionRe = regexp.MustCompile(`^3\.[0-9]{1,2}$`)
+	platformTagRe   = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+)
 
 const (
 	defaultPythonVersion = "3.11"
@@ -60,6 +66,23 @@ func ApplyDefaults(s Settings) Settings {
 		s.AutoBuild = &val
 	}
 	return s
+}
+
+// Validate enforces basic sanity on user-supplied settings values.
+func Validate(s Settings) error {
+	py := s.PythonVersion
+	if py != "" {
+		if !pythonVersionRe.MatchString(py) {
+			return fmt.Errorf("invalid python_version: %q (expected like 3.10)", py)
+		}
+	}
+	pt := s.PlatformTag
+	if pt != "" {
+		if len(pt) > 64 || !platformTagRe.MatchString(pt) {
+			return fmt.Errorf("invalid platform_tag: %q", pt)
+		}
+	}
+	return nil
 }
 
 // BoolValue resolves a pointer bool to a concrete value (using false as the default).

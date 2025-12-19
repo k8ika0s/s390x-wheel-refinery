@@ -188,7 +188,7 @@ export function fetchSettings(token) {
   return request("/api/settings", {}, token);
 }
 
-export function fetchHints({ limit = 200, offset = 0, query = "" } = {}, token) {
+export function fetchHints({ limit = 10, offset = 0, query = "" } = {}, token) {
   const params = new URLSearchParams();
   if (limit) params.set("limit", limit);
   if (offset) params.set("offset", offset);

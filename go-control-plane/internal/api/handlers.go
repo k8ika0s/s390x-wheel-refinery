@@ -796,6 +796,10 @@ func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
 			s.PollMs = 0
 		}
 		s = settings.ApplyDefaults(s)
+		if err := settings.Validate(s); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		if h.Store != nil {
 			if err := h.Store.SaveSettings(r.Context(), s); err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1065,12 +1069,14 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Package      string `json:"package"`
-		Version      string `json:"version"`
-		Status       string `json:"status"`
-		Error        string `json:"error,omitempty"`
-		Attempts     int    `json:"attempts,omitempty"`
-		BackoffUntil int64  `json:"backoff_until,omitempty"`
+		Package      string   `json:"package"`
+		Version      string   `json:"version"`
+		Status       string   `json:"status"`
+		Error        string   `json:"error,omitempty"`
+		Attempts     int      `json:"attempts,omitempty"`
+		BackoffUntil int64    `json:"backoff_until,omitempty"`
+		Recipes      []string `json:"recipes,omitempty"`
+		HintIDs      []string `json:"hint_ids,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -1080,7 +1086,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package, version, and status required"})
 		return
 	}
-	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.Attempts, body.BackoffUntil); err != nil {
+	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.Attempts, body.BackoffUntil, body.Recipes, body.HintIDs); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1103,13 +1109,15 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type job struct {
-		Package     string `json:"package"`
-		Version     string `json:"version"`
-		PythonTag   string `json:"python_tag"`
-		PlatformTag string `json:"platform_tag"`
-		Attempts    int    `json:"attempts"`
-		RunID       string `json:"run_id,omitempty"`
-		PlanID      int64  `json:"plan_id,omitempty"`
+		Package     string   `json:"package"`
+		Version     string   `json:"version"`
+		PythonTag   string   `json:"python_tag"`
+		PlatformTag string   `json:"platform_tag"`
+		Attempts    int      `json:"attempts"`
+		RunID       string   `json:"run_id,omitempty"`
+		PlanID      int64    `json:"plan_id,omitempty"`
+		Recipes     []string `json:"recipes,omitempty"`
+		HintIDs     []string `json:"hint_ids,omitempty"`
 	}
 	var out []job
 	for _, b := range builds {
@@ -1121,6 +1129,8 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 			Attempts:    b.Attempts,
 			RunID:       b.RunID,
 			PlanID:      b.PlanID,
+			Recipes:     b.Recipes,
+			HintIDs:     b.HintIDs,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"builds": out})
@@ -1453,12 +1463,20 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		if snap.Queued {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "plan already enqueued"})
+			return
+		}
 		if err := h.Store.QueueBuildsFromPlan(r.Context(), snap.RunID, snap.ID, snap.Plan); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		if h.Store != nil {
-			_, _ = h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "queued")
+			// Mark any linked pending inputs as queued so the UI reflects progress.
+			if count, err := h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "queued"); err == nil && count == 0 {
+				// If nothing was updated, the linkage might be missing; fall back to clearing any "planned" rows for this plan.
+				_, _ = h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "build_queued")
+			}
 		}
 		count := 0
 		for _, node := range snap.Plan {
@@ -1526,17 +1544,24 @@ func (h *Handler) planCompute(w http.ResponseWriter, r *http.Request) {
 	}
 	// Persist plan snapshot if provided
 	var nodes []store.PlanNode
-	if planArr, ok := snap["plan"].([]any); ok {
-		for _, raw := range planArr {
-			if m, ok := raw.(map[string]any); ok {
-				nodes = append(nodes, store.PlanNode{
-					Name:          toString(m["name"]),
-					Version:       toString(m["version"]),
-					PythonVersion: toString(m["python_version"]),
-					PythonTag:     toString(m["python_tag"]),
-					PlatformTag:   toString(m["platform_tag"]),
-					Action:        toString(m["action"]),
-				})
+	if planVal, ok := snap["plan"]; ok {
+		if data, err := json.Marshal(planVal); err == nil {
+			_ = json.Unmarshal(data, &nodes)
+		}
+	}
+	if len(nodes) == 0 {
+		if planArr, ok := snap["plan"].([]any); ok {
+			for _, raw := range planArr {
+				if m, ok := raw.(map[string]any); ok {
+					nodes = append(nodes, store.PlanNode{
+						Name:          toString(m["name"]),
+						Version:       toString(m["version"]),
+						PythonVersion: toString(m["python_version"]),
+						PythonTag:     toString(m["python_tag"]),
+						PlatformTag:   toString(m["platform_tag"]),
+						Action:        toString(m["action"]),
+					})
+				}
 			}
 		}
 	}
@@ -1725,7 +1750,7 @@ func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		q := r.URL.Query()
-		limit := parseIntDefault(q.Get("limit"), 200, 1000)
+		limit := parseIntDefault(q.Get("limit"), 10, 200)
 		offset := parseIntDefault(q.Get("offset"), 0, 100_000)
 		query := strings.TrimSpace(q.Get("q"))
 		var hints []store.Hint

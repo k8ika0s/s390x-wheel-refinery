@@ -38,6 +38,7 @@ type Hint struct {
 	AppliesTo  map[string][]string `json:"applies_to,omitempty" yaml:"applies_to,omitempty"`
 	Confidence string              `json:"confidence,omitempty" yaml:"confidence,omitempty"`
 	Examples   []string            `json:"examples,omitempty" yaml:"examples,omitempty"`
+	DeletedAt  *time.Time          `json:"deleted_at,omitempty" yaml:"deleted_at,omitempty"`
 }
 
 // LogEntry represents stored log metadata/content.
@@ -93,22 +94,42 @@ type Artifact struct {
 	URL     string
 }
 
+// PlanHint captures a matched hint attached to a plan node.
+type PlanHint struct {
+	ID      string              `json:"id"`
+	Pattern string              `json:"pattern,omitempty"`
+	Note    string              `json:"note,omitempty"`
+	Reason  string              `json:"reason,omitempty"`
+	Tags    []string            `json:"tags,omitempty"`
+	Recipes map[string][]string `json:"recipes,omitempty"`
+}
+
+// PlanRecipe captures a recipe or pack attached to a plan node.
+type PlanRecipe struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 // PlanNode describes a unit in the build plan/graph.
 type PlanNode struct {
-	Name          string `json:"name"`
-	Version       string `json:"version"`
-	PythonVersion string `json:"python_version,omitempty"`
-	PythonTag     string `json:"python_tag,omitempty"`
-	PlatformTag   string `json:"platform_tag,omitempty"`
-	Action        string `json:"action"`
+	Name          string       `json:"name"`
+	Version       string       `json:"version"`
+	PythonVersion string       `json:"python_version,omitempty"`
+	PythonTag     string       `json:"python_tag,omitempty"`
+	PlatformTag   string       `json:"platform_tag,omitempty"`
+	Action        string       `json:"action"`
+	Hints         []PlanHint   `json:"hints,omitempty"`
+	Recipes       []PlanRecipe `json:"recipes,omitempty"`
 }
 
 // PlanSnapshot captures a stored plan with optional DAG payload.
 type PlanSnapshot struct {
-	ID    int64           `json:"id"`
-	RunID string          `json:"run_id,omitempty"`
-	Plan  []PlanNode      `json:"plan"`
-	DAG   json.RawMessage `json:"dag,omitempty"`
+	ID     int64           `json:"id"`
+	RunID  string          `json:"run_id,omitempty"`
+	Plan   []PlanNode      `json:"plan"`
+	DAG    json.RawMessage `json:"dag,omitempty"`
+	Queued bool            `json:"queued,omitempty"`
 }
 
 // PlanSummary provides a compact plan list entry.
@@ -118,24 +139,27 @@ type PlanSummary struct {
 	CreatedAt  int64  `json:"created_at"`
 	NodeCount  int    `json:"node_count"`
 	BuildCount int    `json:"build_count"`
+	Queued     bool   `json:"queued,omitempty"`
 }
 
 // BuildStatus tracks a build job derived from a plan.
 type BuildStatus struct {
-	ID           int64  `json:"id"`
-	Package      string `json:"package"`
-	Version      string `json:"version"`
-	PythonTag    string `json:"python_tag"`
-	PlatformTag  string `json:"platform_tag"`
-	Status       string `json:"status"`
-	Attempts     int    `json:"attempts"`
-	LastError    string `json:"last_error,omitempty"`
-	OldestAgeSec int64  `json:"oldest_age_seconds,omitempty"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
-	RunID        string `json:"run_id,omitempty"`
-	PlanID       int64  `json:"plan_id,omitempty"`
-	BackoffUntil int64  `json:"backoff_until,omitempty"`
+	ID           int64    `json:"id"`
+	Package      string   `json:"package"`
+	Version      string   `json:"version"`
+	PythonTag    string   `json:"python_tag"`
+	PlatformTag  string   `json:"platform_tag"`
+	Status       string   `json:"status"`
+	Attempts     int      `json:"attempts"`
+	LastError    string   `json:"last_error,omitempty"`
+	OldestAgeSec int64    `json:"oldest_age_seconds,omitempty"`
+	CreatedAt    int64    `json:"created_at"`
+	UpdatedAt    int64    `json:"updated_at"`
+	RunID        string   `json:"run_id,omitempty"`
+	PlanID       int64    `json:"plan_id,omitempty"`
+	BackoffUntil int64    `json:"backoff_until,omitempty"`
+	Recipes      []string `json:"recipes,omitempty"`
+	HintIDs      []string `json:"hint_ids,omitempty"`
 }
 
 // PackageSummary aggregates status for a package.
@@ -204,7 +228,7 @@ type Store interface {
 
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int) ([]BuildStatus, error)
-	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64) error
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)
 

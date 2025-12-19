@@ -1,0 +1,14 @@
+flowchart TD
+  A[Build queued] --> B[Worker leases job]
+  B --> C[Runner executes build in container]
+  C -->|success| D[Store artifacts + update status]
+  D --> E[Emit built event + logs]
+  C -->|failure| F[Auto-fix evaluates logs]
+  F -->|apply recipes| G[Retry with backoff]
+  G --> B
+  F -->|no recipes or blocked| H[Mark failed]
+  H --> E
+  D --> I{Repair enabled?}
+  I -->|yes| J[Run repair tool + store repaired wheel]
+  I -->|no| K[Done]
+  J --> K

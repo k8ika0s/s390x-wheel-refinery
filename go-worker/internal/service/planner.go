@@ -30,7 +30,7 @@ type pendingInput struct {
 	Metadata     json.RawMessage `json:"metadata,omitempty"`
 }
 
-func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL string, planPool *atomic.Int32) {
+func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL string, planPool *atomic.Int32, pyVersion, platformTag *atomic.Value) {
 	interval := time.Duration(cfg.PlanPollIntervalSec) * time.Second
 	if interval <= 0 {
 		interval = 15 * time.Second
@@ -75,7 +75,18 @@ func plannerLoop(ctx context.Context, cfg Config, popURL, statusURL, listURL str
 			}
 			piCopy := pi
 			g.Go(func() error {
-				if err := planOne(gctx, client, cfg, inputStore, piCopy, statusURL); err != nil {
+				localCfg := cfg
+				if pyVersion != nil {
+					if v, ok := pyVersion.Load().(string); ok && v != "" {
+						localCfg.PythonVersion = v
+					}
+				}
+				if platformTag != nil {
+					if v, ok := platformTag.Load().(string); ok && v != "" {
+						localCfg.PlatformTag = v
+					}
+				}
+				if err := planOne(gctx, client, localCfg, inputStore, piCopy, statusURL); err != nil {
 					log.Printf("planner: failed planning id=%d: %v", piCopy.ID, err)
 				}
 				return nil
@@ -236,6 +247,10 @@ func planOne(ctx context.Context, client *http.Client, cfg Config, store objects
 	if err != nil {
 		return err
 	}
+	hints, err := fetchHints(ctx, client, cfg)
+	if err != nil {
+		log.Printf("planner: fetch hints failed: %v", err)
+	}
 	snap, err := plan.GenerateFromInputs(
 		inputs,
 		cfg.CacheDir,
@@ -245,6 +260,7 @@ func planOne(ctx context.Context, client *http.Client, cfg Config, store objects
 		cfg.ExtraIndexURL,
 		cfg.UpgradeStrategy,
 		cfg.ConstraintsPath,
+		hints,
 		cfg.PackCatalog,
 		cfg.CASStore(),
 		cfg.CASRegistryURL,
@@ -322,16 +338,26 @@ func parseRequirementsBytes(data []byte) []plan.DepSpec {
 		}
 		name := line
 		version := ""
-		for _, op := range []string{"==", ">=", "~="} {
-			if idx := strings.Index(line, op); idx > 0 {
-				name = strings.TrimSpace(line[:idx])
-				version = line[idx:]
-				if op == "==" {
-					version = strings.TrimPrefix(version, "==")
+
+		// Handle direct URL or VCS references (`package @ url`)
+		if at := strings.Index(line, "@"); at > 0 {
+			name = strings.TrimSpace(line[:at])
+			version = strings.TrimSpace(line[at:])
+		} else {
+			// Handle comparison operators, including <= and <
+			for _, op := range []string{"==", ">=", "<=", "~=", "<", ">"} {
+				if idx := strings.Index(line, op); idx > 0 {
+					name = strings.TrimSpace(line[:idx])
+					version = strings.TrimSpace(line[idx:])
+					// strip leading == for consistency
+					if op == "==" {
+						version = strings.TrimPrefix(version, "==")
+					}
+					break
 				}
-				break
 			}
 		}
+
 		name = normalizeReqName(name)
 		if name == "" {
 			continue

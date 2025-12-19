@@ -8,7 +8,7 @@ flowchart LR
     Q[Queue backend<br/>file / Redis / Kafka]
     subgraph CAS
         ZOT["CAS registry: Zot"]
-        MINIO["Object store: MinIO (inputs + wheelhouse)"]
+        MINIO["Object store: MinIO inputs + wheelhouse"]
     end
     subgraph Builder
         WKR[Go worker]

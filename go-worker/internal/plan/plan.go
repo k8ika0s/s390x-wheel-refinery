@@ -30,6 +30,8 @@ type FlatNode struct {
 	PythonTag     string `json:"python_tag"`
 	PlatformTag   string `json:"platform_tag"`
 	Action        string `json:"action"`
+	Hints         []HintMatch   `json:"hints,omitempty"`
+	Recipes       []RecipeMatch `json:"recipes,omitempty"`
 }
 
 // Snapshot is the structure stored in plan.json.
@@ -127,6 +129,7 @@ func Generate(
 	strategy,
 	requirementsPath,
 	constraintsPath string,
+	hints []Hint,
 	catalog *pack.Catalog,
 	store cas.Store,
 	casRegistryURL,
@@ -164,6 +167,7 @@ func Generate(
 	if err != nil {
 		return Snapshot{}, err
 	}
+	AttachHints(&snap, hints)
 	if casRegistryURL != "" {
 		snap.CAS = &CASInfo{RegistryURL: casRegistryURL, RegistryRepo: casRegistryRepo}
 	}
@@ -184,6 +188,7 @@ func GenerateFromInputs(
 	extraIndexURL,
 	strategy,
 	constraintsPath string,
+	hints []Hint,
 	catalog *pack.Catalog,
 	store cas.Store,
 	casRegistryURL,
@@ -214,6 +219,7 @@ func GenerateFromInputs(
 	if err != nil {
 		return Snapshot{}, err
 	}
+	AttachHints(&snap, hints)
 	if casRegistryURL != "" {
 		snap.CAS = &CASInfo{RegistryURL: casRegistryURL, RegistryRepo: casRegistryRepo}
 	}

@@ -75,7 +75,9 @@ func (c *IndexClient) fetchLatest(client *http.Client, base, name string) (strin
 	}
 	// Try JSON API if PyPI
 	if strings.Contains(u.Host, "pypi.org") {
-		api := fmt.Sprintf("%s/pypi/%s/json", strings.TrimRight(base, "/"), name)
+		// Normalize to the canonical PyPI JSON endpoint regardless of the provided path
+		apiBase := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+		api := fmt.Sprintf("%s/pypi/%s/json", strings.TrimRight(apiBase, "/"), name)
 		req, _ := http.NewRequest(http.MethodGet, api, nil)
 		req.Header = headers
 		resp, err := client.Do(req)
