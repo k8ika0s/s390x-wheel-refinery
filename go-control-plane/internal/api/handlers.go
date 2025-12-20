@@ -1181,6 +1181,9 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	max := parseIntDefault(r.URL.Query().Get("max"), 5, 100)
+	if h.Store != nil && h.Config.BuildLeaseTimeout > 0 {
+		_, _ = h.Store.RequeueStaleLeases(r.Context(), h.Config.BuildLeaseTimeout)
+	}
 	builds, err := h.Store.LeaseBuilds(r.Context(), max)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

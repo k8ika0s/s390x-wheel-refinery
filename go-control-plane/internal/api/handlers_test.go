@@ -163,6 +163,9 @@ func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status,
 func (f *fakeStore) LeaseBuilds(ctx context.Context, max int) ([]store.BuildStatus, error) {
 	return nil, nil
 }
+func (f *fakeStore) RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int64, error) {
+	return 0, nil
+}
 func (f *fakeStore) DeleteBuilds(ctx context.Context, status string) (int64, error) {
 	return 0, nil
 }

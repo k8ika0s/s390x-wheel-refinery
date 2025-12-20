@@ -92,8 +92,13 @@ CREATE TABLE IF NOT EXISTS build_status (
     attempts      INT NOT NULL DEFAULT 0,
     backoff_until TIMESTAMPTZ,
     last_error    TEXT,
+    recipes       JSONB,
+    hint_ids      TEXT[],
     run_id        TEXT,
     plan_id       BIGINT,
+    leased_at     TIMESTAMPTZ,
+    started_at    TIMESTAMPTZ,
+    finished_at   TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

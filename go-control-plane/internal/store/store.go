@@ -168,6 +168,9 @@ type BuildStatus struct {
 	OldestAgeSec int64    `json:"oldest_age_seconds,omitempty"`
 	CreatedAt    int64    `json:"created_at"`
 	UpdatedAt    int64    `json:"updated_at"`
+	LeasedAt     int64    `json:"leased_at,omitempty"`
+	StartedAt    int64    `json:"started_at,omitempty"`
+	FinishedAt   int64    `json:"finished_at,omitempty"`
 	RunID        string   `json:"run_id,omitempty"`
 	PlanID       int64    `json:"plan_id,omitempty"`
 	BackoffUntil int64    `json:"backoff_until,omitempty"`
@@ -246,6 +249,7 @@ type Store interface {
 	ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error)
 	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
+	RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int64, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)
 
 	// Settings

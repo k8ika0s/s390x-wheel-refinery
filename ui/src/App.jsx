@@ -69,6 +69,23 @@ const formatDuration = (seconds) => {
   if (minutes > 0) return `${minutes}m ${secs}s`;
   return `${secs}s`;
 };
+const pickStatusSince = (build) => {
+  if (!build) return 0;
+  const status = (build.status || "").toLowerCase();
+  if (status === "pending" || status === "retry") {
+    return build.created_at || build.updated_at || 0;
+  }
+  if (status === "leased") {
+    return build.leased_at || build.updated_at || build.created_at || 0;
+  }
+  if (status === "building") {
+    return build.started_at || build.leased_at || build.updated_at || build.created_at || 0;
+  }
+  if (status === "built" || status === "failed") {
+    return build.finished_at || build.updated_at || build.created_at || 0;
+  }
+  return build.updated_at || build.created_at || 0;
+};
 const pickBuildStatus = (builds, version) => {
   const list = Array.isArray(builds) ? builds : [];
   if (!list.length) return null;
@@ -978,7 +995,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
     })
     .sort((a, b) => toTimestampMs(b.timestamp) - toTimestampMs(a.timestamp));
   const nowSec = Math.floor(Date.now() / 1000);
-  const statusSince = buildStatus?.updated_at || buildStatus?.created_at || 0;
+  const statusSince = pickStatusSince(buildStatus);
   const statusAgeSec = statusSince ? Math.max(0, nowSec - statusSince) : (buildStatus?.oldest_age_seconds || 0);
   const buildAgeLabel = statusAgeSec ? formatDuration(statusAgeSec) : "—";
   const buildCreatedLabel = formatEpoch(buildStatus?.created_at);
@@ -1406,6 +1423,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planGraphOpen, setPlanGraphOpen] = useState(false);
   const [planGraphLayout, setPlanGraphLayout] = useState("horizontal");
   const [planGraphFocus, setPlanGraphFocus] = useState(null);
+  const nowSec = Math.floor(Date.now() / 1000);
   const planGraphViewportRef = useRef(null);
   const [hintSearch, setHintSearch] = useState("");
   const [hintPage, setHintPage] = useState(1);
@@ -3457,6 +3475,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                     <th className="text-left px-2 py-2">Package</th>
                     <th className="text-left px-2 py-2">Version</th>
                     <th className="text-left px-2 py-2">Status</th>
+                    <th className="text-left px-2 py-2">Age</th>
                     <th className="text-left px-2 py-2">Attempts</th>
                     <th className="text-left px-2 py-2">Python</th>
                     <th className="text-left px-2 py-2">Platform</th>
@@ -3467,38 +3486,43 @@ const enqueuePlanForInput = async (pi, verb) => {
                 <tbody>
                   {buildsLoading && !builds.length && (
                     <tr>
-                      <td className="px-2 py-3 text-slate-400 text-center" colSpan="8">
+                      <td className="px-2 py-3 text-slate-400 text-center" colSpan="9">
                         Loading builds…
                       </td>
                     </tr>
                   )}
                   {builds.length
-                    ? builds.map((b, idx) => (
-                        <tr
-                          key={b.id ?? `${b.package}-${b.version}-${idx}`}
-                          className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
-                          onClick={() =>
-                            navigate(`/package/${encodeURIComponent(b.package)}`, {
-                              state: { from: `${location.pathname}${location.search}`, build: b },
-                            })
-                          }
-                          title="View package details"
-                        >
-                          <td className="px-2 py-2">{b.package}</td>
-                          <td className="px-2 py-2">{b.version}</td>
-                          <td className="px-2 py-2">
-                            <span className="chip">{b.status}</span>
-                          </td>
-                          <td className="px-2 py-2">{b.attempts ?? 0}</td>
-                          <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
-                          <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
-                          <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{(b.recipes || []).join(", ") || "-"}</td>
-                          <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{b.last_error || "-"}</td>
-                        </tr>
-                      ))
+                    ? builds.map((b, idx) => {
+                        const statusSince = pickStatusSince(b);
+                        const statusAge = statusSince ? formatDuration(Math.max(0, nowSec - statusSince)) : "—";
+                        return (
+                          <tr
+                            key={b.id ?? `${b.package}-${b.version}-${idx}`}
+                            className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
+                            onClick={() =>
+                              navigate(`/package/${encodeURIComponent(b.package)}`, {
+                                state: { from: `${location.pathname}${location.search}`, build: b },
+                              })
+                            }
+                            title="View package details"
+                          >
+                            <td className="px-2 py-2">{b.package}</td>
+                            <td className="px-2 py-2">{b.version}</td>
+                            <td className="px-2 py-2">
+                              <span className="chip">{b.status}</span>
+                            </td>
+                            <td className="px-2 py-2 text-slate-400">{statusAge}</td>
+                            <td className="px-2 py-2">{b.attempts ?? 0}</td>
+                            <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
+                            <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
+                            <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{(b.recipes || []).join(", ") || "-"}</td>
+                            <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{b.last_error || "-"}</td>
+                          </tr>
+                        );
+                      })
                     : !buildsLoading && (
                         <tr>
-                          <td className="px-2 py-3 text-slate-400 text-center" colSpan="8">
+                          <td className="px-2 py-3 text-slate-400 text-center" colSpan="9">
                             No builds found
                           </td>
                         </tr>
