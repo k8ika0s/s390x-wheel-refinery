@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_name ON events(name);
 CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_name_timestamp ON events(name, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_events_status_timestamp ON events(status, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_events_name_version_timestamp ON events(name, version, timestamp DESC);
 
 CREATE TABLE IF NOT EXISTS hints (
     id       TEXT PRIMARY KEY,
