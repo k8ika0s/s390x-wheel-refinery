@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1365,7 +1366,15 @@ func (h *Handler) topFailures(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	type topFailure struct {
+		Name     string `json:"name"`
+		Failures int64  `json:"failures"`
+	}
+	out := make([]topFailure, 0, len(res))
+	for _, st := range res {
+		out = append(out, topFailure{Name: st.Name, Failures: int64(st.Value)})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) topSlowest(w http.ResponseWriter, r *http.Request) {
@@ -1379,7 +1388,15 @@ func (h *Handler) topSlowest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	type topSlow struct {
+		Name        string  `json:"name"`
+		AvgDuration float64 `json:"avg_duration"`
+	}
+	out := make([]topSlow, 0, len(res))
+	for _, st := range res {
+		out = append(out, topSlow{Name: st.Name, AvgDuration: st.Value})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
@@ -2070,6 +2087,10 @@ func (h *Handler) logsByNameVersion(w http.ResponseWriter, r *http.Request) {
 	name, version := parts[2], parts[3]
 	logEntry, err := h.Store.GetLog(r.Context(), name, version)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "log not found"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

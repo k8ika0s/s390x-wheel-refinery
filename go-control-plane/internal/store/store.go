@@ -14,17 +14,17 @@ var ErrNotFound = errors.New("not found")
 
 // Event represents a build event history row.
 type Event struct {
-	RunID          string
-	Name           string
-	Version        string
-	PythonTag      string
-	PlatformTag    string
-	Status         string
-	Detail         string
-	Metadata       map[string]any
-	Timestamp      int64
-	MatchedHintIDs []string
-	DurationMS     int64
+	RunID          string         `json:"run_id,omitempty"`
+	Name           string         `json:"name"`
+	Version        string         `json:"version"`
+	PythonTag      string         `json:"python_tag,omitempty"`
+	PlatformTag    string         `json:"platform_tag,omitempty"`
+	Status         string         `json:"status"`
+	Detail         string         `json:"detail,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	Timestamp      int64          `json:"timestamp"`
+	MatchedHintIDs []string       `json:"matched_hint_ids,omitempty"`
+	DurationMS     int64          `json:"duration_ms,omitempty"`
 }
 
 // Hint represents a hint catalog entry.
@@ -43,10 +43,10 @@ type Hint struct {
 
 // LogEntry represents stored log metadata/content.
 type LogEntry struct {
-	Name      string
-	Version   string
-	Content   string
-	Timestamp int64
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	Content   string `json:"content,omitempty"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 // PendingInput represents an uploaded requirements file awaiting planning.
@@ -89,10 +89,10 @@ type ManifestEntry struct {
 
 // Artifact represents a downloadable/browsable build artifact.
 type Artifact struct {
-	Name    string
-	Version string
-	Path    string
-	URL     string
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Path    string `json:"path"`
+	URL     string `json:"url"`
 }
 
 // PlanHint captures a matched hint attached to a plan node.
@@ -165,21 +165,21 @@ type BuildStatus struct {
 
 // PackageSummary aggregates status for a package.
 type PackageSummary struct {
-	Name         string
-	StatusCounts map[string]int
-	Latest       *Event
+	Name         string         `json:"name"`
+	StatusCounts map[string]int `json:"status_counts"`
+	Latest       *Event         `json:"latest,omitempty"`
 }
 
 // Summary aggregates recent status counts and failures.
 type Summary struct {
-	StatusCounts map[string]int
-	Failures     []Event
+	StatusCounts map[string]int `json:"status_counts"`
+	Failures     []Event        `json:"failures"`
 }
 
 // Stat is a simple key/value for leaderboard style metrics.
 type Stat struct {
-	Name  string
-	Value float64
+	Name  string  `json:"name"`
+	Value float64 `json:"value"`
 }
 
 // Store abstracts history, hints, logs, manifests.

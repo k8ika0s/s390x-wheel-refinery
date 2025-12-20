@@ -100,6 +100,20 @@ const formatTimestamp = (value) => {
   if (!ms) return "";
   return new Date(ms).toLocaleString();
 };
+const normalizeEvent = (event) => {
+  if (!event || typeof event !== "object") return event;
+  return {
+    ...event,
+    name: event.name ?? event.Name,
+    version: event.version ?? event.Version,
+    status: event.status ?? event.Status,
+    python_tag: event.python_tag ?? event.PythonTag,
+    platform_tag: event.platform_tag ?? event.PlatformTag,
+    detail: event.detail ?? event.Detail,
+    metadata: event.metadata ?? event.Metadata,
+    timestamp: event.timestamp ?? event.Timestamp,
+  };
+};
 
 const formatAutomationSummary = (meta) => {
   const auto = meta?.automation;
@@ -565,7 +579,8 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
   const [sortKey, setSortKey] = useState("timestamp");
   const [sortDir, setSortDir] = useState("desc");
 
-  const sorted = (events || []).slice().sort((a, b) => {
+  const normalized = (events || []).map(normalizeEvent);
+  const sorted = normalized.slice().sort((a, b) => {
     const dir = sortDir === "asc" ? 1 : -1;
     if (sortKey === "status") {
       return dir * (a.status || "").localeCompare(b.status || "");
@@ -707,13 +722,25 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const loadLog = useCallback(async (ev, opts = {}) => {
     const silent = Boolean(opts.silent);
     const preserveContent = Boolean(opts.preserveContent);
-    setSelectedEvent(ev);
+    const normalized = normalizeEvent(ev) || {};
+    const eventName = normalized.name;
+    const eventVersion = normalized.version;
+    if (!eventName || !eventVersion) {
+      setMessage("Log not available: missing package name or version.");
+      return;
+    }
+    setSelectedEvent({
+      ...normalized,
+      name: eventName,
+      version: eventVersion,
+      timestamp: normalized.timestamp ?? Date.now(),
+    });
     if (!preserveContent) {
       setLogContent("");
     }
     setMessage("");
     try {
-      const resp = await fetchLog(ev.name, ev.version, token);
+      const resp = await fetchLog(eventName, eventVersion, token);
       const content = typeof resp === "string" ? resp : resp?.content;
       if (content) {
         setLogContent(content);
@@ -835,9 +862,9 @@ function PackageDetail({ token, pushToast, apiBase }) {
   if (!data) return null;
 
   const { summary, variants, failures, events, hints = [] } = data;
-  const variantsArr = toArray(variants);
-  const failuresArr = toArray(failures);
-  const eventsArr = toArray(events);
+  const variantsArr = toArray(variants).map(normalizeEvent);
+  const failuresArr = toArray(failures).map(normalizeEvent);
+  const eventsArr = toArray(events).map(normalizeEvent);
   const hintsArr = toArray(hints);
   const logDownloadHref = selectedEvent ? `${apiBase || ""}/api/logs/${selectedEvent.name}/${selectedEvent.version}` : null;
 

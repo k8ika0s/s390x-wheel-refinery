@@ -400,15 +400,15 @@ func (w *Worker) Drain(ctx context.Context) error {
 				}
 			}
 			_ = w.Reporter.PostEvent(map[string]any{
-				"name":           res.job.Name,
-				"version":        res.job.Version,
-				"python_tag":     res.job.PythonTag,
-				"platform_tag":   res.job.PlatformTag,
-				"status":         status,
-				"detail":         detail,
-				"timestamp":      time.Now().Unix(),
-				"metadata":       meta,
-				"MatchedHintIDs": autoFix.HintIDs,
+				"name":             res.job.Name,
+				"version":          res.job.Version,
+				"python_tag":       res.job.PythonTag,
+				"platform_tag":     res.job.PlatformTag,
+				"status":           status,
+				"detail":           detail,
+				"timestamp":        time.Now().Unix(),
+				"metadata":         meta,
+				"matched_hint_ids": autoFix.HintIDs,
 			})
 		}
 
