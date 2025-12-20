@@ -183,7 +183,7 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 
 	buildStats := buildMetrics{}
 	if h.Store != nil {
-		list, err := h.Store.ListBuilds(ctx, "", 500, 0)
+		list, err := h.Store.ListBuilds(ctx, "", 500, 0, "", "")
 		if err == nil {
 			var oldest int64
 			for _, b := range list {
@@ -1057,6 +1057,8 @@ func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		status := r.URL.Query().Get("status")
+		pkg := r.URL.Query().Get("package")
+		version := r.URL.Query().Get("version")
 		limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 1000)
 		var planID int64
 		if planStr := r.URL.Query().Get("plan_id"); planStr != "" {
@@ -1067,7 +1069,7 @@ func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
 			}
 			planID = id
 		}
-		list, err := h.Store.ListBuilds(r.Context(), status, limit, planID)
+		list, err := h.Store.ListBuilds(r.Context(), status, limit, planID, pkg, version)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -1120,6 +1122,44 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.Attempts, body.BackoffUntil, body.Recipes, body.HintIDs); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if body.Status == "building" || body.Status == "pending" || body.Status == "retry" {
+		detail := "build status updated"
+		switch body.Status {
+		case "building":
+			detail = "build started"
+		case "pending":
+			detail = "build queued"
+		case "retry":
+			detail = "build retry scheduled"
+		}
+		meta := map[string]any{}
+		if body.Attempts > 0 {
+			meta["attempt"] = body.Attempts
+		}
+		if len(body.Recipes) > 0 {
+			meta["recipes"] = body.Recipes
+		}
+		if len(body.HintIDs) > 0 {
+			meta["hint_ids"] = body.HintIDs
+		}
+		_ = h.Store.RecordEvent(r.Context(), store.Event{
+			Name:           body.Package,
+			Version:        body.Version,
+			Status:         body.Status,
+			Detail:         detail,
+			Metadata:       meta,
+			Timestamp:      time.Now().Unix(),
+			MatchedHintIDs: body.HintIDs,
+		})
+		if body.Status == "building" {
+			_ = h.Store.PutLog(r.Context(), store.LogEntry{
+				Name:      body.Package,
+				Version:   body.Version,
+				Content:   fmt.Sprintf("build started at %s\nstatus=building", time.Now().Format(time.RFC3339)),
+				Timestamp: time.Now().Unix(),
+			})
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "build status updated"})
 }

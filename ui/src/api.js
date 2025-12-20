@@ -262,13 +262,15 @@ export async function bulkUploadHints(file, token) {
   return resp.json();
 }
 
-export function fetchPackageDetail(name, token, limit = 50) {
+export function fetchPackageDetail(name, token, limit = 50, opts = {}) {
+  const version = opts.version || "";
   return Promise.all([
     request(`/api/package/${encodeURIComponent(name)}`, {}, token),
     request(`/api/variants/${encodeURIComponent(name)}?limit=50`, {}, token),
     request(`/api/failures?name=${encodeURIComponent(name)}&limit=${limit}`, {}, token),
     request(`/api/recent?package=${encodeURIComponent(name)}&limit=${limit}`, {}, token),
-  ]).then(([summary, variants, failures, events]) => ({ summary, variants, failures, events }));
+    fetchBuilds({ package: name, version, limit: 50 }, token).catch(() => []),
+  ]).then(([summary, variants, failures, events, builds]) => ({ summary, variants, failures, events, builds }));
 }
 
 export function fetchLog(name, version, token) {
@@ -283,10 +285,12 @@ export function fetchRecent({ limit = 25, packageFilter, status }, token) {
   return request(`/api/recent?${params.toString()}`, {}, token);
 }
 
-export function fetchBuilds({ status, limit = 200, planId } = {}, token) {
+export function fetchBuilds({ status, limit = 200, planId, package: pkg, version } = {}, token) {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
   if (planId) params.set("plan_id", planId);
+  if (pkg) params.set("package", pkg);
+  if (version) params.set("version", version);
   params.set("limit", limit);
   return request(`/api/builds?${params.toString()}`, {}, token);
 }

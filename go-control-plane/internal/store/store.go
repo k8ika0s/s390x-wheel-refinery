@@ -229,7 +229,7 @@ type Store interface {
 	UpdatePendingInputsForPlan(ctx context.Context, planID int64, status string) (int64, error)
 
 	// Build status/queue visibility
-	ListBuilds(ctx context.Context, status string, limit int, planID int64) ([]BuildStatus, error)
+	ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error)
 	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)

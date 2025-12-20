@@ -51,6 +51,13 @@ body {
 .theme-light .status.reused {
   color: #16a34a;
 }
+.theme-light .status.building,
+.theme-light .status.pending {
+  color: #0284c7;
+}
+.theme-light .status.retry {
+  color: #d97706;
+}
 .theme-light .status.failed,
 .theme-light .status.system_recipe_failed {
   color: #dc2626;
@@ -327,6 +334,13 @@ input:focus-visible {
 .status.cached,
 .status.reused {
   @apply text-green-400;
+}
+.status.building,
+.status.pending {
+  @apply text-sky-300;
+}
+.status.retry {
+  @apply text-amber-300;
 }
 .status.failed,
 .status.system_recipe_failed {

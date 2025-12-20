@@ -28,7 +28,7 @@ type fakeStore struct {
 		errMsg string
 	}
 	restoredPendingID int64
-	queuedBuilds []store.PlanNode
+	queuedBuilds      []store.PlanNode
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -148,7 +148,7 @@ func (f *fakeStore) LinkPlanToPendingInput(ctx context.Context, pendingID, planI
 func (f *fakeStore) UpdatePendingInputsForPlan(ctx context.Context, planID int64, status string) (int64, error) {
 	return 0, nil
 }
-func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int, planID int64) ([]store.BuildStatus, error) {
+func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]store.BuildStatus, error) {
 	return nil, nil
 }
 func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error {

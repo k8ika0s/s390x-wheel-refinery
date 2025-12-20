@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Routes, Route, Link, Navigate, useParams, useLocation, useNavigate } from "react-router-dom";
 import {
   getApiBase,
@@ -54,6 +54,31 @@ const formatBytes = (value) => {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
+const formatDuration = (seconds) => {
+  const total = Math.floor(Number(seconds));
+  if (!Number.isFinite(total) || total <= 0) return "—";
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+};
+const pickBuildStatus = (builds, version) => {
+  const list = Array.isArray(builds) ? builds : [];
+  if (!list.length) return null;
+  if (version) {
+    return list.find((b) => b.version === version) || list[0];
+  }
+  return list.reduce((latest, next) => {
+    if (!latest) return next;
+    const latestStamp = latest.updated_at || latest.created_at || 0;
+    const nextStamp = next.updated_at || next.created_at || 0;
+    return nextStamp > latestStamp ? next : latest;
+  }, list[0]);
 };
 
 const toTimestampMs = (value) => {
@@ -643,40 +668,49 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const [autoScroll, setAutoScroll] = useState(true);
   const logRef = useRef(null);
   const [tab, setTab] = useState("overview");
+  const buildFromState = location.state?.build || null;
+  const [buildStatus, setBuildStatus] = useState(buildFromState);
+  const buildStatusRef = useRef(buildFromState);
+  const [watchBuildLog, setWatchBuildLog] = useState(false);
   const [variantPage, setVariantPage] = useState(1);
   const [failurePage, setFailurePage] = useState(1);
   const [hintsPage, setHintsPage] = useState(1);
   const pageSize = 10;
   const backTarget = location.state?.from || "/builds";
+  const buildVersion = buildFromState?.version || "";
+  const isBuildActive = buildStatus && ["pending", "building", "retry"].includes(buildStatus.status);
 
-  const load = async () => {
-    setLoading(true);
+  const load = useCallback(async (opts = {}) => {
+    const soft = Boolean(opts.soft);
+    if (!soft) {
+      setLoading(true);
+    }
     setError("");
     try {
-      const detail = await fetchPackageDetail(name, token, 100);
+      const detail = await fetchPackageDetail(name, token, 100, { version: buildVersion });
       setData(detail);
+      const builds = Array.isArray(detail?.builds) ? detail.builds : [];
+      const nextBuild = pickBuildStatus(builds, buildVersion) || buildFromState || null;
+      buildStatusRef.current = nextBuild;
+      setBuildStatus(nextBuild);
     } catch (e) {
       const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
       setError(msg);
       pushToast?.({ type: "error", title: "Load failed", message: msg || "Unknown error" });
     } finally {
-      setLoading(false);
+      if (!soft) {
+        setLoading(false);
+      }
     }
-  };
+  }, [name, token, buildVersion, buildFromState, pushToast]);
 
-  useEffect(() => {
-    if (autoScroll && logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [logContent, autoScroll]);
-
-  useEffect(() => {
-    load();
-  }, [name, token]);
-
-  const loadLog = async (ev) => {
+  const loadLog = useCallback(async (ev, opts = {}) => {
+    const silent = Boolean(opts.silent);
+    const preserveContent = Boolean(opts.preserveContent);
     setSelectedEvent(ev);
-    setLogContent("");
+    if (!preserveContent) {
+      setLogContent("");
+    }
     setMessage("");
     try {
       const resp = await fetchLog(ev.name, ev.version, token);
@@ -686,12 +720,85 @@ function PackageDetail({ token, pushToast, apiBase }) {
       } else {
         setMessage("No log content available");
       }
-      pushToast?.({ type: "success", title: "Log loaded", message: `${ev.name} ${ev.version}` });
+      if (!silent) {
+        pushToast?.({ type: "success", title: "Log loaded", message: `${ev.name} ${ev.version}` });
+      }
     } catch (e) {
+      if (e.status === 404) {
+        setMessage("Log not available yet. It will appear once the build finishes.");
+        return;
+      }
       setError(e.message);
-      pushToast?.({ type: "error", title: "Log load failed", message: e.message });
+      if (!silent) {
+        pushToast?.({ type: "error", title: "Log load failed", message: e.message });
+      }
     }
-  };
+  }, [token, pushToast]);
+
+  const refreshBuildStatus = useCallback(async (opts = {}) => {
+    try {
+      const list = await fetchBuilds({ package: name, version: buildVersion, limit: 50 }, token);
+      if (!Array.isArray(list) || list.length === 0) {
+        if (!opts.keepExisting) {
+          buildStatusRef.current = buildFromState || null;
+          setBuildStatus(buildFromState || null);
+        }
+        return;
+      }
+      const next = pickBuildStatus(list, buildVersion);
+      if (!next) {
+        return;
+      }
+      const prevStatus = buildStatusRef.current?.status;
+      buildStatusRef.current = next;
+      setBuildStatus(next);
+      if (prevStatus && prevStatus !== next.status) {
+        load({ soft: true });
+      }
+    } catch (e) {
+      if (!opts.silent) {
+        setError(e.message);
+      }
+    }
+  }, [name, token, buildVersion, buildFromState, load]);
+
+  useEffect(() => {
+    if (autoScroll && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [logContent, autoScroll]);
+
+  useEffect(() => {
+    load();
+  }, [name, token, buildVersion, load]);
+
+  useEffect(() => {
+    buildStatusRef.current = buildFromState || null;
+    setBuildStatus(buildFromState || null);
+    setWatchBuildLog(false);
+  }, [buildFromState, name]);
+
+  useEffect(() => {
+    if (!isBuildActive) return;
+    const id = setInterval(() => {
+      refreshBuildStatus({ silent: true, keepExisting: true });
+    }, 5000);
+    return () => clearInterval(id);
+  }, [isBuildActive, refreshBuildStatus]);
+
+  useEffect(() => {
+    if (!watchBuildLog || !buildStatus?.version) return;
+    const ev = {
+      name: buildStatus.package || name,
+      version: buildStatus.version,
+      timestamp: buildStatus.updated_at || buildStatus.created_at || Date.now(),
+    };
+    loadLog(ev, { silent: true, preserveContent: true });
+    const id = setInterval(() => {
+      loadLog(ev, { silent: true, preserveContent: true });
+    }, 5000);
+    return () => clearInterval(id);
+  }, [watchBuildLog, buildStatus?.package, buildStatus?.version, buildStatus?.updated_at, buildStatus?.created_at, name, loadLog]);
 
   const paged = (items, page) => {
     const arr = Array.isArray(items) ? items : [];
@@ -764,12 +871,22 @@ function PackageDetail({ token, pushToast, apiBase }) {
       return hasAttempt || entry.summary || entry.automation || entry.recipes.length || entry.hints.length || entry.savedHints.length || entry.blockedHints.length;
     })
     .sort((a, b) => toTimestampMs(b.timestamp) - toTimestampMs(a.timestamp));
+  const nowSec = Math.floor(Date.now() / 1000);
+  const statusSince = buildStatus?.updated_at || buildStatus?.created_at || 0;
+  const statusAgeSec = statusSince ? Math.max(0, nowSec - statusSince) : (buildStatus?.oldest_age_seconds || 0);
+  const buildAgeLabel = statusAgeSec ? formatDuration(statusAgeSec) : "—";
+  const buildCreatedLabel = formatEpoch(buildStatus?.created_at);
+  const buildUpdatedLabel = formatEpoch(buildStatus?.updated_at);
+  const buildBackoffLabel = formatEpoch(buildStatus?.backoff_until);
+  const buildPackageName = buildStatus?.package || summary?.name || name;
+  const buildVersionLabel = buildStatus?.version || summary?.latest?.version || "";
+  const overviewGridClass = buildStatus ? "grid grid-cols-1 md:grid-cols-3 gap-4" : "grid grid-cols-1 md:grid-cols-2 gap-4";
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div className="space-y-1">
-          <h2 className="text-2xl font-semibold text-slate-50">{summary.name}</h2>
+          <h2 className="text-2xl font-semibold text-slate-50">{buildPackageName}</h2>
           <div className="text-slate-400 text-sm">Status counts: {Object.entries(summary.status_counts || {}).map(([k, v]) => `${k}:${v}`).join("  ")}</div>
           {summary.latest && <div className="text-slate-400 text-sm">Latest: {summary.latest.status} {summary.latest.version} at {summary.latest.timestamp}</div>}
         </div>
@@ -788,7 +905,83 @@ function PackageDetail({ token, pushToast, apiBase }) {
       </div>
 
       {tab === "overview" && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className={overviewGridClass}>
+          {buildStatus && (
+            <StatCard title="Current build">
+              <div className="space-y-2 text-sm text-slate-200">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Package</span>
+                  <span>{buildPackageName}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Version</span>
+                  <span>{buildVersionLabel || "-"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Status</span>
+                  <span className={`status ${buildStatus.status}`}>{buildStatus.status}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Attempts</span>
+                  <span>{buildStatus.attempts ?? 0}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Time in state</span>
+                  <span>{buildAgeLabel}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Last update</span>
+                  <span>{buildUpdatedLabel || buildCreatedLabel || "—"}</span>
+                </div>
+                {buildBackoffLabel && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Backoff until</span>
+                    <span>{buildBackoffLabel}</span>
+                  </div>
+                )}
+                {buildStatus.recipes?.length > 0 && (
+                  <div className="text-slate-400 text-xs">
+                    Recipes: {buildStatus.recipes.join(", ")}
+                  </div>
+                )}
+                {buildStatus.last_error && (
+                  <div className="text-amber-200 text-xs">
+                    Error: {buildStatus.last_error}
+                  </div>
+                )}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    className="btn btn-secondary px-2 py-1 text-xs"
+                    onClick={() => {
+                      if (!buildStatus) return;
+                      const next = !watchBuildLog;
+                      setWatchBuildLog(next);
+                      if (next) {
+                        setTab("events");
+                        loadLog(
+                          {
+                            name: buildStatus.package || name,
+                            version: buildStatus.version,
+                            timestamp: buildStatus.updated_at || buildStatus.created_at || Date.now(),
+                          },
+                          { silent: true },
+                        );
+                      }
+                    }}
+                    disabled={!buildStatus?.version}
+                  >
+                    {watchBuildLog ? "Stop log watch" : "Watch logs"}
+                  </button>
+                  <button
+                    className="btn btn-secondary px-2 py-1 text-xs"
+                    onClick={() => refreshBuildStatus({ silent: true })}
+                  >
+                    Refresh status
+                  </button>
+                </div>
+              </div>
+            </StatCard>
+          )}
           <StatCard title="Recent failures">
             <div className="space-y-2">
               {failuresPaged.slice.length ? failuresPaged.slice.map((f) => (
@@ -828,6 +1021,36 @@ function PackageDetail({ token, pushToast, apiBase }) {
 
       {tab === "events" && (
         <div className="space-y-3">
+          {buildStatus && (
+            <div className="glass subtle px-4 py-3 rounded-lg border border-border flex flex-col gap-2 md:flex-row md:items-center md:justify-between text-sm text-slate-200">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`status ${buildStatus.status}`}>{buildStatus.status}</span>
+                <span className="font-semibold">{buildPackageName}</span>
+                {buildVersionLabel && <span className="text-slate-400">{buildVersionLabel}</span>}
+                <span className="text-slate-500">in state {buildAgeLabel}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="btn btn-secondary px-2 py-1 text-xs"
+                  onClick={() => setWatchBuildLog((v) => !v)}
+                  disabled={!buildStatus?.version}
+                >
+                  {watchBuildLog ? "Stop log watch" : "Watch logs"}
+                </button>
+                <button
+                  className="btn btn-secondary px-2 py-1 text-xs"
+                  onClick={() => refreshBuildStatus({ silent: true })}
+                >
+                  Refresh status
+                </button>
+              </div>
+            </div>
+          )}
+          {watchBuildLog && isBuildActive && (
+            <div className="text-xs text-slate-400">
+              Watching logs (polling every 5s). Log output appears once the runner posts it.
+            </div>
+          )}
           <StatCard title="Automation timeline">
             {automationTimeline.length ? (
               <div className="space-y-2">
@@ -889,6 +1112,13 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   </tr>
                 </thead>
                 <tbody>
+                  {eventsArr.length === 0 && (
+                    <tr>
+                      <td className="py-4 text-slate-400 text-center" colSpan="5">
+                        No events yet for this package.
+                      </td>
+                    </tr>
+                  )}
                   {eventsArr.map((e) => (
                     <tr key={`${e.name}-${e.version}-${e.timestamp}`} className="border-b border-slate-800">
                       <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
@@ -3133,7 +3363,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                           className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
                           onClick={() =>
                             navigate(`/package/${encodeURIComponent(b.package)}`, {
-                              state: { from: `${location.pathname}${location.search}` },
+                              state: { from: `${location.pathname}${location.search}`, build: b },
                             })
                           }
                           title="View package details"

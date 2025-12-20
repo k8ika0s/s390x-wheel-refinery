@@ -521,8 +521,8 @@ func (p *PostgresStore) UpdatePendingInputsForPlan(ctx context.Context, planID i
 	return count, nil
 }
 
-// ListBuilds returns build status rows filtered by status/plan if provided.
-func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int, planID int64) ([]BuildStatus, error) {
+// ListBuilds returns build status rows filtered by status/plan/package if provided.
+func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
@@ -536,6 +536,14 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 	if planID > 0 {
 		clauses = append(clauses, fmt.Sprintf("plan_id = $%d", len(args)+1))
 		args = append(args, planID)
+	}
+	if pkg != "" {
+		clauses = append(clauses, fmt.Sprintf("package = $%d", len(args)+1))
+		args = append(args, pkg)
+	}
+	if version != "" {
+		clauses = append(clauses, fmt.Sprintf("version = $%d", len(args)+1))
+		args = append(args, version)
 	}
 	if len(clauses) > 0 {
 		q += " WHERE " + strings.Join(clauses, " AND ")
