@@ -209,6 +209,11 @@ export function enqueueBuildsFromPlan(planId, token) {
   return request(`/api/plan/${planId}/enqueue-builds`, { method: "POST" }, token);
 }
 
+export function enqueueBuildFromPlan(planId, pkg, version, token) {
+  const body = JSON.stringify({ package: pkg, version });
+  return request(`/api/plan/${planId}/enqueue-build`, { method: "POST", body }, token);
+}
+
 export function clearPlanQueue(token) {
   return request("/api/plan-queue/clear", { method: "POST" }, token);
 }
@@ -278,9 +283,10 @@ export function fetchRecent({ limit = 25, packageFilter, status }, token) {
   return request(`/api/recent?${params.toString()}`, {}, token);
 }
 
-export function fetchBuilds({ status, limit = 200 } = {}, token) {
+export function fetchBuilds({ status, limit = 200, planId } = {}, token) {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
+  if (planId) params.set("plan_id", planId);
   params.set("limit", limit);
   return request(`/api/builds?${params.toString()}`, {}, token);
 }

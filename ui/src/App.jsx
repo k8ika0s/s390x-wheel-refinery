@@ -32,6 +32,7 @@ import {
   restorePendingInput,
   enqueuePlan,
   enqueueBuildsFromPlan,
+  enqueueBuildFromPlan,
   fetchPlans,
   deletePlans,
   fetchPlan,
@@ -90,6 +91,8 @@ const formatAutomationSummary = (meta) => {
   if (!parts.length) return "auto-fix attempted";
   return `auto-fix: ${parts.join(", ")}`;
 };
+
+const buildKey = (name, version) => `${(name || "").toLowerCase()}::${(version || "").toLowerCase()}`;
 
 const DAG_LAYOUT = {
   nodeWidth: 210,
@@ -1051,6 +1054,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planDetailsLoading, setPlanDetailsLoading] = useState(false);
   const [planDetailsError, setPlanDetailsError] = useState("");
   const [enqueueingBuilds, setEnqueueingBuilds] = useState(false);
+  const [planBuilds, setPlanBuilds] = useState([]);
+  const [planBuildActions, setPlanBuildActions] = useState({});
   const [planTab, setPlanTab] = useState("builds");
   const [planGraphOpen, setPlanGraphOpen] = useState(false);
   const [planGraphLayout, setPlanGraphLayout] = useState("horizontal");
@@ -1099,6 +1104,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     const wantsOverview = activeView === "overview";
     const wantsQueues = activeView === "queues" || activeView === "builds";
     const wantsInputs = activeView === "inputs";
+    const wantsPlans = activeView === "plans";
     const wantsBuilds = activeView === "builds";
     const wantsRecent = wantsOverview || wantsBuilds;
     if (wantsBuilds) {
@@ -1120,14 +1126,16 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       const slowestPromise = wantsOverview ? fetchTopSlowest(10, authToken) : Promise.resolve(null);
       const queuePromise = wantsOverview || wantsQueues ? fetchQueue(authToken) : Promise.resolve(null);
       const metricsPromise = fetchMetrics(authToken).catch(() => null);
+      const planBuildsPromise = wantsPlans && selectedPlanId ? fetchBuilds({ planId: selectedPlanId, limit: 500 }, authToken).catch(() => null) : Promise.resolve(null);
 
-      const [recent, summary, failures, slowest, queue, metrics] = await Promise.all([
+      const [recent, summary, failures, slowest, queue, metrics, planBuildList] = await Promise.all([
         recentPromise,
         summaryPromise,
         failuresPromise,
         slowestPromise,
         queuePromise,
         metricsPromise,
+        planBuildsPromise,
       ]);
 
       const data = {
@@ -1191,6 +1199,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         if (Array.isArray(buildsList)) {
           setBuilds(buildsList);
         }
+      }
+      if (wantsPlans && Array.isArray(planBuildList)) {
+        setPlanBuilds(planBuildList);
       }
       setDashboard((prev) => ({
         summary: data.summary ?? prev?.summary ?? null,
@@ -1348,11 +1359,24 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     try {
       const plan = await fetchPlan(planId, authToken);
       setSelectedPlan(plan);
+      await loadPlanBuilds(planId);
     } catch (e) {
       setPlanDetailsError(e.message || "Failed to load plan details.");
       setSelectedPlan(null);
     } finally {
       setPlanDetailsLoading(false);
+    }
+  };
+
+  const loadPlanBuilds = async (planId) => {
+    if (!planId) return;
+    try {
+      const list = await fetchBuilds({ planId, limit: 500 }, authToken);
+      if (Array.isArray(list)) {
+        setPlanBuilds(list);
+      }
+    } catch (e) {
+      // keep previous plan builds on error
     }
   };
 
@@ -1420,6 +1444,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   useEffect(() => {
     if (view === "plans" && selectedPlanId) {
       loadPlanDetails(selectedPlanId);
+      loadPlanBuilds(selectedPlanId);
     }
   }, [view, selectedPlanId, authToken]);
 
@@ -1835,6 +1860,7 @@ const enqueuePlanForInput = async (pi, verb) => {
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
+  const planBuildStatusByKey = new Map(planBuilds.map((b) => [buildKey(b.package, b.version), b]));
   const planDagRaw = normalizeDag(selectedPlan?.dag);
   const planGraphFocusSet = collectDagFocusSet(planDagRaw, planGraphFocus);
   const planDagNodes = planGraphFocusSet
@@ -2235,6 +2261,31 @@ const enqueuePlanForInput = async (pi, verb) => {
       pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
     } finally {
       setEnqueueingBuilds(false);
+    }
+  };
+
+  const handleEnqueuePlanBuild = async (node) => {
+    if (!selectedPlanId || !node?.name || !node?.version) {
+      pushToast?.({ type: "error", title: "Enqueue failed", message: "Missing build node details." });
+      return;
+    }
+    const key = buildKey(node.name, node.version);
+    if (planBuildActions[key]) return;
+    setPlanBuildActions((prev) => ({ ...prev, [key]: "enqueue" }));
+    try {
+      await enqueueBuildFromPlan(selectedPlanId, node.name, node.version, authToken);
+      pushToast?.({ type: "success", title: "Build enqueued", message: `${node.name} ${node.version}` });
+      setSelectedPlan((prev) => (prev ? { ...prev, queued: true } : prev));
+      setPlanList((prev) => prev.map((p) => (p.id === selectedPlanId ? { ...p, queued: true } : p)));
+      await loadPlanBuilds(selectedPlanId);
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Enqueue failed", message: e.message });
+    } finally {
+      setPlanBuildActions((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     }
   };
 
@@ -2834,22 +2885,45 @@ const enqueuePlanForInput = async (pi, verb) => {
                     ))}
                   </div>
                   <div className={`scroll-panel ${planPanelHeightClass} overflow-auto rounded-lg border border-slate-800/60 p-2 space-y-2`}>
-                    {planTab === "builds" &&
-                      selectedPlanNodes.map((node, idx) => (
-                        <div
-                          key={`${node.name}-${node.version}-${idx}`}
-                          className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between"
-                        >
-                          <div className="flex flex-col min-w-0">
-                            <span className="font-semibold text-slate-100 truncate" title={node.name}>{node.name}</span>
-                            <span className="text-slate-400 truncate">{node.version || "version?"}</span>
+                    {planTab === "builds" && (
+                      selectedPlanBuilds.length ? selectedPlanBuilds.map((node, idx) => {
+                        const key = buildKey(node.name, node.version);
+                        const buildStatus = planBuildStatusByKey.get(key);
+                        const isEnqueueing = Boolean(planBuildActions[key]);
+                        return (
+                          <div
+                            key={`${node.name}-${node.version}-${idx}`}
+                            className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between"
+                          >
+                            <div className="flex flex-col min-w-0">
+                              <span className="font-semibold text-slate-100 truncate" title={node.name}>{node.name}</span>
+                              <span className="text-slate-400 truncate">{node.version || "version?"}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {buildStatus ? (
+                                <span className={`chip status ${buildStatus.status}`}>{buildStatus.status}</span>
+                              ) : (
+                                <span className="chip text-slate-400 border-slate-700/60">not queued</span>
+                              )}
+                              {node.python_version && <span className="chip chip-muted">{node.python_version}</span>}
+                              {!buildStatus && (
+                                <button
+                                  className="btn-icon"
+                                  onClick={() => handleEnqueuePlanBuild(node)}
+                                  disabled={isEnqueueing}
+                                  title="Enqueue build"
+                                  aria-label="Enqueue build"
+                                >
+                                  {isEnqueueing ? "…" : "▶"}
+                                </button>
+                              )}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="chip">{node.action}</span>
-                            {node.python_version && <span className="chip chip-muted">{node.python_version}</span>}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      }) : (
+                        <EmptyState title="No build nodes" detail="This plan does not include build steps." icon="✅" />
+                      )
+                    )}
                     {planTab === "hints" && (
                       <div className="space-y-2 text-xs text-slate-200">
                         {selectedPlanNodes.flatMap((n) => toArray(n.hints)).length === 0 ? (
