@@ -164,6 +164,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 				}
 			}
 			dur, logContent, err := w.Runner.Run(ctx, job)
+			if err != nil && strings.TrimSpace(logContent) == "" {
+				logContent = fmt.Sprintf("error: %s", err.Error())
+			}
 			repID := artifact.ID{}
 			results[i] = result{
 				job:      job,
@@ -387,8 +390,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 			}
 		}
 		if w.Reporter != nil {
-			_ = w.Reporter.PostLog(logPayload)
-			_ = w.Reporter.PostManifest([]map[string]any{entry})
+			if err := w.Reporter.PostLog(logPayload); err != nil {
+				log.Printf("post log failed: %v", err)
+			}
+			if err := w.Reporter.PostManifest([]map[string]any{entry}); err != nil {
+				log.Printf("post manifest failed: %v", err)
+			}
 			if autoFix.Applied {
 				detail = fmt.Sprintf("auto-fix applied: %s", autoFix.Reason)
 			}
@@ -399,7 +406,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 					detail = res.err.Error()
 				}
 			}
-			_ = w.Reporter.PostEvent(map[string]any{
+			if err := w.Reporter.PostEvent(map[string]any{
 				"name":             res.job.Name,
 				"version":          res.job.Version,
 				"python_tag":       res.job.PythonTag,
@@ -409,7 +416,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"timestamp":        time.Now().Unix(),
 				"metadata":         meta,
 				"matched_hint_ids": autoFix.HintIDs,
-			})
+			}); err != nil {
+				log.Printf("post event failed: %v", err)
+			}
 		}
 
 		if res.err == nil {
@@ -460,7 +469,11 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	if doErr != nil {
 		return
 	}
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("report build status failed: status=%s body=%s", resp.Status, strings.TrimSpace(string(body)))
+	}
 }
 
 func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Request) []runner.Job {

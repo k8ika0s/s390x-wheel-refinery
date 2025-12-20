@@ -1133,6 +1133,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                 <thead className="text-slate-400 sticky top-0 bg-slate-900">
                   <tr className="border-b border-border">
                     <th className="text-left py-2">Status</th>
+                    <th className="text-left py-2">Time</th>
                     <th className="text-left py-2">Version</th>
                     <th className="text-left py-2">Artifacts</th>
                     <th className="text-left py-2">Detail</th>
@@ -1142,7 +1143,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                 <tbody>
                   {eventsArr.length === 0 && (
                     <tr>
-                      <td className="py-4 text-slate-400 text-center" colSpan="5">
+                      <td className="py-4 text-slate-400 text-center" colSpan="6">
                         No events yet for this package.
                       </td>
                     </tr>
@@ -1150,12 +1151,21 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   {eventsArr.map((e) => (
                     <tr key={`${e.name}-${e.version}-${e.timestamp}`} className="border-b border-slate-800">
                       <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
+                      <td className="py-2 text-slate-400">{formatTimestamp(e.timestamp) || "-"}</td>
                       <td className="py-2 text-slate-200">{e.version}</td>
                       <td className="py-2 text-slate-300"><ArtifactBadges meta={e.metadata} /></td>
                       <td className="py-2 text-slate-400">
                         {[e.detail, formatAutomationSummary(e.metadata)].filter(Boolean).join(" · ")}
                       </td>
-                      <td className="py-2"><button className="btn btn-secondary" onClick={() => loadLog(e)}>View log</button></td>
+                      <td className="py-2">
+                        <button
+                          className="btn btn-secondary"
+                          onClick={() => loadLog(e)}
+                          disabled={!e.name || !e.version}
+                        >
+                          View log
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

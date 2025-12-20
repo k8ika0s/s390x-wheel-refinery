@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -116,9 +118,30 @@ func runCommand(cmd, outputEnv, destDir string) error {
 		return err
 	}
 	defer os.RemoveAll(tmp)
+	cmd = fmt.Sprintf("%s=%s %s", outputEnv, shellQuote(tmp), cmd)
 	c := exec.Command("sh", "-c", cmd)
-	c.Env = append(os.Environ(), outputEnv+"="+tmp)
+	env := filterEnv(os.Environ(), outputEnv)
+	c.Env = append(env, outputEnv+"="+tmp)
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
+}
+
+func filterEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
