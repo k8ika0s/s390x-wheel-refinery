@@ -387,6 +387,30 @@ input:focus-visible {
   @apply border border-red-500/40;
 }
 
+.log-viewer {
+  @apply bg-slate-900 border border-border rounded-lg p-3 max-h-72 overflow-auto text-xs font-mono;
+}
+
+.log-line {
+  @apply whitespace-pre text-slate-100;
+}
+
+.log-wrap .log-line {
+  @apply whitespace-pre-wrap;
+}
+
+.log-line.error {
+  @apply text-red-200;
+}
+
+.log-line.warn {
+  @apply text-amber-200;
+}
+
+.log-mark {
+  @apply bg-amber-500/30 text-amber-100 rounded px-0.5;
+}
+
 .muted {
   @apply text-slate-400;
 }

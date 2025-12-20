@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, Link, Navigate, useParams, useLocation, useNavigate } from "react-router-dom";
 import {
   getApiBase,
@@ -185,6 +185,27 @@ const formatAutomationSummary = (meta) => {
   if (auto.blocked) parts.push(`blocked: ${auto.blocked}`);
   if (!parts.length) return "auto-fix attempted";
   return `auto-fix: ${parts.join(", ")}`;
+};
+
+const escapeRegExp = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const renderHighlightedText = (line, regex) => {
+  if (!regex) return line;
+  const matches = line.match(regex);
+  if (!matches) return line;
+  const parts = line.split(regex);
+  const out = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i]) out.push(parts[i]);
+    if (matches[i]) {
+      out.push(
+        <mark key={`mark-${i}`} className="log-mark">
+          {matches[i]}
+        </mark>,
+      );
+    }
+  }
+  return out.length ? out : line;
 };
 
 const buildKey = (name, version) => `${(name || "").toLowerCase()}::${(version || "").toLowerCase()}`;
@@ -741,6 +762,9 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
+  const [logWrap, setLogWrap] = useState(false);
+  const [logSearch, setLogSearch] = useState("");
+  const [logHighlightErrors, setLogHighlightErrors] = useState(true);
   const [lastLogTs, setLastLogTs] = useState(0);
   const [logStreamStatus, setLogStreamStatus] = useState("idle");
   const logRef = useRef(null);
@@ -761,6 +785,20 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const isBuildActive = buildStatus && ["pending", "leased", "building", "retry"].includes(buildStatus.status);
   const pauseStatusPolling = Boolean(selectedEvent || watchBuildLog);
   const lastLogAge = lastLogTs ? formatDuration(Math.max(0, (Date.now() - lastLogTs) / 1000)) : "—";
+  const logLines = useMemo(() => (logContent ? logContent.split("\n") : []), [logContent]);
+  const logLineCount = logLines.length;
+  const logCharCount = logContent.length;
+  const searchTerm = logSearch.trim();
+  const searchRegex = useMemo(() => (searchTerm ? new RegExp(escapeRegExp(searchTerm), "gi") : null), [searchTerm]);
+  const searchMatchCount = useMemo(() => {
+    if (!searchTerm) return 0;
+    const re = new RegExp(escapeRegExp(searchTerm), "i");
+    let count = 0;
+    for (const line of logLines) {
+      if (re.test(line)) count += 1;
+    }
+    return count;
+  }, [logLines, searchTerm]);
 
   const load = useCallback(async (opts = {}) => {
     const soft = Boolean(opts.soft);
@@ -1450,12 +1488,63 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   )}
                 </div>
               )}
-              <pre
-                ref={logRef}
-                className="bg-slate-900 border border-border rounded-lg p-3 max-h-72 overflow-auto text-xs"
-              >
-                {logContent || "No content"}
-              </pre>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                <div className="flex items-center gap-2">
+                  <input
+                    className="input h-7 text-xs px-2 py-1 w-48"
+                    placeholder="Search logs"
+                    value={logSearch}
+                    onChange={(e) => setLogSearch(e.target.value)}
+                  />
+                  {searchTerm && <span className="chip">{searchMatchCount} lines</span>}
+                  {searchTerm && (
+                    <button className="btn btn-secondary px-2 py-1 text-[10px]" onClick={() => setLogSearch("")}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button className="btn btn-secondary px-2 py-1 text-[10px]" onClick={() => setLogWrap((v) => !v)}>
+                    Wrap: {logWrap ? "on" : "off"}
+                  </button>
+                  <button className="btn btn-secondary px-2 py-1 text-[10px]" onClick={() => setLogHighlightErrors((v) => !v)}>
+                    Highlights: {logHighlightErrors ? "on" : "off"}
+                  </button>
+                  <button
+                    className="btn btn-secondary px-2 py-1 text-[10px]"
+                    onClick={() => {
+                      if (logRef.current) {
+                        logRef.current.scrollTop = logRef.current.scrollHeight;
+                      }
+                    }}
+                  >
+                    Jump to latest
+                  </button>
+                </div>
+              </div>
+              <div className="text-xs text-slate-400 flex flex-wrap gap-3">
+                <span>Lines: {logLineCount}</span>
+                <span>Chars: {logCharCount}</span>
+                <span>Last update: {lastLogAge}</span>
+              </div>
+              <div ref={logRef} className={`log-viewer ${logWrap ? "log-wrap" : ""}`}>
+                {logLines.length ? (
+                  logLines.map((line, idx) => {
+                    const text = line === "" ? " " : line;
+                    const lineRegex = searchRegex ? new RegExp(searchRegex.source, searchRegex.flags) : null;
+                    const errorLine = logHighlightErrors && /(error|failed|fatal|panic|segfault|exception)/i.test(line);
+                    const warnLine = logHighlightErrors && !errorLine && /(warn|warning|deprecated)/i.test(line);
+                    const lineClass = errorLine ? "log-line error" : warnLine ? "log-line warn" : "log-line";
+                    return (
+                      <div key={`log-${idx}`} className={lineClass}>
+                        {renderHighlightedText(text, lineRegex)}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="log-line">No content</div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -1509,6 +1598,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [statusFilter, setStatusFilter] = useState("");
   const [recentLimit, setRecentLimit] = useState(25);
   const [pollMs, setPollMs] = useState(10000);
+  const [pollPausedManual, setPollPausedManual] = useState(false);
+  const [pollCountdown, setPollCountdown] = useState(null);
   const [search, setSearch] = useState("");
   const [settingsData, setSettingsData] = useState(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
@@ -1532,6 +1623,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planListLoading, setPlanListLoading] = useState(false);
   const [planListError, setPlanListError] = useState("");
   const [clearingPlans, setClearingPlans] = useState(false);
+  const [expandedBuilds, setExpandedBuilds] = useState({});
+  const [selectedBuilds, setSelectedBuilds] = useState({});
+  const [bulkBuildAction, setBulkBuildAction] = useState(false);
+  const [selectedPending, setSelectedPending] = useState({});
+  const [bulkPendingAction, setBulkPendingAction] = useState(false);
   const [buildPulse, setBuildPulse] = useState({});
   const [planPulse, setPlanPulse] = useState({});
   const [eventPulse, setEventPulse] = useState({});
@@ -1569,6 +1665,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [bulkStatus, setBulkStatus] = useState(null);
   const [bulkUploading, setBulkUploading] = useState(false);
   const apiToastShown = useRef(false);
+  const pollNextRef = useRef(0);
   const viewKey = view || "overview";
   const hintPageSize = 10;
   const [isVisible, setIsVisible] = useState(
@@ -2005,12 +2102,31 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     },
   });
 
-  const pollSuspended = planGraphOpen;
+  const pollSuspended = planGraphOpen || pollPausedManual;
+  const pollActive = Boolean(pollMs && !apiBlocked && isVisible && !pollSuspended);
   useEffect(() => {
-    if (!pollMs || apiBlocked || !isVisible || pollSuspended) return;
-    const id = setInterval(() => load({ packageFilter: pkgFilter, statusFilter, view: viewKey }), pollMs);
+    if (!pollActive) return;
+    pollNextRef.current = Date.now() + pollMs;
+    const id = setInterval(() => {
+      pollNextRef.current = Date.now() + pollMs;
+      load({ packageFilter: pkgFilter, statusFilter, view: viewKey });
+    }, pollMs);
     return () => clearInterval(id);
-  }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit, apiBlocked, isVisible, viewKey, pollSuspended]);
+  }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit, apiBlocked, isVisible, viewKey, pollSuspended, pollActive]);
+
+  useEffect(() => {
+    if (!pollActive) {
+      setPollCountdown(null);
+      return;
+    }
+    pollNextRef.current = Date.now() + pollMs;
+    setPollCountdown(Math.ceil(pollMs / 1000));
+    const id = setInterval(() => {
+      const msLeft = pollNextRef.current - Date.now();
+      setPollCountdown(msLeft > 0 ? Math.ceil(msLeft / 1000) : 0);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [pollActive, pollMs]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -2139,12 +2255,92 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
-const handleDeletePendingInput = async (pi) => {
+  const togglePendingSelect = (pi) => {
+    if (!pi?.id) return;
+    setSelectedPending((prev) => {
+      const next = { ...(prev || {}) };
+      if (next[pi.id]) {
+        delete next[pi.id];
+      } else {
+        next[pi.id] = pi;
+      }
+      return next;
+    });
+  };
+
+  const togglePendingSelectAll = () => {
+    if (!pendingSelectable.length) return;
+    setSelectedPending((prev) => {
+      if (pendingAllSelected) return {};
+      const next = { ...(prev || {}) };
+      pendingSelectable.forEach((pi) => {
+        next[pi.id] = pi;
+      });
+      return next;
+    });
+  };
+
+  const clearPendingSelection = () => setSelectedPending({});
+
+  const enqueuePendingInput = async (pi) => {
+    if (!pi?.id) return;
+    await enqueuePlan(pi.id, authToken);
+    manualPlanQueueRef.current.set(pi.id, { filename: pi.filename || `Pending input ${pi.id}` });
+    manualPlanToastRef.current.delete(pi.id);
+  };
+
+  const deletePendingInputRaw = async (pi) => {
+    if (!pi?.id) return;
+    await deletePendingInput(pi.id, authToken);
+  };
+
+  const handleBulkPendingEnqueue = async () => {
+    if (!pendingSelectedList.length) return;
+    setBulkPendingAction(true);
+    try {
+      for (const pi of pendingSelectedList) {
+        await enqueuePendingInput(pi);
+      }
+      pushToast?.({
+        type: "success",
+        title: "Pending inputs enqueued",
+        message: `${pendingSelectedList.length} item(s) queued`,
+      });
+      clearPendingSelection();
+      await load();
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Bulk enqueue failed", message: e.message });
+    } finally {
+      setBulkPendingAction(false);
+    }
+  };
+
+  const handleBulkPendingDelete = async () => {
+    if (!pendingSelectedList.length) return;
+    if (!window.confirm(`Delete ${pendingSelectedList.length} pending input(s)?`)) return;
+    setBulkPendingAction(true);
+    try {
+      for (const pi of pendingSelectedList) {
+        await deletePendingInputRaw(pi);
+      }
+      pushToast?.({
+        type: "success",
+        title: "Pending inputs deleted",
+        message: `${pendingSelectedList.length} item(s) removed`,
+      });
+      clearPendingSelection();
+      await load();
+    } finally {
+      setBulkPendingAction(false);
+    }
+  };
+
+  const handleDeletePendingInput = async (pi) => {
     if (!pi?.id) return;
     if (!window.confirm(`Delete pending input ${pi.filename || pi.id}?`)) return;
     setPendingActions((m) => ({ ...m, [pi.id]: "delete" }));
     try {
-      await deletePendingInput(pi.id, authToken);
+      await deletePendingInputRaw(pi);
       pushToast?.({ type: "success", title: "Pending input deleted", message: pi.filename || `ID ${pi.id}` });
       await load();
     } catch (e) {
@@ -2190,6 +2386,59 @@ const handleDeletePendingInput = async (pi) => {
     }
   };
 
+  const toggleBuildSelect = (b) => {
+    const key = buildRowKey(b);
+    if (!key) return;
+    setSelectedBuilds((prev) => {
+      const next = { ...(prev || {}) };
+      if (next[key]) {
+        delete next[key];
+      } else {
+        next[key] = b;
+      }
+      return next;
+    });
+  };
+
+  const toggleBuildExpand = (b) => {
+    const key = buildRowKey(b);
+    if (!key) return;
+    setExpandedBuilds((prev) => ({ ...(prev || {}), [key]: !prev?.[key] }));
+  };
+
+  const toggleBuildSelectAll = () => {
+    if (!builds.length) return;
+    setSelectedBuilds((prev) => {
+      if (buildsAllSelected) return {};
+      const next = { ...(prev || {}) };
+      builds.forEach((b) => {
+        const key = buildRowKey(b);
+        if (key) next[key] = b;
+      });
+      return next;
+    });
+  };
+
+  const clearBuildSelection = () => setSelectedBuilds({});
+
+  const handleBulkBuildRetry = async () => {
+    if (!selectedBuildList.length) return;
+    if (!window.confirm(`Retry ${selectedBuildList.length} build(s)?`)) return;
+    setBulkBuildAction(true);
+    try {
+      for (const b of selectedBuildList) {
+        await enqueueRetry(b.package, b.version, authToken, b.python_tag, b.platform_tag);
+      }
+      pushToast?.({ type: "success", title: "Enqueued retries", message: `${selectedBuildList.length} build(s) queued` });
+      clearBuildSelection();
+      await load({ packageFilter: pkgFilter, statusFilter, buildStatusFilter });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Bulk retry failed", message: e.message });
+    } finally {
+      setBulkBuildAction(false);
+    }
+  };
+
   const handleClearPlans = async (planId) => {
     const label = planId ? `plan ${planId}` : "all plans";
     if (!window.confirm(`Clear ${label}?`)) return;
@@ -2210,13 +2459,11 @@ const handleDeletePendingInput = async (pi) => {
     }
   };
 
-const enqueuePlanForInput = async (pi, verb) => {
+  const enqueuePlanForInput = async (pi, verb) => {
     if (!pi?.id) return;
     setPendingActions((m) => ({ ...m, [pi.id]: "enqueue" }));
     try {
-      await enqueuePlan(pi.id, authToken);
-      manualPlanQueueRef.current.set(pi.id, { filename: pi.filename || `Pending input ${pi.id}` });
-      manualPlanToastRef.current.delete(pi.id);
+      await enqueuePendingInput(pi);
       pushToast?.({ type: "success", title: verb, message: pi.filename });
       await load();
     } catch (e) {
@@ -2452,6 +2699,26 @@ const enqueuePlanForInput = async (pi, verb) => {
     : pollState === "blocked"
     ? "text-red-300"
     : "text-slate-400";
+  const pollCountdownLabel = pollCountdown != null ? `${pollCountdown}s` : "—";
+  const pollToggleDisabled = !pollMs || pollState === "blocked";
+  const pollPauseReason = planGraphOpen ? "Paused for graph" : pollPausedManual ? "Paused manually" : "";
+  const renderPollingMeta = (label) => (
+    <div className="text-xs text-slate-400 flex flex-wrap items-center gap-2">
+      <span>Last updated: {label}</span>
+      <span>
+        Polling: <span className={pollStateClass}>{pollState}</span>
+      </span>
+      {pollState === "live" && pollCountdown != null && <span>Next: {pollCountdownLabel}</span>}
+      {pollState === "paused" && pollPauseReason && pollMs ? <span>{pollPauseReason}</span> : null}
+      <button
+        className="btn btn-secondary px-2 py-1 text-[10px]"
+        onClick={() => setPollPausedManual((v) => !v)}
+        disabled={pollToggleDisabled}
+      >
+        {pollPausedManual ? "Resume" : "Pause"}
+      </button>
+    </div>
+  );
   const updatedBuildsLabel = lastUpdated.builds ? formatTimestamp(lastUpdated.builds) : "—";
   const updatedPlansLabel = lastUpdated.plans ? formatTimestamp(lastUpdated.plans) : "—";
   const updatedOverviewLabel = lastUpdated.overview ? formatTimestamp(lastUpdated.overview) : "—";
@@ -2623,6 +2890,12 @@ const enqueuePlanForInput = async (pi, verb) => {
   );
   const visiblePendingInputs = pendingInputs.filter((pi) => ["pending", "planning", "failed"].includes(pi.status));
   const pendingTotal = visiblePendingInputs.length;
+  const pendingSelectable = visiblePendingInputs.filter((pi) => ["pending", "failed"].includes(pi.status));
+  const pendingSelectedList = pendingSelectable.filter((pi) => selectedPending[pi.id]);
+  const pendingAllSelected = pendingSelectable.length > 0 && pendingSelectedList.length === pendingSelectable.length;
+  const buildRowKey = (b) => (b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version));
+  const selectedBuildList = builds.filter((b) => selectedBuilds[buildRowKey(b)]);
+  const buildsAllSelected = builds.length > 0 && selectedBuildList.length === builds.length;
   const filteredRecent = recent.filter((e) => {
     const matchPkg = search ? `${e.name} ${e.version}`.toLowerCase().includes(search.toLowerCase()) : true;
     return matchPkg;
@@ -2989,9 +3262,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                 <div className="text-emerald-300">All systems nominal.</div>
               )}
             </div>
-            <div className="text-xs text-slate-400">
-              Last updated: {updatedOverviewLabel} · Polling: <span className={pollStateClass}>{pollState}</span>
-            </div>
+            {renderPollingMeta(updatedOverviewLabel)}
           </div>
         </div>
       </div>
@@ -3181,6 +3452,33 @@ const enqueuePlanForInput = async (pi, verb) => {
               )}
             </div>
           </div>
+          {pendingSelectable.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={pendingAllSelected}
+                  onChange={togglePendingSelectAll}
+                  aria-label="Select all pending inputs"
+                />
+                <span>Select all</span>
+              </label>
+              <span className="chip">{pendingSelectedList.length} selected</span>
+              {pendingSelectedList.length > 0 && (
+                <>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkPendingEnqueue} disabled={bulkPendingAction}>
+                    {bulkPendingAction ? "Working..." : "Enqueue selected"}
+                  </button>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkPendingDelete} disabled={bulkPendingAction}>
+                    Delete selected
+                  </button>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={clearPendingSelection}>
+                    Clear selection
+                  </button>
+                </>
+              )}
+            </div>
+          )}
           {visiblePendingInputs.length === 0 ? (
             <EmptyState title="No pending uploads" detail="New uploads will appear here until planned." icon="✅" />
           ) : (
@@ -3191,6 +3489,18 @@ const enqueuePlanForInput = async (pi, verb) => {
                   className={`glass subtle px-3 py-3 rounded-lg space-y-3 w-full ${pendingHighlight[pi.id] ? "flash-in" : ""}`}
                 >
                   <div className="flex items-start gap-3">
+                    <div className="pt-1">
+                      {["pending", "failed"].includes(pi.status) ? (
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selectedPending[pi.id])}
+                          onChange={() => togglePendingSelect(pi)}
+                          aria-label={`Select ${pi.filename}`}
+                        />
+                      ) : (
+                        <div className="w-4 h-4" />
+                      )}
+                    </div>
                     <div className="space-y-2 min-w-0 flex-1">
                       <div className="font-semibold text-slate-100 truncate" title={pi.filename}>
                         {pi.filename}
@@ -3384,9 +3694,7 @@ const enqueuePlanForInput = async (pi, verb) => {
           <div className="text-xs text-slate-400">
             Plan queue: {planQueueLength}. Auto-build is {settingsData?.auto_build ? "on" : "off"}.
           </div>
-          <div className="text-xs text-slate-400">
-            Last updated: {updatedPlansLabel} · Polling: <span className={pollStateClass}>{pollState}</span>
-          </div>
+            {renderPollingMeta(updatedPlansLabel)}
           {planListLoading ? (
             <div className="text-xs text-slate-500">Loading plans…</div>
           ) : planList.length ? (
@@ -3748,9 +4056,7 @@ const enqueuePlanForInput = async (pi, verb) => {
               <span>Failed: {buildStatusCounts.failed}</span>
               <span>Built: {buildStatusCounts.built}</span>
             </div>
-            <div className="text-xs text-slate-400">
-              Last updated: {updatedBuildsLabel} · Polling: <span className={pollStateClass}>{pollState}</span>
-            </div>
+            {renderPollingMeta(updatedBuildsLabel)}
             {workerTotal > 0 ? (
               <div className="text-xs text-slate-400 flex flex-wrap gap-3">
                 <span>Workers online: {workerOnline}/{workerTotal}</span>
@@ -3774,10 +4080,32 @@ const enqueuePlanForInput = async (pi, verb) => {
                 </div>
               </div>
             )}
+            {selectedBuildList.length > 0 && (
+              <div className="glass subtle px-3 py-2 rounded-lg border border-border text-xs flex flex-wrap items-center justify-between gap-2">
+                <span>{selectedBuildList.length} selected</span>
+                <div className="flex items-center gap-2">
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkBuildRetry} disabled={bulkBuildAction}>
+                    {bulkBuildAction ? "Retrying..." : "Retry selected"}
+                  </button>
+                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={clearBuildSelection}>
+                    Clear selection
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="overflow-x-auto">
               <table className="min-w-full w-full table-fixed text-xs border border-border rounded-lg" aria-busy={buildsLoading}>
                 <thead className="bg-slate-900 text-slate-400 sticky top-0">
                   <tr>
+                    <th className="px-2 py-2 w-8">
+                      <input
+                        type="checkbox"
+                        checked={buildsAllSelected}
+                        onChange={toggleBuildSelectAll}
+                        disabled={!builds.length}
+                        aria-label="Select all builds"
+                      />
+                    </th>
                     <th className="text-left px-2 py-2">Package</th>
                     <th className="text-left px-2 py-2">Version</th>
                     <th className="text-left px-2 py-2">Status</th>
@@ -3792,7 +4120,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                 <tbody>
                   {buildsLoading && !builds.length && (
                     <tr>
-                      <td className="px-2 py-3 text-slate-400 text-center" colSpan="9">
+                      <td className="px-2 py-3 text-slate-400 text-center" colSpan="10">
                         Loading builds…
                       </td>
                     </tr>
@@ -3802,35 +4130,97 @@ const enqueuePlanForInput = async (pi, verb) => {
                         const statusSince = pickStatusSince(b);
                         const statusAge = statusSince ? formatDuration(Math.max(0, nowSec - statusSince)) : "—";
                         const errorLabel = b.failure_summary || b.last_error || "-";
+                        const rowKey = buildRowKey(b) || `${b.package}-${b.version}-${idx}`;
                         const pulseKey = b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version);
+                        const isExpanded = Boolean(expandedBuilds[rowKey]);
+                        const isSelected = Boolean(selectedBuilds[rowKey]);
+                        const recipesLabel = (b.recipes || []).join(", ") || "-";
+                        const hintsLabel = (b.hint_ids || []).join(", ") || "-";
+                        const logHref = b.package && b.version
+                          ? `${apiBase || getApiBase()}/api/logs/${encodeURIComponent(b.package)}/${encodeURIComponent(b.version)}`
+                          : "";
                         return (
-                          <tr
-                            key={b.id ?? `${b.package}-${b.version}-${idx}`}
-                            className={`border-t border-slate-800 cursor-pointer hover:bg-slate-900/40 ${buildPulse[pulseKey] ? "flash-in" : ""}`}
-                            onClick={() =>
-                              navigate(`/package/${encodeURIComponent(b.package)}`, {
-                                state: { from: `${location.pathname}${location.search}`, build: b },
-                              })
-                            }
-                            title="View package details"
-                          >
-                            <td className="px-2 py-2">{b.package}</td>
-                            <td className="px-2 py-2">{b.version}</td>
-                            <td className="px-2 py-2">
-                              <span className={`chip ${buildStatusChipClass(b.status)}`}>{b.status}</span>
-                            </td>
-                            <td className="px-2 py-2 text-slate-400">{statusAge}</td>
-                            <td className="px-2 py-2">{b.attempts ?? 0}</td>
-                            <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
-                            <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
-                            <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{(b.recipes || []).join(", ") || "-"}</td>
-                            <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{errorLabel}</td>
-                          </tr>
+                          <Fragment key={rowKey}>
+                            <tr className={`border-t border-slate-800 ${buildPulse[pulseKey] ? "flash-in" : ""}`}>
+                              <td className="px-2 py-2">
+                                <input type="checkbox" checked={isSelected} onChange={() => toggleBuildSelect(b)} aria-label={`Select ${b.package}`} />
+                              </td>
+                              <td className="px-2 py-2">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    className="btn btn-secondary px-2 py-1 text-[10px]"
+                                    onClick={() => toggleBuildExpand(b)}
+                                    aria-label={isExpanded ? "Collapse build details" : "Expand build details"}
+                                  >
+                                    {isExpanded ? "▾" : "▸"}
+                                  </button>
+                                  <Link
+                                    className="text-accent hover:underline"
+                                    to={`/package/${encodeURIComponent(b.package)}`}
+                                    state={{ from: `${location.pathname}${location.search}`, build: b }}
+                                  >
+                                    {b.package}
+                                  </Link>
+                                </div>
+                              </td>
+                              <td className="px-2 py-2">{b.version}</td>
+                              <td className="px-2 py-2">
+                                <span className={`chip ${buildStatusChipClass(b.status)}`}>{b.status}</span>
+                              </td>
+                              <td className="px-2 py-2 text-slate-400">{statusAge}</td>
+                              <td className="px-2 py-2">{b.attempts ?? 0}</td>
+                              <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
+                              <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
+                              <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{recipesLabel}</td>
+                              <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{errorLabel}</td>
+                            </tr>
+                            {isExpanded && (
+                              <tr className="border-t border-slate-800 bg-slate-900/30">
+                                <td className="px-3 py-3" colSpan="10">
+                                  <div className="grid gap-3 text-xs text-slate-300 md:grid-cols-3">
+                                    <div><span className="text-slate-500">Plan ID:</span> {b.plan_id || "-"}</div>
+                                    <div><span className="text-slate-500">Run ID:</span> {b.run_id || "-"}</div>
+                                    <div><span className="text-slate-500">Status since:</span> {statusSince ? formatTimestamp(statusSince) : "-"}</div>
+                                    <div><span className="text-slate-500">Created:</span> {formatTimestamp(b.created_at) || "-"}</div>
+                                    <div><span className="text-slate-500">Updated:</span> {formatTimestamp(b.updated_at) || "-"}</div>
+                                    <div><span className="text-slate-500">Leased:</span> {formatTimestamp(b.leased_at) || "-"}</div>
+                                    <div><span className="text-slate-500">Started:</span> {formatTimestamp(b.started_at) || "-"}</div>
+                                    <div><span className="text-slate-500">Finished:</span> {formatTimestamp(b.finished_at) || "-"}</div>
+                                    <div><span className="text-slate-500">Backoff:</span> {formatTimestamp(b.backoff_until) || "-"}</div>
+                                    <div className="md:col-span-2"><span className="text-slate-500">Hints:</span> {hintsLabel}</div>
+                                    <div className="md:col-span-3"><span className="text-slate-500">Recipes:</span> {recipesLabel}</div>
+                                  </div>
+                                  {errorLabel !== "-" && (
+                                    <div className="mt-2 text-xs text-amber-200">
+                                      Error: {errorLabel}
+                                    </div>
+                                  )}
+                                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <button
+                                      className="btn btn-secondary px-2 py-1 text-xs"
+                                      onClick={() =>
+                                        navigate(`/package/${encodeURIComponent(b.package)}`, {
+                                          state: { from: `${location.pathname}${location.search}`, build: b },
+                                        })
+                                      }
+                                    >
+                                      Open package
+                                    </button>
+                                    {logHref && (
+                                      <a className="btn btn-secondary px-2 py-1 text-xs" href={logHref} target="_blank" rel="noreferrer">
+                                        Open log
+                                      </a>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
                         );
                       })
                     : !buildsLoading && (
                         <tr>
-                          <td className="px-2 py-3 text-slate-400 text-center" colSpan="9">
+                          <td className="px-2 py-3 text-slate-400 text-center" colSpan="10">
                             No builds found
                           </td>
                         </tr>
