@@ -631,7 +631,7 @@ func (p *PostgresStore) Recent(ctx context.Context, limit, offset int, pkg, stat
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	q := `SELECT run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,extract(epoch from timestamp)::bigint,duration_ms
+	q := `SELECT run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,extract(epoch from timestamp)::bigint,COALESCE(duration_ms, 0)
 	      FROM events WHERE 1=1`
 	args := []any{}
 	if pkg != "" {
@@ -674,7 +674,7 @@ func (p *PostgresStore) History(ctx context.Context, filter HistoryFilter) ([]Ev
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	q := `SELECT run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,extract(epoch from timestamp)::bigint,duration_ms
+	q := `SELECT run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,extract(epoch from timestamp)::bigint,COALESCE(duration_ms, 0)
 	      FROM events WHERE 1=1`
 	args := []any{}
 	if filter.Package != "" {
