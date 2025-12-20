@@ -521,24 +521,28 @@ func (p *PostgresStore) UpdatePendingInputsForPlan(ctx context.Context, planID i
 	return count, nil
 }
 
-// ListBuilds returns build status rows filtered by status if provided.
-func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int) ([]BuildStatus, error) {
+// ListBuilds returns build status rows filtered by status/plan if provided.
+func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int, planID int64) ([]BuildStatus, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
 	q := `SELECT id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), run_id, plan_id, extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint, COALESCE(extract(epoch from backoff_until),0)::bigint, COALESCE(recipes, '[]'::jsonb), COALESCE(hint_ids, '{}'::text[]) FROM build_status`
 	args := []any{}
+	clauses := []string{}
 	if status != "" {
-		q += ` WHERE status = $1`
+		clauses = append(clauses, fmt.Sprintf("status = $%d", len(args)+1))
 		args = append(args, status)
+	}
+	if planID > 0 {
+		clauses = append(clauses, fmt.Sprintf("plan_id = $%d", len(args)+1))
+		args = append(args, planID)
+	}
+	if len(clauses) > 0 {
+		q += " WHERE " + strings.Join(clauses, " AND ")
 	}
 	q += ` ORDER BY created_at ASC`
 	if limit > 0 {
-		limitIdx := 1
-		if status != "" {
-			limitIdx = 2
-		}
-		q += fmt.Sprintf(" LIMIT $%d::int", limitIdx)
+		q += fmt.Sprintf(" LIMIT $%d::int", len(args)+1)
 		args = append(args, limit)
 	}
 	rows, err := p.db.QueryContext(ctx, q, args...)

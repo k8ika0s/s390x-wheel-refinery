@@ -183,7 +183,7 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 
 	buildStats := buildMetrics{}
 	if h.Store != nil {
-		list, err := h.Store.ListBuilds(ctx, "", 500)
+		list, err := h.Store.ListBuilds(ctx, "", 500, 0)
 		if err == nil {
 			var oldest int64
 			for _, b := range list {
@@ -1058,7 +1058,16 @@ func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		status := r.URL.Query().Get("status")
 		limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 1000)
-		list, err := h.Store.ListBuilds(r.Context(), status, limit)
+		var planID int64
+		if planStr := r.URL.Query().Get("plan_id"); planStr != "" {
+			id, err := strconv.ParseInt(planStr, 10, 64)
+			if err != nil || id <= 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid plan_id"})
+				return
+			}
+			planID = id
+		}
+		list, err := h.Store.ListBuilds(r.Context(), status, limit, planID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -1472,7 +1481,7 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, snap)
 	case http.MethodPost:
-		if action != "enqueue-builds" {
+		if action != "enqueue-builds" && action != "enqueue-build" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
 			return
 		}
@@ -1485,32 +1494,90 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		if snap.Queued {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "plan already enqueued"})
+		if action == "enqueue-builds" {
+			if snap.Queued {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "plan already enqueued"})
+				return
+			}
+			if err := h.Store.QueueBuildsFromPlan(r.Context(), snap.RunID, snap.ID, snap.Plan); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			if h.Store != nil {
+				// Mark any linked pending inputs as queued so the UI reflects progress.
+				if count, err := h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "queued"); err == nil && count == 0 {
+					// If nothing was updated, the linkage might be missing; fall back to clearing any "planned" rows for this plan.
+					_, _ = h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "build_queued")
+				}
+			}
+			count := 0
+			for _, node := range snap.Plan {
+				if strings.EqualFold(node.Action, "build") {
+					count++
+				}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"detail":   "builds enqueued",
+				"plan_id":  snap.ID,
+				"run_id":   snap.RunID,
+				"enqueued": count,
+			})
 			return
 		}
-		if err := h.Store.QueueBuildsFromPlan(r.Context(), snap.RunID, snap.ID, snap.Plan); err != nil {
+		var body struct {
+			Package string `json:"package"`
+			Version string `json:"version"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		pkg := strings.TrimSpace(body.Package)
+		ver := strings.TrimSpace(body.Version)
+		if pkg == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package required"})
+			return
+		}
+		var target *store.PlanNode
+		ambiguous := false
+		for i, node := range snap.Plan {
+			if !strings.EqualFold(node.Action, "build") {
+				continue
+			}
+			if !strings.EqualFold(node.Name, pkg) {
+				continue
+			}
+			if ver != "" && !strings.EqualFold(node.Version, ver) {
+				continue
+			}
+			if target != nil && ver == "" {
+				ambiguous = true
+				break
+			}
+			target = &snap.Plan[i]
+		}
+		if ambiguous {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "multiple versions found; include version"})
+			return
+		}
+		if target == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "build node not found"})
+			return
+		}
+		if err := h.Store.QueueBuildsFromPlan(r.Context(), snap.RunID, snap.ID, []store.PlanNode{*target}); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		if h.Store != nil {
-			// Mark any linked pending inputs as queued so the UI reflects progress.
 			if count, err := h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "queued"); err == nil && count == 0 {
-				// If nothing was updated, the linkage might be missing; fall back to clearing any "planned" rows for this plan.
 				_, _ = h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "build_queued")
 			}
 		}
-		count := 0
-		for _, node := range snap.Plan {
-			if strings.EqualFold(node.Action, "build") {
-				count++
-			}
-		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"detail":   "builds enqueued",
+			"detail":   "build enqueued",
 			"plan_id":  snap.ID,
 			"run_id":   snap.RunID,
-			"enqueued": count,
+			"enqueued": 1,
 		})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
