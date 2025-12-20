@@ -158,7 +158,6 @@ func (w *Worker) Drain(ctx context.Context) error {
 		i, job := i, job
 		g.Go(func() error {
 			attempt := reqAttempts[queueKey(job.Name, job.Version)]
-			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, attempt, 0, job.Recipes, nil)
 			if job.WheelAction == "reuse" && job.WheelDigest != "" {
 				if err := w.fetchWheel(ctx, job); err != nil {
 					return fmt.Errorf("fetch wheel %s: %w", job.WheelDigest, err)
@@ -169,6 +168,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				defer logStream.Close()
 				job.LogWriter = logStream
 			}
+			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, attempt, 0, job.Recipes, nil)
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			if err != nil && strings.TrimSpace(logContent) == "" {
 				logContent = fmt.Sprintf("error: %s", err.Error())

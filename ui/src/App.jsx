@@ -698,7 +698,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const pageSize = 10;
   const backTarget = location.state?.from || "/builds";
   const buildVersion = buildFromState?.version || "";
-  const isBuildActive = buildStatus && ["pending", "building", "retry"].includes(buildStatus.status);
+  const isBuildActive = buildStatus && ["pending", "leased", "building", "retry"].includes(buildStatus.status);
 
   const load = useCallback(async (opts = {}) => {
     const soft = Boolean(opts.soft);
