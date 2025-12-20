@@ -1021,6 +1021,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
         timestamp: event.timestamp,
         attempt,
         summary: formatAutomationSummary(meta),
+        failureSummary: meta.failure_summary || meta.failureSummary || "",
         recipes,
         hints: toArray(automation?.hint_ids),
         savedHints: toArray(automation?.saved_hint_ids),
@@ -1042,6 +1043,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const buildBackoffLabel = formatEpoch(buildStatus?.backoff_until);
   const buildPackageName = buildStatus?.package || summary?.name || name;
   const buildVersionLabel = buildStatus?.version || summary?.latest?.version || "";
+  const failureSummary = buildStatus?.failure_summary || "";
   const overviewGridClass = buildStatus ? "grid grid-cols-1 md:grid-cols-3 gap-4" : "grid grid-cols-1 md:grid-cols-2 gap-4";
 
   return (
@@ -1104,6 +1106,11 @@ function PackageDetail({ token, pushToast, apiBase }) {
                 {buildStatus.recipes?.length > 0 && (
                   <div className="text-slate-400 text-xs">
                     Recipes: {buildStatus.recipes.join(", ")}
+                  </div>
+                )}
+                {failureSummary && (
+                  <div className="text-amber-200 text-xs">
+                    Summary: {failureSummary}
                   </div>
                 )}
                 {buildStatus.last_error && (
@@ -1234,6 +1241,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                       </div>
                     </div>
                     {entry.summary && <div className="text-slate-300">{entry.summary}</div>}
+                    {entry.failureSummary && <div className="text-amber-200">Failure summary: {entry.failureSummary}</div>}
                     {entry.automation && (
                       <div className="text-slate-400">Applied: {entry.automation.applied ? "yes" : "no"}</div>
                     )}
@@ -3540,6 +3548,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                     ? builds.map((b, idx) => {
                         const statusSince = pickStatusSince(b);
                         const statusAge = statusSince ? formatDuration(Math.max(0, nowSec - statusSince)) : "—";
+                        const errorLabel = b.failure_summary || b.last_error || "-";
                         return (
                           <tr
                             key={b.id ?? `${b.package}-${b.version}-${idx}`}
@@ -3561,7 +3570,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                             <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
                             <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
                             <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{(b.recipes || []).join(", ") || "-"}</td>
-                            <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{b.last_error || "-"}</td>
+                            <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{errorLabel}</td>
                           </tr>
                         );
                       })

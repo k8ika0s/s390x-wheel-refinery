@@ -1113,6 +1113,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		Version      string   `json:"version"`
 		Status       string   `json:"status"`
 		Error        string   `json:"error,omitempty"`
+		FailureSummary string `json:"failure_summary,omitempty"`
 		Attempts     int      `json:"attempts,omitempty"`
 		BackoffUntil int64    `json:"backoff_until,omitempty"`
 		Recipes      []string `json:"recipes,omitempty"`
@@ -1126,7 +1127,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package, version, and status required"})
 		return
 	}
-	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.Attempts, body.BackoffUntil, body.Recipes, body.HintIDs); err != nil {
+	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.Recipes, body.HintIDs); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

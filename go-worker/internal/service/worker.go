@@ -168,7 +168,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				defer logStream.Close()
 				job.LogWriter = logStream
 			}
-			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, attempt, 0, job.Recipes, nil)
+			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, "", attempt, 0, job.Recipes, nil)
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			if err != nil && strings.TrimSpace(logContent) == "" {
 				logContent = fmt.Sprintf("error: %s", err.Error())
@@ -217,10 +217,20 @@ func (w *Worker) Drain(ctx context.Context) error {
 		detail := ""
 		recipesForStatus := res.job.Recipes
 		autoFix := autoFixResult{}
+		summary := ""
 		if res.err != nil {
 			status = "failed"
 			meta["error"] = res.err.Error()
-			autoFix = w.autoFix(ctx, res.job, res.log, hintCatalog, knownHints)
+			summary = summarizeLog(res.log)
+			if summary == "" {
+				summary = res.err.Error()
+			}
+			meta["failure_summary"] = summary
+			logForHints := res.log
+			if strings.TrimSpace(logForHints) == "" {
+				logForHints = summary
+			}
+			autoFix = w.autoFix(ctx, res.job, logForHints, hintCatalog, knownHints)
 			if autoFix.Applied {
 				recipesForStatus = autoFix.Recipes
 			}
@@ -257,7 +267,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"impact_reason":  autoFix.ImpactReason,
 			}
 		}
-		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, res.attempt, backoffUntil, recipesForStatus, autoFix.HintIDs)
+		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, backoffUntil, recipesForStatus, autoFix.HintIDs)
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
@@ -341,6 +351,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.err != nil {
 			logPayload["error"] = res.err.Error()
+			if summary != "" {
+				logPayload["failure_summary"] = summary
+			}
 		}
 		if autoFix.Applied {
 			logPayload["auto_fix"] = map[string]any{
@@ -438,7 +451,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, attempts int, backoffUntil int64, recipes []string, hintIDs []string) {
+func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) {
 	if w.Cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -451,6 +464,9 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	}
 	if err != nil {
 		body["error"] = err.Error()
+	}
+	if summary != "" {
+		body["failure_summary"] = summary
 	}
 	if backoffUntil > 0 {
 		body["backoff_until"] = backoffUntil

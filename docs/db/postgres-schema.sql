@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS build_status (
     attempts      INT NOT NULL DEFAULT 0,
     backoff_until TIMESTAMPTZ,
     last_error    TEXT,
+    failure_summary TEXT,
     recipes       JSONB,
     hint_ids      TEXT[],
     run_id        TEXT,
