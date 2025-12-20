@@ -179,6 +179,16 @@ type BuildStatus struct {
 	HintIDs        []string `json:"hint_ids,omitempty"`
 }
 
+// BuildQueueStats captures aggregate queue counts.
+type BuildQueueStats struct {
+	Length       int   `json:"length"`
+	OldestAgeSec int64 `json:"oldest_age_seconds,omitempty"`
+	Pending      int   `json:"pending"`
+	Retry        int   `json:"retry"`
+	Leased       int   `json:"leased"`
+	Building     int   `json:"building"`
+}
+
 // WorkerStatus tracks worker heartbeat metadata.
 type WorkerStatus struct {
 	WorkerID             string `json:"worker_id"`
@@ -255,6 +265,7 @@ type Store interface {
 	// Pending inputs & planning
 	AddPendingInput(ctx context.Context, pi PendingInput) (int64, error)
 	ListPendingInputs(ctx context.Context, status string) ([]PendingInput, error)
+	PendingInputCount(ctx context.Context, status string) (int, error)
 	UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error
 	DeletePendingInput(ctx context.Context, id int64) (PendingInput, error)
 	RestorePendingInput(ctx context.Context, id int64) (PendingInput, error)
@@ -263,6 +274,7 @@ type Store interface {
 
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error)
+	BuildQueueStats(ctx context.Context) (BuildQueueStats, error)
 	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
 	RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int64, error)

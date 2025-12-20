@@ -139,6 +139,9 @@ func (f *fakeStore) AddPendingInput(ctx context.Context, pi store.PendingInput) 
 func (f *fakeStore) ListPendingInputs(ctx context.Context, status string) ([]store.PendingInput, error) {
 	return f.listPending, nil
 }
+func (f *fakeStore) PendingInputCount(ctx context.Context, status string) (int, error) {
+	return len(f.listPending), nil
+}
 func (f *fakeStore) UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error {
 	f.pendingStatuses = append(f.pendingStatuses, struct {
 		id     int64
@@ -162,6 +165,9 @@ func (f *fakeStore) UpdatePendingInputsForPlan(ctx context.Context, planID int64
 }
 func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]store.BuildStatus, error) {
 	return nil, nil
+}
+func (f *fakeStore) BuildQueueStats(ctx context.Context) (store.BuildQueueStats, error) {
+	return store.BuildQueueStats{}, nil
 }
 func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error {
 	return nil

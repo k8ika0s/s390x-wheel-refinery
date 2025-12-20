@@ -171,8 +171,8 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 
 	pm := pendingMetrics{}
 	if h.Store != nil {
-		if list, err := h.Store.ListPendingInputs(ctx, ""); err == nil {
-			pm.Count = len(list)
+		if count, err := h.Store.PendingInputCount(ctx, ""); err == nil {
+			pm.Count = count
 		}
 	}
 	if pq, ok := h.PlanQ.(interface {
@@ -198,22 +198,11 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 
 	buildStats := buildMetrics{}
 	if h.Store != nil {
-		list, err := h.Store.ListBuilds(ctx, "", 500, 0, "", "")
-		if err == nil {
-			var oldest int64
-			for _, b := range list {
-				if strings.EqualFold(b.Status, "pending") {
-					buildStats.Pending++
-				}
-				if strings.EqualFold(b.Status, "retry") {
-					buildStats.Retry++
-				}
-				buildStats.Length++
-				if oldest == 0 || b.OldestAgeSec > oldest {
-					oldest = b.OldestAgeSec
-				}
-			}
-			buildStats.OldestAgeSec = oldest
+		if stats, err := h.Store.BuildQueueStats(ctx); err == nil {
+			buildStats.Length = stats.Length
+			buildStats.OldestAgeSec = stats.OldestAgeSec
+			buildStats.Pending = stats.Pending
+			buildStats.Retry = stats.Retry
 		}
 	}
 	hm := hintMetrics{}

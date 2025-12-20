@@ -416,6 +416,24 @@ func (p *PostgresStore) ListPendingInputs(ctx context.Context, status string) ([
 	return out, rows.Err()
 }
 
+// PendingInputCount returns the number of pending inputs (optionally filtered by status).
+func (p *PostgresStore) PendingInputCount(ctx context.Context, status string) (int, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	q := `SELECT COUNT(*) FROM pending_inputs WHERE deleted_at IS NULL`
+	args := []any{}
+	if status != "" {
+		q += " AND status = $1"
+		args = append(args, status)
+	}
+	var count int
+	if err := p.db.QueryRowContext(ctx, q, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // UpdatePendingInputStatus sets status/error.
 func (p *PostgresStore) UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error {
 	if err := p.ensureDB(); err != nil {
@@ -630,6 +648,29 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 		out = append(out, bs)
 	}
 	return out, rows.Err()
+}
+
+// BuildQueueStats returns aggregate counts for queued build statuses.
+func (p *PostgresStore) BuildQueueStats(ctx context.Context) (BuildQueueStats, error) {
+	if err := p.ensureDB(); err != nil {
+		return BuildQueueStats{}, err
+	}
+	var stats BuildQueueStats
+	row := p.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE status IN ('pending','retry','leased','building')) AS length,
+			COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(created_at)))::bigint, 0) AS oldest_age_seconds,
+			COUNT(*) FILTER (WHERE status='pending') AS pending,
+			COUNT(*) FILTER (WHERE status='retry') AS retry,
+			COUNT(*) FILTER (WHERE status='leased') AS leased,
+			COUNT(*) FILTER (WHERE status='building') AS building
+		FROM build_status
+		WHERE status IN ('pending','retry','leased','building')
+	`)
+	if err := row.Scan(&stats.Length, &stats.OldestAgeSec, &stats.Pending, &stats.Retry, &stats.Leased, &stats.Building); err != nil {
+		return BuildQueueStats{}, err
+	}
+	return stats, nil
 }
 
 // DeleteBuilds removes build status rows matching the status filter.
