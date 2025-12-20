@@ -1060,7 +1060,6 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planGraphOpen, setPlanGraphOpen] = useState(false);
   const [planGraphLayout, setPlanGraphLayout] = useState("horizontal");
   const [planGraphFocus, setPlanGraphFocus] = useState(null);
-  const [planGraphTransform, setPlanGraphTransform] = useState("translate(0px, 0px) scale(1)");
   const planGraphViewportRef = useRef(null);
   const [hintSearch, setHintSearch] = useState("");
   const [hintPage, setHintPage] = useState(1);
@@ -1452,12 +1451,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     setPlanTab("builds");
     setPlanGraphOpen(false);
     setPlanGraphFocus(null);
-    setPlanGraphTransform("translate(0px, 0px) scale(1)");
   }, [selectedPlanId]);
 
   useEffect(() => {
     setPlanGraphFocus(null);
-    setPlanGraphTransform("translate(0px, 0px) scale(1)");
   }, [planGraphLayout]);
 
   const handleTriggerWorker = async () => {
@@ -1813,7 +1810,6 @@ const enqueuePlanForInput = async (pi, verb) => {
   const closePlanGraph = () => {
     setPlanGraphOpen(false);
     setPlanGraphFocus(null);
-    setPlanGraphTransform("translate(0px, 0px) scale(1)");
   };
 
   const queueObj = dashboard?.queue && typeof dashboard.queue === "object" && !Array.isArray(dashboard.queue) ? dashboard.queue : null;
@@ -1895,7 +1891,6 @@ const enqueuePlanForInput = async (pi, verb) => {
           style={{
             minWidth: planDag.size.width,
             minHeight: planDag.size.height,
-            transform: planGraphTransform,
             "--dag-node-width": `${layout.nodeWidth}px`,
             "--dag-node-height": `${layout.nodeHeight}px`,
             "--dag-node-gap": `${innerGap}px`,
@@ -1980,36 +1975,6 @@ const enqueuePlanForInput = async (pi, verb) => {
       No DAG data available. Replan to capture graph nodes.
     </div>
   );
-
-  useEffect(() => {
-    const updateTransform = () => {
-      if (!planGraphOpen || !planDag || !planGraphFocus) {
-        setPlanGraphTransform("translate(0px, 0px) scale(1)");
-        return;
-      }
-      const viewport = planGraphViewportRef.current;
-      if (!viewport) return;
-      const pos = planDag.positions[planGraphFocus];
-      if (!pos) {
-        setPlanGraphTransform("translate(0px, 0px) scale(1)");
-        return;
-      }
-      const rect = viewport.getBoundingClientRect();
-      const layout = planDag.layout;
-      const centerX = layout.pad + pos.col * (layout.nodeWidth + layout.colGap) + layout.nodeWidth / 2;
-      const centerY = layout.pad + pos.row * (layout.nodeHeight + layout.rowGap) + layout.nodeHeight / 2;
-      const scale = 1.35;
-      const tx = rect.width / 2 - centerX * scale;
-      const ty = rect.height / 2 - centerY * scale;
-      setPlanGraphTransform(`translate(${tx}px, ${ty}px) scale(${scale})`);
-    };
-    updateTransform();
-    if (!planGraphOpen) return;
-    window.addEventListener("resize", updateTransform);
-    return () => {
-      window.removeEventListener("resize", updateTransform);
-    };
-  }, [planGraphOpen, planDag, planGraphFocus, planGraphLayout]);
   const pendingByStatus = pendingInputs.reduce(
     (acc, cur) => {
       acc[cur.status] = (acc[cur.status] || 0) + 1;
@@ -3018,13 +2983,6 @@ const enqueuePlanForInput = async (pi, verb) => {
                     {layout === "horizontal" ? "Horizontal" : "Vertical"}
                   </button>
                 ))}
-                <button
-                  className="btn btn-secondary px-3 py-1 text-xs"
-                  onClick={() => setPlanGraphFocus(null)}
-                  disabled={!planGraphFocus}
-                >
-                  Reset zoom
-                </button>
                 <button className="btn btn-secondary px-3 py-1 text-xs" onClick={closePlanGraph}>
                   Close
                 </button>
