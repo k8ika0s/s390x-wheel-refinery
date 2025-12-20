@@ -1,14 +1,17 @@
 flowchart TD
-  A[Build queued] --> B[Worker leases job]
-  B --> C[Runner executes build in container]
-  C -->|success| D[Store artifacts + update status]
-  D --> E[Emit built event + logs]
-  C -->|failure| F[Auto-fix evaluates logs]
-  F -->|apply recipes| G[Retry with backoff]
-  G --> B
-  F -->|no recipes or blocked| H[Mark failed]
-  H --> E
-  D --> I{Repair enabled?}
-  I -->|yes| J[Run repair tool + store repaired wheel]
-  I -->|no| K[Done]
-  J --> K
+  A[Build queued] --> B[Worker build poll loop]
+  B --> C[Lease build job]
+  C --> D[Status leased and attempts increment]
+  D --> E[Runner executes build]
+  E -->|stream logs| F[Log chunks stored and broadcast]
+  E -->|success| G[Store artifacts and update status]
+  G --> H[Emit built event and final log entry]
+  E -->|failure| I[Auto fix evaluates logs]
+  I -->|apply recipes| J[Retry with backoff]
+  J --> C
+  I -->|no recipes or blocked| K[Mark failed]
+  K --> H
+  G --> L{Repair enabled}
+  L -->|yes| M[Run repair tool and store repaired wheel]
+  L -->|no| N[Done]
+  M --> N

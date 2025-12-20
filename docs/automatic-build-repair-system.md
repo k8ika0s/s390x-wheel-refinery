@@ -12,6 +12,15 @@ The system takes a list of Python packages, builds wheels in a controlled enviro
 - Artifacts (wheels, repairs) are stored and tracked.
 - All automation actions are recorded and shown in the UI.
 
+## System Components and Data Flow
+- **Control-plane**: API + Postgres; stores plans, build status, events, hints, and logs.
+- **Worker**: Polls queues, leases build jobs, runs builds, and posts status/logs.
+- **Runner**: Executes the build inside a container, applies recipes, emits logs.
+- **Object store**: Stores uploaded inputs and build artifacts (S3 or compatible).
+- **CAS**: Content-addressed storage for runtimes, packs, and wheels.
+- **UI**: Reads from the control-plane and renders queues, logs, and automation metadata.
+- **Log hub**: WebSocket fan-out inside the control-plane for live log chunks.
+
 ## Glossary (Plain Terms)
 - **Package**: The Python project being built.
 - **Wheel**: The built binary package that gets installed by pip.
@@ -48,12 +57,52 @@ The system takes a list of Python packages, builds wheels in a controlled enviro
 7) If enabled, a repair pass creates a repaired wheel and stores it.
 8) The build is done when it succeeds, hits max attempts, or is blocked by policy.
 
+## Queue and Status Model
+The system has two primary queues plus a legacy retry queue:
+- **Plan queue**: Pending input IDs waiting to be planned.
+- **Build queue**: Build status rows waiting to be leased and run.
+- **Retry queue**: Legacy queue used for manual retries.
+
+### Pending input statuses
+| Status | Meaning |
+| --- | --- |
+| pending | Uploaded, waiting to be enqueued for planning. |
+| planning | Enqueued to plan queue or currently being planned. |
+| planned | Plan saved and linked to this input. |
+| queued | Builds were enqueued for the linked plan. |
+| build_queued | Alternate queued state used for UI visibility. |
+| failed | Planning failed and requires retry. |
+
+### Build statuses
+| Status | Meaning |
+| --- | --- |
+| pending | Build job queued but not leased. |
+| leased | Worker claimed the job and incremented attempts. |
+| building | Runner started the container. |
+| retry | Requeued after failure with recipes. |
+| built | Successful build. |
+| failed | Build failed and no retry queued. |
+| cached | Build reused cached artifact. |
+| reused | Build reused previous output. |
+| missing | Build missing required input. |
+| skipped_known_failure | Build skipped because a known failure matched. |
+| system_recipe_failed | System recipe failed before build. |
+
+### Lease vs build running
+The control-plane marks a build **leased** when it is claimed from the queue. The worker then posts **building** when the container actually starts. This distinction lets the UI show work that is claimed but not yet executing.
+
+### Worker scheduling and concurrency
+- **Auto-build**: The worker polls the build queue on `BUILD_POLL_INTERVAL_SEC` and auto-drains as long as there is capacity.
+- **Build pool**: `BUILD_POOL_SIZE` caps concurrency.
+- **Plan polling**: `PLAN_POLL_ENABLED=true` allows workers to poll pending inputs for planning on `PLAN_POLL_INTERVAL_SEC`.
+
 ## Workflow Diagrams (Mermaid)
 - High-level build workflow: `docs/diagrams/automatic-build-workflow.mmd`
 - Auto-fix decision flow: `docs/diagrams/auto-fix-decision-flow.mmd`
 - Repair pipeline: `docs/diagrams/repair-pipeline.mmd`
 - Data + UX visibility: `docs/diagrams/automation-ux-visibility.mmd`
 - Live log streaming: `docs/diagrams/log-streaming.mmd`
+- Queue + status lifecycle: `docs/diagrams/queue-status-lifecycle.mmd`
 
 ## End-to-End Walkthrough (Technical)
 This walkthrough follows a single package through the automated build and repair pipeline.
@@ -65,11 +114,13 @@ This walkthrough follows a single package through the automated build and repair
 ### 2) Worker leases work
 - The worker calls the build queue endpoint and leases build jobs.
 - Each leased job contains package, version, tags, attempts, and any pre-attached recipes or hint IDs.
+- The control-plane marks the job `leased`, increments attempts, and records `leased_at`.
 
 ### 3) Job execution
 - The worker runs the job in a container using the runner.
 - Job context is passed via env vars (`JOB_NAME`, `JOB_VERSION`, `PYTHON_TAG`, `PLATFORM_TAG`).
 - If recipes are present, they are passed in `RECIPES` and executed in the container.
+- When the runner starts, the worker posts `building` and records `started_at`.
 
 ### 4) Build success path
 - The worker emits a `built` event with duration and metadata.
@@ -89,6 +140,14 @@ This walkthrough follows a single package through the automated build and repair
 - Attempts are incremented by the control-plane when the job is leased.
 - Backoff prevents immediate repeat failures and reduces thundering herd.
 
+## Local Cache and Staging
+Workers use a local cache directory (default `/cache`) for transient files and build acceleration:
+- `/cache/plans`: Per-input plan snapshots written during planning.
+- `/cache/cas`: Staging for artifacts pulled from CAS before mounting into build containers.
+- `/cache/pip`: Pip download cache to reduce repeated fetches.
+
+These paths are local to the worker and separate from shared storage (Zot and MinIO).
+
 ## Live Log Streaming (Worker → Control-Plane → UI)
 Live logs are captured while the container runs and are visible in the UI without polling.
 
@@ -96,12 +155,22 @@ Live logs are captured while the container runs and are visible in the UI withou
 1) The worker opens a streaming connection to the control-plane (`POST /api/logs/stream/{name}/{version}`).
 2) As the runner emits stdout/stderr, the worker sends NDJSON log chunks over that stream.
 3) The control-plane stores each chunk in the `log_chunks` table and broadcasts it to connected UI clients.
-4) The UI pulls any existing chunks first (`GET /api/logs/chunks/{name}/{version}`), then keeps a WebSocket open to receive new chunks live.
+4) The UI pulls any existing chunks first (`GET /api/logs/chunks/{name}/{version}`), then keeps a WebSocket open (`GET /api/logs/stream/{name}/{version}`) to receive new chunks live.
 5) When the job finishes, the worker still posts the final summarized log entry to `/api/logs` for long-term storage and export.
+
+### Chunk payload format
+Each chunk is a JSON line with the fields below. If `seq` or `timestamp` are missing, the control-plane fills them in.
+```
+{"seq":12,"content":"building wheel...","timestamp":1700000000}
+```
 
 ### Why we keep both
 - **Chunks** give real-time tailing and preserve the raw stream.
 - **Log entries** give a single summarized snapshot for quick downloads and history.
+
+### Chunk retention
+- The control-plane trims old chunks when `LOG_CHUNK_MAX` is set.
+- Trimming happens periodically as chunks are ingested to keep log tables bounded.
 
 ## Auto-Fix Engine (Detailed)
 The auto-fix engine is the "intelligence" that turns logs into actionable changes.
@@ -200,6 +269,7 @@ Each build attempt writes an event with:
 ### Logs and manifests
 - Logs are stored and accessible via the UI.
 - Manifests track wheels, repairs, runtimes, and packs.
+- Live log chunks are stored in `log_chunks` for streaming and replay.
 
 ## UX Visibility (Where to Look)
 The system is automated but visible at every step:
@@ -207,10 +277,31 @@ The system is automated but visible at every step:
 - **Automation timeline** (package view) shows attempts, recipes, hint IDs, and blocks.
 - **Event detail panel** shows full automation metadata and log links.
 - **Build queue view** includes a recipes column for queued jobs.
+- **Build queue row details** show timestamps, plan/run IDs, and failure summaries.
+- **Log viewer** supports live tailing with search, wrap, highlights, and download links.
 - **Hints view** shows catalog entries and any auto-saved hints.
+
+## Seed Build Workflow (Quick Iteration)
+For fast iteration, use the seed script to upload a tiny requirements file, enqueue planning, enqueue builds, and tail logs.
+
+### Script
+- `scripts/seed-build.sh` (defaults to `six==1.16.0`)
+
+### Example
+```
+API_BASE=http://localhost:8080 PACKAGE=six VERSION=1.16.0 ./scripts/seed-build.sh
+```
+
+### What it does
+1) Uploads a requirements file.
+2) Enqueues the pending input for planning.
+3) Waits for the plan ID and enqueues its builds.
+4) Streams live log chunks until the build finishes.
 
 ## Configuration
 Key environment variables for automation:
+- `AUTO_PLAN` (control-plane: auto-enqueue uploads for planning)
+- `AUTO_BUILD` (worker: enable build queue auto-drain loop)
 - `AUTO_FIX_ENABLED` (default: true)
 - `AUTO_SAVE_HINTS` (default: true)
 - `AUTO_FIX_MIN_CONFIDENCE` (default: low)
@@ -218,6 +309,10 @@ Key environment variables for automation:
 - `REQUEUE_ON_FAILURE` (default: false)
 - `MAX_REQUEUE_ATTEMPTS` (default: 3)
 - `CONTROL_PLANE_URL` / `CONTROL_PLANE_TOKEN` (for hint access and status updates)
+- `BUILD_POLL_INTERVAL_SEC` (worker build loop cadence)
+- `PLAN_POLL_ENABLED` / `PLAN_POLL_INTERVAL_SEC` (worker plan polling cadence)
+- `BUILD_POOL_SIZE` / `PLAN_POOL_SIZE` (worker concurrency)
+- `LOG_CHUNK_MAX` (max log chunks to retain per build)
 - `REPAIR_PUSH_ENABLED` (default: false)
 - `REPAIR_TOOL_VERSION`, `REPAIR_POLICY_HASH`, `REPAIR_CMD` (repair settings)
 

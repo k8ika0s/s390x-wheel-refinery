@@ -1,0 +1,15 @@
+flowchart TD
+  A[Input uploaded] --> B[Pending input pending]
+  B -->|auto plan or manual enqueue| C[Pending input planning]
+  C --> D[Plan saved]
+  D --> E[Pending input planned]
+  E -->|auto build enabled| F[Builds enqueued]
+  E -->|manual enqueue builds| F
+  F --> G[Pending input queued]
+  G --> H[Build status pending]
+  H --> I[Build leased]
+  I --> J[Build building]
+  J -->|success| K[Build built]
+  J -->|failure and retry| L[Build retry]
+  L --> H
+  J -->|failure no retry| M[Build failed]
