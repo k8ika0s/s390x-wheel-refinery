@@ -95,8 +95,56 @@ body {
 .theme-light .bg-slate-900\/30 {
   background-color: rgba(226, 232, 240, 0.6);
 }
+.theme-light .bg-slate-800 {
+  background-color: #e5e7eb;
+}
+.theme-light .bg-slate-800\/30 {
+  background-color: rgba(226, 232, 240, 0.5);
+}
+.theme-light .bg-slate-800\/40 {
+  background-color: rgba(226, 232, 240, 0.65);
+}
+.theme-light .bg-slate-800\/60 {
+  background-color: rgba(226, 232, 240, 0.8);
+}
+.theme-light .bg-slate-800\/80 {
+  background-color: rgba(226, 232, 240, 0.9);
+}
+.theme-light .hover\:bg-slate-800\/30:hover {
+  background-color: rgba(226, 232, 240, 0.6);
+}
+.theme-light .hover\:bg-slate-800\/40:hover {
+  background-color: rgba(226, 232, 240, 0.75);
+}
+.theme-light .hover\:bg-slate-800\/60:hover {
+  background-color: rgba(226, 232, 240, 0.9);
+}
+.theme-light .hover\:bg-slate-800\/80:hover {
+  background-color: rgba(226, 232, 240, 0.95);
+}
+.theme-light .bg-emerald-900,
+.theme-light .bg-emerald-900\/70 {
+  background-color: #dcfce7;
+  color: #166534;
+}
+.theme-light .bg-amber-900\/60 {
+  background-color: #ffedd5;
+  color: #9a3412;
+}
+.theme-light .border-emerald-600 {
+  border-color: #86efac;
+}
+.theme-light .border-amber-600 {
+  border-color: #fdba74;
+}
+.theme-light .text-emerald-100 {
+  color: #166534;
+}
 .theme-light .border-border {
   border-color: #d7e0ec;
+}
+.theme-light .border-slate-800\/80 {
+  border-color: rgba(203, 213, 225, 0.8);
 }
 .theme-light .border-slate-800 {
   border-color: #d7e0ec;
@@ -111,13 +159,16 @@ body {
   color: #1f2937;
 }
 .theme-light .text-slate-300 {
-  color: #334155;
+  color: #1f2937;
 }
 .theme-light .text-slate-400 {
-  color: #475569;
+  color: #334155;
 }
 .theme-light .text-slate-500 {
-  color: #64748b;
+  color: #475569;
+}
+.theme-light .text-slate-50 {
+  color: #0f172a;
 }
 .theme-light .text-amber-200,
 .theme-light .text-amber-300 {
@@ -131,6 +182,22 @@ body {
 }
 .theme-light .text-sky-300 {
   color: #0369a1;
+}
+.theme-light th {
+  color: #334155;
+}
+.theme-light .nav-link {
+  color: #334155;
+}
+.theme-light .nav-link:hover {
+  color: #0ea5e9;
+}
+.theme-light .nav-link-active {
+  color: #0284c7;
+}
+.theme-light .stat-tile {
+  border-color: rgba(203, 213, 225, 0.9);
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.08), rgba(59, 130, 246, 0.05));
 }
 .theme-light .status.built,
 .theme-light .status.cached,
