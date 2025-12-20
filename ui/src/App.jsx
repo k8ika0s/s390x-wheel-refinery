@@ -70,6 +70,16 @@ const formatDuration = (seconds) => {
   if (minutes > 0) return `${minutes}m ${secs}s`;
   return `${secs}s`;
 };
+const buildStatusChipClass = (status) => {
+  const value = (status || "").toLowerCase();
+  if (value === "built") return "bg-emerald-500/20 text-emerald-200 border-emerald-500/40";
+  if (value === "building") return "bg-sky-500/20 text-sky-200 border-sky-500/40";
+  if (value === "leased") return "bg-indigo-500/20 text-indigo-200 border-indigo-500/40";
+  if (value === "retry") return "bg-amber-500/20 text-amber-200 border-amber-500/40";
+  if (value === "failed") return "bg-red-500/20 text-red-200 border-red-500/40";
+  if (value === "pending") return "bg-slate-700/30 text-slate-200 border-slate-600/50";
+  return "";
+};
 const workerHeartbeatThreshold = (worker) => {
   const interval = Number(worker?.heartbeat_interval_sec) || 15;
   return Math.max(interval * 2, 30);
@@ -77,6 +87,24 @@ const workerHeartbeatThreshold = (worker) => {
 const isWorkerOnline = (worker, nowSec) => {
   if (!worker?.last_seen) return false;
   return nowSec - Number(worker.last_seen) <= workerHeartbeatThreshold(worker);
+};
+const collectPulseKeys = (prevList, nextList, keyFn, sigFn) => {
+  const prevMap = new Map();
+  (prevList || []).forEach((item) => {
+    const key = keyFn(item);
+    if (!key) return;
+    prevMap.set(key, sigFn(item));
+  });
+  const pulse = new Set();
+  (nextList || []).forEach((item) => {
+    const key = keyFn(item);
+    if (!key) return;
+    const sig = sigFn(item);
+    if (!prevMap.has(key) || prevMap.get(key) !== sig) {
+      pulse.add(key);
+    }
+  });
+  return pulse;
 };
 const pickStatusSince = (build) => {
   if (!build) return 0;
@@ -602,7 +630,7 @@ function Summary({ summary }) {
   );
 }
 
-function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
+function EventsTable({ events, title = "Recent events", pageSize = 10, pulseKeys }) {
   const location = useLocation();
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState("timestamp");
@@ -663,8 +691,10 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
             </tr>
           </thead>
           <tbody>
-            {pageItems.map((e) => (
-              <tr key={`${e.name}-${e.version}-${e.timestamp}`} className="border-b border-slate-800">
+            {pageItems.map((e) => {
+              const pulseKey = `${e.name || ""}::${e.version || ""}::${e.status || ""}::${e.timestamp || ""}`;
+              return (
+                <tr key={`${e.name}-${e.version}-${e.timestamp}`} className={`border-b border-slate-800 ${pulseKeys?.[pulseKey] ? "flash-in" : ""}`}>
                 <td className="py-2"><span className={`status ${e.status}`}>{e.status}</span></td>
                 <td className="py-2">
                   <Link
@@ -681,7 +711,8 @@ function EventsTable({ events, title = "Recent events", pageSize = 10 }) {
                   {[e.detail, formatAutomationSummary(e.metadata)].filter(Boolean).join(" · ")}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -699,7 +730,7 @@ function TopList({ title, items, render }) {
   );
 }
 
-function PackageDetail({ token, pushToast, apiBase }) {
+function PackageDetail({ token, pushToast, apiBase, onPollPause }) {
   const { name } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -710,6 +741,8 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
+  const [lastLogTs, setLastLogTs] = useState(0);
+  const [logStreamStatus, setLogStreamStatus] = useState("idle");
   const logRef = useRef(null);
   const logStreamRef = useRef(null);
   const logAfterRef = useRef(0);
@@ -726,6 +759,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const backTarget = location.state?.from || "/builds";
   const buildVersion = buildFromState?.version || "";
   const isBuildActive = buildStatus && ["pending", "leased", "building", "retry"].includes(buildStatus.status);
+  const lastLogAge = lastLogTs ? formatDuration(Math.max(0, (Date.now() - lastLogTs) / 1000)) : "—";
 
   const load = useCallback(async (opts = {}) => {
     const soft = Boolean(opts.soft);
@@ -771,7 +805,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
     if (Array.isArray(chunks) && chunks.length) {
       chunks.forEach((chunk) => {
         if (chunk?.content) {
-          appendLogContent(chunk.content);
+          appendLogContent(chunk.content, chunk.timestamp);
         }
       });
       const lastId = chunks[chunks.length - 1]?.id;
@@ -783,15 +817,18 @@ function PackageDetail({ token, pushToast, apiBase }) {
 
   const startLogPolling = useCallback((ev) => {
     stopLogPolling();
+    setLogStreamStatus("polling");
     logPollRef.current = setInterval(() => {
       pollLogChunks(ev);
     }, 3000);
   }, [pollLogChunks, stopLogPolling]);
 
-  const appendLogContent = useCallback((chunk) => {
+  const appendLogContent = useCallback((chunk, ts) => {
     if (!chunk) return;
     const normalized = String(chunk).replace(/\n$/, "");
     setLogContent((prev) => (prev ? `${prev}\n${normalized}` : normalized));
+    const nextTs = ts ? toTimestampMs(ts) : Date.now();
+    setLastLogTs(nextTs);
   }, []);
 
   const loadLog = useCallback(async (ev, opts = {}) => {
@@ -813,6 +850,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
     logAfterRef.current = 0;
     if (!preserveContent) {
       setLogContent("");
+      setLastLogTs(0);
     }
     setMessage("");
     try {
@@ -828,11 +866,16 @@ function PackageDetail({ token, pushToast, apiBase }) {
         if (lastId) {
           logAfterRef.current = lastId;
         }
+        const lastTs = chunks[chunks.length - 1]?.timestamp;
+        if (lastTs) {
+          setLastLogTs(toTimestampMs(lastTs));
+        }
       } else {
         const resp = await fetchLog(eventName, eventVersion, token);
         const content = typeof resp === "string" ? resp : resp?.content;
         if (content) {
           setLogContent(content);
+          setLastLogTs(Date.now());
         } else {
           setMessage("No log content available");
         }
@@ -886,6 +929,13 @@ function PackageDetail({ token, pushToast, apiBase }) {
   }, [logContent, autoScroll]);
 
   useEffect(() => {
+    if (!onPollPause) return;
+    const paused = Boolean(watchBuildLog || selectedEvent);
+    onPollPause(paused);
+    return () => onPollPause(false);
+  }, [watchBuildLog, selectedEvent, onPollPause]);
+
+  useEffect(() => {
     load();
   }, [name, token, buildVersion, load]);
 
@@ -907,8 +957,10 @@ function PackageDetail({ token, pushToast, apiBase }) {
     if (!watchBuildLog || !buildStatus?.version) {
       closeLogStream();
       stopLogPolling();
+      setLogStreamStatus("idle");
       return;
     }
+    setLogStreamStatus("connecting");
     const ev = {
       name: buildStatus.package || name,
       version: buildStatus.version,
@@ -924,30 +976,36 @@ function PackageDetail({ token, pushToast, apiBase }) {
         ws = openLogStream(ev.name, ev.version, { after: logAfterRef.current, limit: 500 });
       } catch (e) {
         setMessage(e?.message || "Unable to open log stream.");
+        setLogStreamStatus("polling");
         startLogPolling(ev);
         return;
       }
       logStreamRef.current = ws;
+      ws.onopen = () => {
+        setLogStreamStatus("live");
+      };
       ws.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
           if (payload?.content) {
-            appendLogContent(payload.content);
+            appendLogContent(payload.content, payload.timestamp);
           }
           if (payload?.id) {
             logAfterRef.current = payload.id;
           }
         } catch {
-          appendLogContent(event.data);
+          appendLogContent(event.data, Date.now());
         }
       };
       ws.onerror = () => {
         setMessage("Log stream error. Falling back to polling.");
+        setLogStreamStatus("polling");
         startLogPolling(ev);
       };
       ws.onclose = () => {
         if (active) {
           setMessage("Log stream closed. Falling back to polling.");
+          setLogStreamStatus("polling");
           startLogPolling(ev);
         }
       };
@@ -1225,9 +1283,13 @@ function PackageDetail({ token, pushToast, apiBase }) {
             </div>
           )}
           {watchBuildLog && isBuildActive && (
-            <div className="text-xs text-slate-400">
-              Streaming logs (live). Output appears as the runner emits it.
+            <div className="text-xs text-slate-400 flex flex-wrap gap-3">
+              <span>Log tail: {logStreamStatus}</span>
+              <span>Last chunk: {lastLogAge}</span>
             </div>
+          )}
+          {watchBuildLog && isBuildActive && !logContent && (
+            <div className="text-xs text-slate-400">Waiting for first log chunk…</div>
           )}
           <StatCard title="Automation timeline">
             {automationTimeline.length ? (
@@ -1330,6 +1392,9 @@ function PackageDetail({ token, pushToast, apiBase }) {
                 <div className="text-base font-semibold">Log: {selectedEvent.name} {selectedEvent.version}</div>
                 <div className="flex items-center gap-2 text-xs text-slate-400">
                   <span>{formatTimestamp(selectedEvent.timestamp) || selectedEvent.timestamp}</span>
+                  {watchBuildLog && (
+                    <span className="chip chip-muted">{logStreamStatus} · {lastLogAge}</span>
+                  )}
                   <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => setAutoScroll((v) => !v)}>
                     Autoscroll: {autoScroll ? "on" : "off"}
                   </button>
@@ -1473,6 +1538,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planListLoading, setPlanListLoading] = useState(false);
   const [planListError, setPlanListError] = useState("");
   const [clearingPlans, setClearingPlans] = useState(false);
+  const [buildPulse, setBuildPulse] = useState({});
+  const [planPulse, setPlanPulse] = useState({});
+  const [eventPulse, setEventPulse] = useState({});
+  const [lastUpdated, setLastUpdated] = useState({});
+  const [pollPaused, setPollPaused] = useState(false);
   const desiredPlanIdRef = useRef(null);
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState(null);
@@ -1489,6 +1559,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planGraphFocus, setPlanGraphFocus] = useState(null);
   const nowSec = Math.floor(Date.now() / 1000);
   const planGraphViewportRef = useRef(null);
+  const prevBuildsRef = useRef([]);
+  const prevPlansRef = useRef([]);
+  const prevRecentRef = useRef([]);
   const [hintSearch, setHintSearch] = useState("");
   const [hintPage, setHintPage] = useState(1);
   const [hintQuery, setHintQuery] = useState("");
@@ -1508,6 +1581,45 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [isVisible, setIsVisible] = useState(
     () => (typeof document !== "undefined" ? document.visibilityState === "visible" : true),
   );
+  const addPulse = useCallback((setPulse, keys, ttlMs = 1400) => {
+    if (!keys || keys.size === 0) return;
+    const expiresAt = Date.now() + ttlMs;
+    setPulse((prev) => {
+      const next = { ...(prev || {}) };
+      keys.forEach((key) => {
+        if (!key) return;
+        const existing = next[key] || 0;
+        next[key] = Math.max(existing, expiresAt);
+      });
+      return next;
+    });
+    setTimeout(() => {
+      const now = Date.now();
+      setPulse((prev) => {
+        if (!prev) return prev;
+        let changed = false;
+        const next = { ...prev };
+        Object.keys(next).forEach((key) => {
+          if (next[key] <= now) {
+            delete next[key];
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+    }, ttlMs + 40);
+  }, []);
+  const markUpdated = useCallback((keys) => {
+    if (!keys || keys.length === 0) return;
+    const stamp = Date.now();
+    setLastUpdated((prev) => {
+      const next = { ...(prev || {}) };
+      keys.forEach((key) => {
+        next[key] = stamp;
+      });
+      return next;
+    });
+  }, []);
 
   const isValidDashboard = (data) => {
     if (!data || typeof data !== "object") return false;
@@ -1535,6 +1647,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     const wantsBuilds = activeView === "builds";
     const wantsWorkers = wantsBuilds || activeView === "settings";
     const wantsRecent = wantsOverview || wantsBuilds;
+    const updatedKeys = [];
     if (wantsBuilds) {
       setBuildsLoading(true);
     }
@@ -1623,15 +1736,29 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         });
         pendingPrevRef.current = pendingArr;
         setPendingInputs(pendingArr);
+        updatedKeys.push("inputs");
       }
       if (wantsBuilds) {
         const buildsList = await fetchBuilds({ status: buildStatus || undefined }, authToken).catch(() => null);
         if (Array.isArray(buildsList)) {
+          const prev = prevBuildsRef.current || [];
+          const pulseKeys = collectPulseKeys(
+            prev,
+            buildsList,
+            (b) => (b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version)),
+            (b) => `${b?.status || ""}|${b?.attempts || 0}|${b?.updated_at || 0}|${b?.failure_summary || ""}|${b?.last_error || ""}`,
+          );
+          if (prev.length) {
+            addPulse(setBuildPulse, pulseKeys);
+          }
+          prevBuildsRef.current = buildsList;
           setBuilds(buildsList);
+          updatedKeys.push("builds");
         }
       }
       if (wantsPlans && Array.isArray(planBuildList)) {
         setPlanBuilds(planBuildList);
+        updatedKeys.push("plans");
       }
       if (wantsWorkers) {
         if (Array.isArray(workersList)) {
@@ -1641,6 +1768,25 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           setWorkersError("Failed to load workers.");
         }
       }
+      if (wantsRecent) {
+        const prevRecent = prevRecentRef.current || [];
+        const pulseKeys = collectPulseKeys(
+          prevRecent,
+          data.recent,
+          (e) => {
+            const n = normalizeEvent(e) || {};
+            return `${n.name || ""}::${n.version || ""}::${n.status || ""}::${n.timestamp || ""}`;
+          },
+          (e) => {
+            const n = normalizeEvent(e) || {};
+            return `${n.status || ""}|${n.timestamp || ""}|${n.detail || ""}`;
+          },
+        );
+        if (prevRecent.length) {
+          addPulse(setEventPulse, pulseKeys);
+        }
+        prevRecentRef.current = data.recent;
+      }
       setDashboard((prev) => ({
         summary: data.summary ?? prev?.summary ?? null,
         recent: data.recent ?? prev?.recent ?? [],
@@ -1649,6 +1795,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         queue: data.queue ?? prev?.queue ?? null,
         metrics: data.metrics ?? prev?.metrics ?? null,
       }));
+      if (wantsOverview) {
+        updatedKeys.push("overview");
+      }
+      if (wantsQueues) {
+        updatedKeys.push("queues");
+      }
+      markUpdated(updatedKeys);
       onMetrics?.(data.metrics);
       onApiStatus?.("ok");
       apiToastShown.current = false;
@@ -1761,6 +1914,17 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     try {
       const list = await fetchPlans(20, authToken);
       const items = Array.isArray(list) ? list : [];
+      const prev = prevPlansRef.current || [];
+      const pulseKeys = collectPulseKeys(
+        prev,
+        items,
+        (p) => (p?.id ? `plan:${p.id}` : ""),
+        (p) => `${p?.queued ? "1" : "0"}|${p?.build_count || 0}|${p?.node_count || 0}|${p?.run_id || ""}`,
+      );
+      if (prev.length) {
+        addPulse(setPlanPulse, pulseKeys);
+      }
+      prevPlansRef.current = items;
       setPlanList(items);
       if (items.length > 0) {
         const ids = new Set(items.map((p) => p.id));
@@ -1775,6 +1939,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         setSelectedPlanId(null);
         setSelectedPlan(null);
       }
+      markUpdated(["plans"]);
     } catch (e) {
       setPlanListError(e.message || "Failed to load plans.");
     } finally {
@@ -1847,11 +2012,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     },
   });
 
+  const pollSuspended = pollPaused || planGraphOpen;
   useEffect(() => {
-    if (!pollMs || apiBlocked || !isVisible) return;
+    if (!pollMs || apiBlocked || !isVisible || pollSuspended) return;
     const id = setInterval(() => load({ packageFilter: pkgFilter, statusFilter, view: viewKey }), pollMs);
     return () => clearInterval(id);
-  }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit, apiBlocked, isVisible, viewKey]);
+  }, [pollMs, authToken, pkgFilter, statusFilter, recentLimit, apiBlocked, isVisible, viewKey, pollSuspended]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -2266,6 +2432,36 @@ const enqueuePlanForInput = async (pi, verb) => {
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = toArray(hintsState);
   const metrics = dashboard?.metrics;
+  const buildStatusCounts = builds.reduce(
+    (acc, b) => {
+      const status = (b?.status || "").toLowerCase();
+      if (status === "building" || status === "leased") acc.active += 1;
+      if (status === "pending" || status === "retry") acc.queued += 1;
+      if (status === "failed") acc.failed += 1;
+      if (status === "built") acc.built += 1;
+      return acc;
+    },
+    { active: 0, queued: 0, failed: 0, built: 0 },
+  );
+  const pollState = !pollMs
+    ? "off"
+    : apiBlocked
+    ? "blocked"
+    : !isVisible
+    ? "hidden"
+    : pollSuspended
+    ? "paused"
+    : "live";
+  const pollStateClass = pollState === "live"
+    ? "text-emerald-300"
+    : pollState === "paused"
+    ? "text-amber-200"
+    : pollState === "blocked"
+    ? "text-red-300"
+    : "text-slate-400";
+  const updatedBuildsLabel = lastUpdated.builds ? formatTimestamp(lastUpdated.builds) : "—";
+  const updatedPlansLabel = lastUpdated.plans ? formatTimestamp(lastUpdated.plans) : "—";
+  const updatedOverviewLabel = lastUpdated.overview ? formatTimestamp(lastUpdated.overview) : "—";
   const workerList = toArray(workers);
   const workerMetrics = metrics?.workers || {};
   const workerTotal = Number.isFinite(workerMetrics.total) ? workerMetrics.total : workerList.length;
@@ -2800,6 +2996,9 @@ const enqueuePlanForInput = async (pi, verb) => {
                 <div className="text-emerald-300">All systems nominal.</div>
               )}
             </div>
+            <div className="text-xs text-slate-400">
+              Last updated: {updatedOverviewLabel} · Polling: <span className={pollStateClass}>{pollState}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -2895,8 +3094,7 @@ const enqueuePlanForInput = async (pi, verb) => {
           </StatCard>
         )}
       </div>
-
-      <EventsTable events={filteredRecent} pageSize={8} />
+      <EventsTable events={filteredRecent} pageSize={8} pulseKeys={eventPulse} />
     </>
   );
 
@@ -3193,19 +3391,23 @@ const enqueuePlanForInput = async (pi, verb) => {
           <div className="text-xs text-slate-400">
             Plan queue: {planQueueLength}. Auto-build is {settingsData?.auto_build ? "on" : "off"}.
           </div>
+          <div className="text-xs text-slate-400">
+            Last updated: {updatedPlansLabel} · Polling: <span className={pollStateClass}>{pollState}</span>
+          </div>
           {planListLoading ? (
             <div className="text-xs text-slate-500">Loading plans…</div>
           ) : planList.length ? (
             <div className="space-y-2 max-h-80 overflow-auto text-sm">
               {planList.map((plan) => {
                 const selected = plan.id === selectedPlanId;
+                const pulseKey = plan?.id ? `plan:${plan.id}` : "";
                 return (
                   <button
                     key={plan.id}
                     aria-pressed={selected}
                     className={`w-full text-left border rounded-lg p-2 transition ${
                       selected ? "bg-slate-800/80 border-sky-500/70 shadow-lg shadow-sky-900/30" : "border-border hover:bg-slate-800/30"
-                    }`}
+                    } ${pulseKey && planPulse[pulseKey] ? "flash-in" : ""}`}
                     onClick={() => setSelectedPlanId(plan.id)}
                   >
                     <div className="flex items-center justify-between">
@@ -3546,7 +3748,16 @@ const enqueuePlanForInput = async (pi, verb) => {
                 </button>
               ))}
             </div>
-            <div className="text-xs text-slate-400">Oldest queued: {buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}</div>
+            <div className="text-xs text-slate-400 flex flex-wrap gap-3">
+              <span>Oldest queued: {buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}</span>
+              <span>Active: {buildStatusCounts.active}</span>
+              <span>Queued: {buildStatusCounts.queued}</span>
+              <span>Failed: {buildStatusCounts.failed}</span>
+              <span>Built: {buildStatusCounts.built}</span>
+            </div>
+            <div className="text-xs text-slate-400">
+              Last updated: {updatedBuildsLabel} · Polling: <span className={pollStateClass}>{pollState}</span>
+            </div>
             {workerTotal > 0 ? (
               <div className="text-xs text-slate-400 flex flex-wrap gap-3">
                 <span>Workers online: {workerOnline}/{workerTotal}</span>
@@ -3598,10 +3809,11 @@ const enqueuePlanForInput = async (pi, verb) => {
                         const statusSince = pickStatusSince(b);
                         const statusAge = statusSince ? formatDuration(Math.max(0, nowSec - statusSince)) : "—";
                         const errorLabel = b.failure_summary || b.last_error || "-";
+                        const pulseKey = b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version);
                         return (
                           <tr
                             key={b.id ?? `${b.package}-${b.version}-${idx}`}
-                            className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/40"
+                            className={`border-t border-slate-800 cursor-pointer hover:bg-slate-900/40 ${buildPulse[pulseKey] ? "flash-in" : ""}`}
                             onClick={() =>
                               navigate(`/package/${encodeURIComponent(b.package)}`, {
                                 state: { from: `${location.pathname}${location.search}`, build: b },
@@ -3612,7 +3824,7 @@ const enqueuePlanForInput = async (pi, verb) => {
                             <td className="px-2 py-2">{b.package}</td>
                             <td className="px-2 py-2">{b.version}</td>
                             <td className="px-2 py-2">
-                              <span className="chip">{b.status}</span>
+                              <span className={`chip ${buildStatusChipClass(b.status)}`}>{b.status}</span>
                             </td>
                             <td className="px-2 py-2 text-slate-400">{statusAge}</td>
                             <td className="px-2 py-2">{b.attempts ?? 0}</td>
@@ -3730,7 +3942,7 @@ const enqueuePlanForInput = async (pi, verb) => {
               </div>
             </div>
           </div>
-          <EventsTable events={filteredRecent} />
+          <EventsTable events={filteredRecent} pulseKeys={eventPulse} />
         </div>
       </div>
     </div>
@@ -4235,7 +4447,10 @@ export default function App() {
         <Route path="/builds" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="builds" />} />
         <Route path="/hints" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="hints" />} />
         <Route path="/settings" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="settings" />} />
-        <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} apiBase={apiBase} />} />
+        <Route
+          path="/package/:name"
+          element={<PackageDetail token={token} pushToast={pushToast} apiBase={apiBase} onPollPause={setPollPaused} />}
+        />
       </Routes>
       <Toasts toasts={toasts} onDismiss={dismissToast} />
     </Layout>
