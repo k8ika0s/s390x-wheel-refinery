@@ -339,6 +339,9 @@ input:focus-visible {
 .status.pending {
   @apply text-sky-300;
 }
+.status.leased {
+  @apply text-slate-300;
+}
 .status.retry {
   @apply text-amber-300;
 }

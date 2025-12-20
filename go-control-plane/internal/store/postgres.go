@@ -1399,7 +1399,7 @@ func (p *PostgresStore) PlanSnapshot(ctx context.Context, planID int64) (PlanSna
 		       EXISTS (
 		         SELECT 1 FROM build_status bs
 		         WHERE bs.plan_id = p.id
-		           AND bs.status IN ('pending','retry','building')
+		           AND bs.status IN ('pending','retry','leased','building')
 		       ) AS queued
 		FROM plans p
 		WHERE p.id = $1
@@ -1435,7 +1435,7 @@ func (p *PostgresStore) LatestPlanSnapshot(ctx context.Context) (PlanSnapshot, e
 		       EXISTS (
 		         SELECT 1 FROM build_status bs
 		         WHERE bs.plan_id = p.id
-		           AND bs.status IN ('pending','retry','building')
+		           AND bs.status IN ('pending','retry','leased','building')
 		       ) AS queued
 		FROM plans p
 		ORDER BY created_at DESC
@@ -1474,7 +1474,7 @@ func (p *PostgresStore) ListPlans(ctx context.Context, limit int) ([]PlanSummary
 		       EXISTS (
 		         SELECT 1 FROM build_status bs
 		         WHERE bs.plan_id = p.id
-		           AND bs.status IN ('pending','retry','building')
+		           AND bs.status IN ('pending','retry','leased','building')
 		       ) AS queued
 		FROM plans p
 		ORDER BY p.created_at DESC
@@ -1540,7 +1540,7 @@ func (p *PostgresStore) QueueBuildsFromPlan(ctx context.Context, runID string, p
 	return tx.Commit()
 }
 
-// LeaseBuilds returns ready builds and marks them building with attempt increment.
+// LeaseBuilds returns ready builds and marks them leased with attempt increment.
 func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err
@@ -1564,7 +1564,7 @@ func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int) ([]BuildStatus
 			LIMIT $1
 		)
 		UPDATE build_status b
-		SET status = 'building',
+		SET status = 'leased',
 		    attempts = b.attempts + 1,
 		    updated_at = NOW()
 		FROM cte

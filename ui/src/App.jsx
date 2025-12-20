@@ -3422,7 +3422,7 @@ const enqueuePlanForInput = async (pi, verb) => {
               </div>
             </div>
             <div className="flex flex-wrap gap-2 text-sm">
-              {["", "pending", "retry", "building", "failed", "built"].map((s) => (
+              {["", "pending", "leased", "retry", "building", "failed", "built"].map((s) => (
                 <button
                   key={s || "all"}
                   className={`chip ${buildStatusFilter === s ? "chip-active" : "hover:bg-slate-800"} ${buildsLoading ? "opacity-60 cursor-wait" : ""}`}
