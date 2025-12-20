@@ -26,6 +26,7 @@ type Config struct {
 	AutoPlan            bool
 	AutoBuild           bool
 	BuildLeaseTimeout   int
+	LogChunkMax         int
 	HintsDir            string
 	SeedHints           bool
 	ObjectStoreEndpoint string
@@ -62,6 +63,7 @@ func FromEnv() Config {
 		AutoPlan:            getenv("AUTO_PLAN", "0") != "0",
 		AutoBuild:           getenv("AUTO_BUILD", "0") != "0",
 		BuildLeaseTimeout:   getenvInt("BUILD_LEASE_TIMEOUT_SEC", 600),
+		LogChunkMax:         getenvInt("LOG_CHUNK_MAX", 5000),
 		HintsDir:            getenv("HINTS_DIR", "/hints"),
 		SeedHints:           getenv("HINTS_SEED", "1") != "0",
 		ObjectStoreEndpoint: getenv("OBJECT_STORE_ENDPOINT", ""),

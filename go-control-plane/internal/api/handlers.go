@@ -2103,6 +2103,12 @@ func (h *Handler) logsByNameVersion(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	raw := r.URL.Query().Get("raw")
+	if raw == "1" || strings.EqualFold(raw, "true") || strings.Contains(r.Header.Get("Accept"), "text/plain") {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(logEntry.Content))
+		return
+	}
 	writeJSON(w, http.StatusOK, logEntry)
 }
 
@@ -2134,7 +2140,15 @@ func (h *Handler) logsChunks(w http.ResponseWriter, r *http.Request) {
 	name, version := parts[3], parts[4]
 	after := parseInt64Default(r.URL.Query().Get("after"), 0)
 	limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 2000)
-	chunks, err := h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+	tail := r.URL.Query().Get("tail")
+	tailOn := tail == "1" || strings.EqualFold(tail, "true")
+	var chunks []store.LogChunk
+	var err error
+	if tailOn {
+		chunks, err = h.Store.TailLogChunks(r.Context(), name, version, limit)
+	} else {
+		chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2202,6 +2216,9 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
+			if h.Config.LogChunkMax > 0 {
+				_, _ = h.Store.TrimLogChunks(r.Context(), name, version, h.Config.LogChunkMax)
+			}
 			chunk.ID = id
 			h.getLogHub().publish(key, chunk)
 		}
@@ -2213,11 +2230,19 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		after := parseInt64Default(r.URL.Query().Get("after"), 0)
 		limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 2000)
+		tail := r.URL.Query().Get("tail")
+		tailOn := tail == "1" || strings.EqualFold(tail, "true")
 		key := logStreamKey(name, version)
 		websocket.Handler(func(ws *websocket.Conn) {
 			defer ws.Close()
 			if h.Store != nil {
-				chunks, err := h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+				var chunks []store.LogChunk
+				var err error
+				if tailOn {
+					chunks, err = h.Store.TailLogChunks(r.Context(), name, version, limit)
+				} else {
+					chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+				}
 				if err == nil {
 					for _, chunk := range chunks {
 						_ = websocket.JSON.Send(ws, chunk)

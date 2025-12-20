@@ -223,6 +223,8 @@ type Store interface {
 	PutLog(ctx context.Context, entry LogEntry) error
 	PutLogChunk(ctx context.Context, chunk LogChunk) (int64, error)
 	ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]LogChunk, error)
+	TailLogChunks(ctx context.Context, name, version string, limit int) ([]LogChunk, error)
+	TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error)
 
 	// Plan/Manifest/Artifacts
 	Plan(ctx context.Context) ([]PlanNode, error)

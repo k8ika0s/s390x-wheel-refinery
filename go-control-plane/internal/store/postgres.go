@@ -1263,6 +1263,80 @@ func (p *PostgresStore) ListLogChunks(ctx context.Context, name, version string,
 	return out, rows.Err()
 }
 
+// TailLogChunks returns the newest log chunks in ascending order.
+func (p *PostgresStore) TailLogChunks(ctx context.Context, name, version string, limit int) ([]LogChunk, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	rows, err := p.db.QueryContext(ctx, `
+	    SELECT id,name,version,COALESCE(run_id,''),COALESCE(attempt,0),COALESCE(seq,0),content,extract(epoch from timestamp)::bigint
+	    FROM log_chunks
+	    WHERE name=$1 AND version=$2
+	    ORDER BY id DESC LIMIT $3`, name, version, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LogChunk
+	for rows.Next() {
+		var chunk LogChunk
+		if err := rows.Scan(
+			&chunk.ID,
+			&chunk.Name,
+			&chunk.Version,
+			&chunk.RunID,
+			&chunk.Attempt,
+			&chunk.Seq,
+			&chunk.Content,
+			&chunk.Timestamp,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, chunk)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Reverse to maintain ascending order for UI playback.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}
+
+// TrimLogChunks keeps only the newest max chunks for a log stream.
+func (p *PostgresStore) TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	if max <= 0 {
+		return 0, nil
+	}
+	res, err := p.db.ExecContext(ctx, `
+	    WITH cutoff AS (
+	        SELECT id
+	        FROM log_chunks
+	        WHERE name=$1 AND version=$2
+	        ORDER BY id DESC
+	        OFFSET $3 LIMIT 1
+	    )
+	    DELETE FROM log_chunks
+	    WHERE name=$1 AND version=$2
+	      AND id < (SELECT id FROM cutoff)
+	`, name, version, max)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
 func (p *PostgresStore) SearchLogs(ctx context.Context, q string, limit int) ([]LogEntry, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err

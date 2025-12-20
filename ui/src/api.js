@@ -286,9 +286,13 @@ export function fetchLog(name, version, token) {
   return request(`/api/logs/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, {}, token);
 }
 
-export function fetchLogChunks(name, version, { after = 0, limit = 500 } = {}, token) {
+export function fetchLogChunks(name, version, { after = 0, limit = 500, tail = false } = {}, token) {
   const params = new URLSearchParams();
-  if (after) params.set("after", after);
+  if (tail) {
+    params.set("tail", "1");
+  } else if (after) {
+    params.set("after", after);
+  }
   if (limit) params.set("limit", limit);
   const qs = params.toString();
   return request(`/api/logs/chunks/${encodeURIComponent(name)}/${encodeURIComponent(version)}${qs ? `?${qs}` : ""}`, {}, token);

@@ -89,6 +89,12 @@ func (f *fakeStore) PutLogChunk(ctx context.Context, chunk store.LogChunk) (int6
 func (f *fakeStore) ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]store.LogChunk, error) {
 	return nil, nil
 }
+func (f *fakeStore) TailLogChunks(ctx context.Context, name, version string, limit int) ([]store.LogChunk, error) {
+	return nil, nil
+}
+func (f *fakeStore) TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error) {
+	return 0, nil
+}
 func (f *fakeStore) Plan(ctx context.Context) ([]store.PlanNode, error) {
 	return f.lastPlan, nil
 }

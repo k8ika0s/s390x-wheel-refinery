@@ -704,6 +704,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const logRef = useRef(null);
   const logStreamRef = useRef(null);
   const logAfterRef = useRef(0);
+  const logPollRef = useRef(null);
   const [tab, setTab] = useState("overview");
   const buildFromState = location.state?.build || null;
   const [buildStatus, setBuildStatus] = useState(buildFromState);
@@ -748,6 +749,36 @@ function PackageDetail({ token, pushToast, apiBase }) {
     }
   }, []);
 
+  const stopLogPolling = useCallback(() => {
+    if (logPollRef.current) {
+      clearInterval(logPollRef.current);
+      logPollRef.current = null;
+    }
+  }, []);
+
+  const pollLogChunks = useCallback(async (ev) => {
+    if (!ev?.name || !ev?.version) return;
+    const chunks = await fetchLogChunks(ev.name, ev.version, { after: logAfterRef.current, limit: 200 }, token).catch(() => []);
+    if (Array.isArray(chunks) && chunks.length) {
+      chunks.forEach((chunk) => {
+        if (chunk?.content) {
+          appendLogContent(chunk.content);
+        }
+      });
+      const lastId = chunks[chunks.length - 1]?.id;
+      if (lastId) {
+        logAfterRef.current = lastId;
+      }
+    }
+  }, [appendLogContent, token]);
+
+  const startLogPolling = useCallback((ev) => {
+    stopLogPolling();
+    logPollRef.current = setInterval(() => {
+      pollLogChunks(ev);
+    }, 3000);
+  }, [pollLogChunks, stopLogPolling]);
+
   const appendLogContent = useCallback((chunk) => {
     if (!chunk) return;
     const normalized = String(chunk).replace(/\n$/, "");
@@ -776,7 +807,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
     }
     setMessage("");
     try {
-      const chunks = await fetchLogChunks(eventName, eventVersion, { limit: 1000 }, token).catch(() => []);
+      const chunks = await fetchLogChunks(eventName, eventVersion, { limit: 500, tail: true }, token).catch(() => []);
       if (Array.isArray(chunks) && chunks.length) {
         const combined = chunks.map((c) => c.content || "").filter(Boolean).join("\n");
         if (combined) {
@@ -866,6 +897,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   useEffect(() => {
     if (!watchBuildLog || !buildStatus?.version) {
       closeLogStream();
+      stopLogPolling();
       return;
     }
     const ev = {
@@ -877,11 +909,13 @@ function PackageDetail({ token, pushToast, apiBase }) {
     loadLog(ev, { silent: true, preserveContent: true }).then(() => {
       if (!active) return;
       closeLogStream();
+      stopLogPolling();
       let ws;
       try {
         ws = openLogStream(ev.name, ev.version, { after: logAfterRef.current, limit: 500 });
       } catch (e) {
         setMessage(e?.message || "Unable to open log stream.");
+        startLogPolling(ev);
         return;
       }
       logStreamRef.current = ws;
@@ -899,17 +933,20 @@ function PackageDetail({ token, pushToast, apiBase }) {
         }
       };
       ws.onerror = () => {
-        setMessage("Log stream error. Falling back to stored logs.");
+        setMessage("Log stream error. Falling back to polling.");
+        startLogPolling(ev);
       };
       ws.onclose = () => {
         if (active) {
-          setMessage("Log stream closed.");
+          setMessage("Log stream closed. Falling back to polling.");
+          startLogPolling(ev);
         }
       };
     });
     return () => {
       active = false;
       closeLogStream();
+      stopLogPolling();
     };
   }, [
     watchBuildLog,
@@ -920,6 +957,8 @@ function PackageDetail({ token, pushToast, apiBase }) {
     name,
     loadLog,
     closeLogStream,
+    stopLogPolling,
+    startLogPolling,
     appendLogContent,
   ]);
 
@@ -962,7 +1001,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const failuresArr = toArray(failures).map(normalizeEvent);
   const eventsArr = toArray(events).map(normalizeEvent);
   const hintsArr = toArray(hints);
-  const logDownloadHref = selectedEvent ? `${apiBase || ""}/api/logs/${selectedEvent.name}/${selectedEvent.version}` : null;
+  const logDownloadHref = selectedEvent ? `${apiBase || ""}/api/logs/${selectedEvent.name}/${selectedEvent.version}?raw=1` : null;
 
   const variantsPaged = paged(variantsArr, variantPage);
   const failuresPaged = paged(failuresArr, failurePage);
@@ -1278,8 +1317,14 @@ function PackageDetail({ token, pushToast, apiBase }) {
                     Autoscroll: {autoScroll ? "on" : "off"}
                   </button>
                   {logDownloadHref && (
-                    <a className="btn btn-secondary px-2 py-1 text-xs" href={logDownloadHref} target="_blank" rel="noreferrer">
-                      Open log
+                    <a
+                      className="btn btn-secondary px-2 py-1 text-xs"
+                      href={logDownloadHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      download={`${selectedEvent.name}-${selectedEvent.version}.log`}
+                    >
+                      Download log
                     </a>
                   )}
                   {logDownloadHref && (

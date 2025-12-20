@@ -56,10 +56,10 @@ This draft captures the intended endpoints for the Go control plane, matching th
 - `DELETE /hints/{id}` → delete.
 
 **Logs**
-- `GET /logs/{name}/{version}` → log content/metadata (latest stored entry).
+- `GET /logs/{name}/{version}` → log content/metadata (latest stored entry); `?raw=1` returns plain text.
 - `GET /logs/search?q=&limit=` → simple text search over logs.
 - `POST /logs` → ingest/store a full log entry (name/version/content/timestamp auto-set if omitted).
-- `GET /logs/chunks/{name}/{version}?after=&limit=` → list stored log chunks (for replay).
+- `GET /logs/chunks/{name}/{version}?after=&limit=` → list stored log chunks (for replay); `tail=1` returns the newest chunks.
 - `POST /logs/stream/{name}/{version}` → worker streaming ingest (NDJSON chunks).
 - `GET /logs/stream/{name}/{version}?after=&limit=` → WebSocket stream of log chunks (live tail).
 
