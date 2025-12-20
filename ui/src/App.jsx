@@ -730,7 +730,7 @@ function TopList({ title, items, render }) {
   );
 }
 
-function PackageDetail({ token, pushToast, apiBase, onPollPause }) {
+function PackageDetail({ token, pushToast, apiBase }) {
   const { name } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -759,6 +759,7 @@ function PackageDetail({ token, pushToast, apiBase, onPollPause }) {
   const backTarget = location.state?.from || "/builds";
   const buildVersion = buildFromState?.version || "";
   const isBuildActive = buildStatus && ["pending", "leased", "building", "retry"].includes(buildStatus.status);
+  const pauseStatusPolling = Boolean(selectedEvent || watchBuildLog);
   const lastLogAge = lastLogTs ? formatDuration(Math.max(0, (Date.now() - lastLogTs) / 1000)) : "—";
 
   const load = useCallback(async (opts = {}) => {
@@ -929,13 +930,6 @@ function PackageDetail({ token, pushToast, apiBase, onPollPause }) {
   }, [logContent, autoScroll]);
 
   useEffect(() => {
-    if (!onPollPause) return;
-    const paused = Boolean(watchBuildLog || selectedEvent);
-    onPollPause(paused);
-    return () => onPollPause(false);
-  }, [watchBuildLog, selectedEvent, onPollPause]);
-
-  useEffect(() => {
     load();
   }, [name, token, buildVersion, load]);
 
@@ -946,12 +940,12 @@ function PackageDetail({ token, pushToast, apiBase, onPollPause }) {
   }, [buildFromState, name]);
 
   useEffect(() => {
-    if (!isBuildActive) return;
+    if (!isBuildActive || pauseStatusPolling) return;
     const id = setInterval(() => {
       refreshBuildStatus({ silent: true, keepExisting: true });
     }, 5000);
     return () => clearInterval(id);
-  }, [isBuildActive, refreshBuildStatus]);
+  }, [isBuildActive, pauseStatusPolling, refreshBuildStatus]);
 
   useEffect(() => {
     if (!watchBuildLog || !buildStatus?.version) {
@@ -1542,7 +1536,6 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [planPulse, setPlanPulse] = useState({});
   const [eventPulse, setEventPulse] = useState({});
   const [lastUpdated, setLastUpdated] = useState({});
-  const [pollPaused, setPollPaused] = useState(false);
   const desiredPlanIdRef = useRef(null);
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState(null);
@@ -2012,7 +2005,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     },
   });
 
-  const pollSuspended = pollPaused || planGraphOpen;
+  const pollSuspended = planGraphOpen;
   useEffect(() => {
     if (!pollMs || apiBlocked || !isVisible || pollSuspended) return;
     const id = setInterval(() => load({ packageFilter: pkgFilter, statusFilter, view: viewKey }), pollMs);
@@ -4447,10 +4440,7 @@ export default function App() {
         <Route path="/builds" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="builds" />} />
         <Route path="/hints" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="hints" />} />
         <Route path="/settings" element={<Dashboard token={token} onTokenChange={setToken} pushToast={pushToast} onMetrics={setMetrics} onApiStatus={setApiStatus} apiBase={apiBase} onApiBaseChange={setApiBase} view="settings" />} />
-        <Route
-          path="/package/:name"
-          element={<PackageDetail token={token} pushToast={pushToast} apiBase={apiBase} onPollPause={setPollPaused} />}
-        />
+        <Route path="/package/:name" element={<PackageDetail token={token} pushToast={pushToast} apiBase={apiBase} />} />
       </Routes>
       <Toasts toasts={toasts} onDismiss={dismissToast} />
     </Layout>
