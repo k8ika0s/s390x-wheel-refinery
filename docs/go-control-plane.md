@@ -3,7 +3,7 @@
 We want a fast, scalable API service in Go that acts as the “traffic controller” for the wheel refinery. In simple terms, this service will: show status to the dashboard, keep track of what’s been built and what’s pending, let us request new builds or retries, and trigger the worker that actually builds wheels. It will talk to storage (for history, hints, queue) and expose clean endpoints the UI and automation can call.
 
 ### What it must do (high level)
-- Drive the UI: serve JSON for dashboards, history, per-package views, hints, logs, metrics, build plans, manifests, and artifact links.
+- Drive the UI: serve JSON for dashboards, history, per-package views, hints, logs, metrics, build plans, manifests, artifact links, and live log streams.
 - Orchestrate work: enqueue retries/builds, expose queue state (length, items, oldest age), trigger worker (local/webhook), and publish the build plan/graph.
 - Talk to storage: read/write history/events, manifests, hint catalog (CRUD), queue state; expose cache stats (hit/miss) and log references.
 - AuthN/Z: token-based protection for write actions; leave read-only endpoints open or optionally protected.
@@ -22,11 +22,11 @@ We want a fast, scalable API service in Go that acts as the “traffic controlle
 
 ### First implementation steps (proposed)
 1) Define API spec (OpenAPI/JSON schemas) for: summary, recent/history search (pagination/filters), plan, manifest/artifacts, queue ops (list/enqueue/clear/stats), worker trigger (local/webhook), hint CRUD, log fetch/search, metrics/health, config view.
-2) Storage wiring: Postgres schema for history/hints/logs/manifests; queue interface with file backend first, Redis/Kafka adapters sketched; log records stored in DB with optional file refs.
+2) Storage wiring: Postgres schema for history/hints/logs/log chunks/manifests; queue interface with file backend first, Redis/Kafka adapters sketched; log records stored in DB with optional file refs.
 3) Implement read-only endpoints first (summary/recent/history, plan/manifest/artifacts, hints read, logs read, metrics/health, config) to unblock UI wiring.
 4) Add queue/enqueue/clear/stats and worker trigger (webhook/local) with token stub; expose queue length and oldest age.
 5) Add hint CRUD endpoints; record matched hint ids on events; validation for patterns/recipes.
-6) Add log search/tail endpoint (basic text search over stored logs).
+6) Add log search/tail endpoint (basic text search over stored logs) plus live log streaming.
 7) Observability: health/readiness, structured logging, Prometheus metrics (optional, not a blocker). Metrics endpoint is stubbed until Prometheus is wired—documented explicitly so it is not surprising.
 
 ### Endpoint draft (coarse)
@@ -35,7 +35,7 @@ We want a fast, scalable API service in Go that acts as the “traffic controlle
 - `GET /queue`, `POST /queue/enqueue`, `POST /queue/clear`, `GET /queue/stats` (length, oldest age).
 - `POST /worker/trigger` (local or webhook based on config), optional `POST /worker/smoke`.
 - `GET /hints`, `POST/PUT/DELETE /hints/{id}`.
-- `GET /logs/{name}/{version}`, `GET /logs/search`.
+- `GET /logs/{name}/{version}`, `GET /logs/search`, `GET /logs/chunks/{name}/{version}`, `GET /logs/stream/{name}/{version}` (WebSocket).
 - `GET /metrics`, `GET /health`, `GET /config`.
 Auth: stubbed (open for now); reserve header/query/cookie token for future writes.
 

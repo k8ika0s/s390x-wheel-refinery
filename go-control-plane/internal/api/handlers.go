@@ -2,6 +2,7 @@ package api
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
@@ -22,6 +24,7 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
+	"golang.org/x/net/websocket"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,6 +35,8 @@ type Handler struct {
 	PlanQ      queue.PlanQueueBackend
 	InputStore objectstore.Store
 	Config     config.Config
+	logHubOnce sync.Once
+	logHub     *logHub
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
@@ -79,7 +84,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs/", h.logsByNameVersion)
 	mux.HandleFunc("/api/logs/search", h.logsSearch)
 	mux.HandleFunc("/api/logs", h.logsIngest)
-	mux.HandleFunc("/api/logs/stream", h.logsStream)
+	mux.HandleFunc("/api/logs/stream/", h.logsStream)
+	mux.HandleFunc("/api/logs/chunks/", h.logsChunks)
 	mux.HandleFunc("/api/worker/trigger", h.workerTrigger)
 	mux.HandleFunc("/api/worker/smoke", h.workerSmoke)
 }
@@ -2112,30 +2118,123 @@ func (h *Handler) logsSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
-func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) logsChunks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 	parts := splitPath(r.URL.Path)
-	if len(parts) < 4 {
+	if len(parts) < 5 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name/version required"})
 		return
 	}
-	name, version := parts[2], parts[3]
-	entry, err := h.Store.GetLog(r.Context(), name, version)
+	name, version := parts[3], parts[4]
+	after := parseInt64Default(r.URL.Query().Get("after"), 0)
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 2000)
+	chunks, err := h.Store.ListLogChunks(r.Context(), name, version, after, limit)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("event: log\n"))
-	payload, _ := json.Marshal(entry)
-	_, _ = w.Write([]byte("data: " + string(payload) + "\n\n"))
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
+	writeJSON(w, http.StatusOK, chunks)
+}
+
+func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
+	parts := splitPath(r.URL.Path)
+	if len(parts) < 5 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name/version required"})
+		return
+	}
+	name, version := parts[3], parts[4]
+	switch r.Method {
+	case http.MethodPost:
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		if h.Store == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store not configured"})
+			return
+		}
+		runID := r.URL.Query().Get("run_id")
+		attempt := parseIntDefault(r.URL.Query().Get("attempt"), 0, 1000)
+		key := logStreamKey(name, version)
+		seqFallback := int64(0)
+		scanner := bufio.NewScanner(r.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			var payload struct {
+				Seq       int64  `json:"seq"`
+				Content   string `json:"content"`
+				Timestamp int64  `json:"timestamp"`
+			}
+			if err := json.Unmarshal([]byte(line), &payload); err != nil {
+				payload.Content = line
+			}
+			if payload.Content == "" {
+				continue
+			}
+			if payload.Timestamp == 0 {
+				payload.Timestamp = time.Now().Unix()
+			}
+			if payload.Seq == 0 {
+				seqFallback++
+				payload.Seq = seqFallback
+			}
+			chunk := store.LogChunk{
+				Name:      name,
+				Version:   version,
+				RunID:     runID,
+				Attempt:   attempt,
+				Seq:       payload.Seq,
+				Content:   payload.Content,
+				Timestamp: payload.Timestamp,
+			}
+			id, err := h.Store.PutLogChunk(r.Context(), chunk)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			chunk.ID = id
+			h.getLogHub().publish(key, chunk)
+		}
+		if err := scanner.Err(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"detail": "log stream ingested"})
+	case http.MethodGet:
+		after := parseInt64Default(r.URL.Query().Get("after"), 0)
+		limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 2000)
+		key := logStreamKey(name, version)
+		websocket.Handler(func(ws *websocket.Conn) {
+			defer ws.Close()
+			if h.Store != nil {
+				chunks, err := h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+				if err == nil {
+					for _, chunk := range chunks {
+						_ = websocket.JSON.Send(ws, chunk)
+						after = chunk.ID
+					}
+				}
+			}
+			ch, unsubscribe := h.getLogHub().subscribe(key)
+			defer unsubscribe()
+			for chunk := range ch {
+				if chunk.ID <= after {
+					continue
+				}
+				if err := websocket.JSON.Send(ws, chunk); err != nil {
+					return
+				}
+			}
+		}).ServeHTTP(w, r)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
 }
 
@@ -2149,6 +2248,17 @@ func parseIntDefault(val string, def int, max int) int {
 	}
 	if max > 0 && i > max {
 		return max
+	}
+	return i
+}
+
+func parseInt64Default(val string, def int64) int64 {
+	if val == "" {
+		return def
+	}
+	i, err := strconv.ParseInt(val, 10, 64)
+	if err != nil || i <= 0 {
+		return def
 	}
 	return i
 }

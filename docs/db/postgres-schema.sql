@@ -41,6 +41,20 @@ CREATE TABLE IF NOT EXISTS logs (
 CREATE INDEX IF NOT EXISTS idx_logs_name ON logs(name);
 CREATE INDEX IF NOT EXISTS idx_logs_version ON logs(version);
 
+CREATE TABLE IF NOT EXISTS log_chunks (
+    id         BIGSERIAL PRIMARY KEY,
+    name       TEXT NOT NULL,
+    version    TEXT NOT NULL,
+    run_id     TEXT,
+    attempt    INT,
+    seq        BIGINT,
+    content    TEXT,
+    timestamp  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_name ON log_chunks(name);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_version ON log_chunks(version);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_name_version_id ON log_chunks(name, version, id);
+
 CREATE TABLE IF NOT EXISTS manifests (
     id           BIGSERIAL PRIMARY KEY,
     name         TEXT NOT NULL,

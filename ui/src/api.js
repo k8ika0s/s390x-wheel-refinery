@@ -19,6 +19,15 @@ const joinBasePath = (base, path) => {
   return `${b}${p}`;
 };
 
+const toWebSocketUrl = (path) => {
+  const httpUrl = joinBasePath(getApiBase(), path);
+  if (httpUrl.startsWith("http://") || httpUrl.startsWith("https://")) {
+    return httpUrl.replace(/^http/, "ws");
+  }
+  const proto = window.location.protocol === "https:" ? "wss://" : "ws://";
+  return `${proto}${window.location.host}${httpUrl}`;
+};
+
 export const API_BASE_DEFAULT = inferApiBase();
 
 export const getApiBase = () => {
@@ -275,6 +284,23 @@ export function fetchPackageDetail(name, token, limit = 50, opts = {}) {
 
 export function fetchLog(name, version, token) {
   return request(`/api/logs/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, {}, token);
+}
+
+export function fetchLogChunks(name, version, { after = 0, limit = 500 } = {}, token) {
+  const params = new URLSearchParams();
+  if (after) params.set("after", after);
+  if (limit) params.set("limit", limit);
+  const qs = params.toString();
+  return request(`/api/logs/chunks/${encodeURIComponent(name)}/${encodeURIComponent(version)}${qs ? `?${qs}` : ""}`, {}, token);
+}
+
+export function openLogStream(name, version, { after = 0, limit = 500 } = {}) {
+  const params = new URLSearchParams();
+  if (after) params.set("after", after);
+  if (limit) params.set("limit", limit);
+  const qs = params.toString();
+  const url = toWebSocketUrl(`/api/logs/stream/${encodeURIComponent(name)}/${encodeURIComponent(version)}${qs ? `?${qs}` : ""}`);
+  return new WebSocket(url);
 }
 
 export function fetchRecent({ limit = 25, packageFilter, status }, token) {

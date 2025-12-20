@@ -432,9 +432,9 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/LogEntry"
-  /logs/stream/{name}/{version}:
+  /logs/chunks/{name}/{version}:
     get:
-      summary: Stream latest log entry (SSE style)
+      summary: List stored log chunks
       parameters:
         - in: path
           name: name
@@ -444,13 +444,67 @@ paths:
           name: version
           required: true
           schema: { type: string }
+        - in: query
+          name: after
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 200, maximum: 2000 }
       responses:
         "200":
-          description: SSE with log payload (single event)
-        "400":
-          description: Bad request
-        "500":
-          description: Error
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LogChunk"
+  /logs/stream/{name}/{version}:
+    get:
+      summary: Stream log chunks (WebSocket)
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+        - in: query
+          name: after
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 200, maximum: 2000 }
+      responses:
+        "200":
+          description: WebSocket stream of LogChunk messages
+    post:
+      summary: Stream ingest log chunks (NDJSON)
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+        - in: query
+          name: attempt
+          schema: { type: integer }
+        - in: query
+          name: run_id
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/x-ndjson:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Log stream ingested
   /session/token:
     post:
       summary: Set worker token cookie (browser helper)
@@ -464,21 +518,6 @@ paths:
           description: Token set in cookie
         "400":
           description: Token missing
-  /logs/stream/{name}/{version}:
-    get:
-      summary: Stream latest log entry (SSE style)
-      parameters:
-        - in: path
-          name: name
-          required: true
-          schema: { type: string }
-        - in: path
-          name: version
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: SSE with log payload (single event)
   /logs:
     post:
       summary: Ingest log entry
@@ -538,6 +577,17 @@ components:
       properties:
         name: { type: string }
         version: { type: string }
+        content: { type: string }
+        timestamp: { type: integer, format: int64 }
+    LogChunk:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        version: { type: string }
+        run_id: { type: string }
+        attempt: { type: integer }
+        seq: { type: integer, format: int64 }
         content: { type: string }
         timestamp: { type: integer, format: int64 }
     QueueItem:

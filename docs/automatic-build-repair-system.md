@@ -53,6 +53,7 @@ The system takes a list of Python packages, builds wheels in a controlled enviro
 - Auto-fix decision flow: `docs/diagrams/auto-fix-decision-flow.mmd`
 - Repair pipeline: `docs/diagrams/repair-pipeline.mmd`
 - Data + UX visibility: `docs/diagrams/automation-ux-visibility.mmd`
+- Live log streaming: `docs/diagrams/log-streaming.mmd`
 
 ## End-to-End Walkthrough (Technical)
 This walkthrough follows a single package through the automated build and repair pipeline.
@@ -87,6 +88,20 @@ This walkthrough follows a single package through the automated build and repair
 - Retries are scheduled with exponential backoff.
 - Attempts are incremented by the control-plane when the job is leased.
 - Backoff prevents immediate repeat failures and reduces thundering herd.
+
+## Live Log Streaming (Worker → Control-Plane → UI)
+Live logs are captured while the container runs and are visible in the UI without polling.
+
+### How it works
+1) The worker opens a streaming connection to the control-plane (`POST /api/logs/stream/{name}/{version}`).
+2) As the runner emits stdout/stderr, the worker sends NDJSON log chunks over that stream.
+3) The control-plane stores each chunk in the `log_chunks` table and broadcasts it to connected UI clients.
+4) The UI pulls any existing chunks first (`GET /api/logs/chunks/{name}/{version}`), then keeps a WebSocket open to receive new chunks live.
+5) When the job finishes, the worker still posts the final summarized log entry to `/api/logs` for long-term storage and export.
+
+### Why we keep both
+- **Chunks** give real-time tailing and preserve the raw stream.
+- **Log entries** give a single summarized snapshot for quick downloads and history.
 
 ## Auto-Fix Engine (Detailed)
 The auto-fix engine is the "intelligence" that turns logs into actionable changes.

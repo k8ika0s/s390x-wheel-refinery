@@ -157,11 +157,17 @@ func (w *Worker) Drain(ctx context.Context) error {
 	for i, job := range jobs {
 		i, job := i, job
 		g.Go(func() error {
-			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, reqAttempts[queueKey(job.Name, job.Version)], 0, job.Recipes, nil)
+			attempt := reqAttempts[queueKey(job.Name, job.Version)]
+			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, attempt, 0, job.Recipes, nil)
 			if job.WheelAction == "reuse" && job.WheelDigest != "" {
 				if err := w.fetchWheel(ctx, job); err != nil {
 					return fmt.Errorf("fetch wheel %s: %w", job.WheelDigest, err)
 				}
+			}
+			logStream := w.openLogStream(ctx, job, attempt)
+			if logStream != nil {
+				defer logStream.Close()
+				job.LogWriter = logStream
 			}
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			if err != nil && strings.TrimSpace(logContent) == "" {
@@ -174,7 +180,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				log:      logContent,
 				err:      err,
 				repair:   repID,
-				attempt:  reqAttempts[queueKey(job.Name, job.Version)],
+				attempt:  attempt,
 			}
 			if err == nil && w.Cfg.RepairPushEnabled && job.WheelDigest != "" && w.Pusher.BaseURL != "" {
 				repKey := artifact.RepairKey{InputWheelDigest: job.WheelDigest}

@@ -88,6 +88,20 @@ CREATE TABLE IF NOT EXISTS logs (
 CREATE INDEX IF NOT EXISTS idx_logs_name ON logs(name);
 CREATE INDEX IF NOT EXISTS idx_logs_version ON logs(version);
 
+CREATE TABLE IF NOT EXISTS log_chunks (
+    id         BIGSERIAL PRIMARY KEY,
+    name       TEXT NOT NULL,
+    version    TEXT NOT NULL,
+    run_id     TEXT,
+    attempt    INT,
+    seq        BIGINT,
+    content    TEXT,
+    timestamp  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_name ON log_chunks(name);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_version ON log_chunks(version);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_name_version_id ON log_chunks(name, version, id);
+
 CREATE TABLE IF NOT EXISTS manifests (
     id           BIGSERIAL PRIMARY KEY,
     name         TEXT NOT NULL,
@@ -1145,6 +1159,76 @@ func (p *PostgresStore) PutLog(ctx context.Context, entry LogEntry) error {
 	return err
 }
 
+func (p *PostgresStore) PutLogChunk(ctx context.Context, chunk LogChunk) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	ts := chunk.Timestamp
+	if ts <= 0 {
+		ts = time.Now().Unix()
+	}
+	var id int64
+	err := p.db.QueryRowContext(ctx, `
+	    INSERT INTO log_chunks (name,version,run_id,attempt,seq,content,timestamp)
+	    VALUES ($1,$2,$3,$4,$5,$6,TO_TIMESTAMP($7))
+	    RETURNING id`,
+		chunk.Name,
+		chunk.Version,
+		nullableString(chunk.RunID),
+		nullableInt(chunk.Attempt),
+		nullableInt64(chunk.Seq),
+		chunk.Content,
+		ts,
+	).Scan(&id)
+	return id, err
+}
+
+func (p *PostgresStore) ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]LogChunk, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	q := `
+	    SELECT id,name,version,COALESCE(run_id,''),COALESCE(attempt,0),COALESCE(seq,0),content,extract(epoch from timestamp)::bigint
+	    FROM log_chunks
+	    WHERE name=$1 AND version=$2`
+	args := []any{name, version}
+	if afterID > 0 {
+		args = append(args, afterID)
+		q += fmt.Sprintf(" AND id > $%d", len(args))
+	}
+	args = append(args, limit)
+	q += fmt.Sprintf(" ORDER BY id ASC LIMIT $%d", len(args))
+	rows, err := p.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LogChunk
+	for rows.Next() {
+		var chunk LogChunk
+		if err := rows.Scan(
+			&chunk.ID,
+			&chunk.Name,
+			&chunk.Version,
+			&chunk.RunID,
+			&chunk.Attempt,
+			&chunk.Seq,
+			&chunk.Content,
+			&chunk.Timestamp,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, chunk)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgresStore) SearchLogs(ctx context.Context, q string, limit int) ([]LogEntry, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err
@@ -1524,6 +1608,27 @@ func (a pqStringArrayParam) Value() (driver.Value, error) {
 		return nil, nil
 	}
 	return pq.Array([]string(a)).Value()
+}
+
+func nullableString(val string) any {
+	if val == "" {
+		return nil
+	}
+	return val
+}
+
+func nullableInt(val int) any {
+	if val == 0 {
+		return nil
+	}
+	return val
+}
+
+func nullableInt64(val int64) any {
+	if val == 0 {
+		return nil
+	}
+	return val
 }
 
 func planRecipeNames(recipes []PlanRecipe) []string {

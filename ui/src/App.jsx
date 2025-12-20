@@ -17,6 +17,8 @@ import {
   fetchTopFailures,
   fetchTopSlowest,
   fetchLog,
+  fetchLogChunks,
+  openLogStream,
   fetchPendingInputs,
   fetchPackageDetail,
   fetchRecent,
@@ -683,6 +685,8 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const [message, setMessage] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
   const logRef = useRef(null);
+  const logStreamRef = useRef(null);
+  const logAfterRef = useRef(0);
   const [tab, setTab] = useState("overview");
   const buildFromState = location.state?.build || null;
   const [buildStatus, setBuildStatus] = useState(buildFromState);
@@ -720,6 +724,19 @@ function PackageDetail({ token, pushToast, apiBase }) {
     }
   }, [name, token, buildVersion, buildFromState, pushToast]);
 
+  const closeLogStream = useCallback(() => {
+    if (logStreamRef.current) {
+      logStreamRef.current.close();
+      logStreamRef.current = null;
+    }
+  }, []);
+
+  const appendLogContent = useCallback((chunk) => {
+    if (!chunk) return;
+    const normalized = String(chunk).replace(/\n$/, "");
+    setLogContent((prev) => (prev ? `${prev}\n${normalized}` : normalized));
+  }, []);
+
   const loadLog = useCallback(async (ev, opts = {}) => {
     const silent = Boolean(opts.silent);
     const preserveContent = Boolean(opts.preserveContent);
@@ -736,17 +753,32 @@ function PackageDetail({ token, pushToast, apiBase }) {
       version: eventVersion,
       timestamp: normalized.timestamp ?? Date.now(),
     });
+    logAfterRef.current = 0;
     if (!preserveContent) {
       setLogContent("");
     }
     setMessage("");
     try {
-      const resp = await fetchLog(eventName, eventVersion, token);
-      const content = typeof resp === "string" ? resp : resp?.content;
-      if (content) {
-        setLogContent(content);
+      const chunks = await fetchLogChunks(eventName, eventVersion, { limit: 1000 }, token).catch(() => []);
+      if (Array.isArray(chunks) && chunks.length) {
+        const combined = chunks.map((c) => c.content || "").filter(Boolean).join("\n");
+        if (combined) {
+          setLogContent(combined);
+        } else {
+          setMessage("No log content available");
+        }
+        const lastId = chunks[chunks.length - 1]?.id;
+        if (lastId) {
+          logAfterRef.current = lastId;
+        }
       } else {
-        setMessage("No log content available");
+        const resp = await fetchLog(eventName, eventVersion, token);
+        const content = typeof resp === "string" ? resp : resp?.content;
+        if (content) {
+          setLogContent(content);
+        } else {
+          setMessage("No log content available");
+        }
       }
       if (!silent) {
         pushToast?.({ type: "success", title: "Log loaded", message: `${ev.name} ${ev.version}` });
@@ -815,18 +847,64 @@ function PackageDetail({ token, pushToast, apiBase }) {
   }, [isBuildActive, refreshBuildStatus]);
 
   useEffect(() => {
-    if (!watchBuildLog || !buildStatus?.version) return;
+    if (!watchBuildLog || !buildStatus?.version) {
+      closeLogStream();
+      return;
+    }
     const ev = {
       name: buildStatus.package || name,
       version: buildStatus.version,
       timestamp: buildStatus.updated_at || buildStatus.created_at || Date.now(),
     };
-    loadLog(ev, { silent: true, preserveContent: true });
-    const id = setInterval(() => {
-      loadLog(ev, { silent: true, preserveContent: true });
-    }, 5000);
-    return () => clearInterval(id);
-  }, [watchBuildLog, buildStatus?.package, buildStatus?.version, buildStatus?.updated_at, buildStatus?.created_at, name, loadLog]);
+    let active = true;
+    loadLog(ev, { silent: true, preserveContent: true }).then(() => {
+      if (!active) return;
+      closeLogStream();
+      let ws;
+      try {
+        ws = openLogStream(ev.name, ev.version, { after: logAfterRef.current, limit: 500 });
+      } catch (e) {
+        setMessage(e?.message || "Unable to open log stream.");
+        return;
+      }
+      logStreamRef.current = ws;
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.content) {
+            appendLogContent(payload.content);
+          }
+          if (payload?.id) {
+            logAfterRef.current = payload.id;
+          }
+        } catch {
+          appendLogContent(event.data);
+        }
+      };
+      ws.onerror = () => {
+        setMessage("Log stream error. Falling back to stored logs.");
+      };
+      ws.onclose = () => {
+        if (active) {
+          setMessage("Log stream closed.");
+        }
+      };
+    });
+    return () => {
+      active = false;
+      closeLogStream();
+    };
+  }, [
+    watchBuildLog,
+    buildStatus?.package,
+    buildStatus?.version,
+    buildStatus?.updated_at,
+    buildStatus?.created_at,
+    name,
+    loadLog,
+    closeLogStream,
+    appendLogContent,
+  ]);
 
   const paged = (items, page) => {
     const arr = Array.isArray(items) ? items : [];
@@ -1063,7 +1141,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   onClick={() => setWatchBuildLog((v) => !v)}
                   disabled={!buildStatus?.version}
                 >
-                  {watchBuildLog ? "Stop log watch" : "Watch logs"}
+                  {watchBuildLog ? "Stop log stream" : "Watch logs"}
                 </button>
                 <button
                   className="btn btn-secondary px-2 py-1 text-xs"
@@ -1076,7 +1154,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
           )}
           {watchBuildLog && isBuildActive && (
             <div className="text-xs text-slate-400">
-              Watching logs (polling every 5s). Log output appears once the runner posts it.
+              Streaming logs (live). Output appears as the runner emits it.
             </div>
           )}
           <StatCard title="Automation timeline">

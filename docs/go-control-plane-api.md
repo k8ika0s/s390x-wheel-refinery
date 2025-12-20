@@ -56,10 +56,12 @@ This draft captures the intended endpoints for the Go control plane, matching th
 - `DELETE /hints/{id}` → delete.
 
 **Logs**
-- `GET /logs/{name}/{version}` → log content/metadata.
+- `GET /logs/{name}/{version}` → log content/metadata (latest stored entry).
 - `GET /logs/search?q=&limit=` → simple text search over logs.
-- `POST /logs` → ingest/store a log entry (name/version/content/timestamp auto-set if omitted).
-- `GET /logs/stream/{name}/{version}` → SSE-style single-event stream of the latest log entry.
+- `POST /logs` → ingest/store a full log entry (name/version/content/timestamp auto-set if omitted).
+- `GET /logs/chunks/{name}/{version}?after=&limit=` → list stored log chunks (for replay).
+- `POST /logs/stream/{name}/{version}` → worker streaming ingest (NDJSON chunks).
+- `GET /logs/stream/{name}/{version}?after=&limit=` → WebSocket stream of log chunks (live tail).
 
 ### Data shapes (coarse)
 - Event: `{run_id,name,version,python_tag,platform_tag,status,detail,metadata,timestamp,matched_hint_ids?}`

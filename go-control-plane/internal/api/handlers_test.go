@@ -83,6 +83,12 @@ func (f *fakeStore) SearchLogs(ctx context.Context, q string, limit int) ([]stor
 func (f *fakeStore) PutLog(ctx context.Context, entry store.LogEntry) error {
 	return nil
 }
+func (f *fakeStore) PutLogChunk(ctx context.Context, chunk store.LogChunk) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]store.LogChunk, error) {
+	return nil, nil
+}
 func (f *fakeStore) Plan(ctx context.Context) ([]store.PlanNode, error) {
 	return f.lastPlan, nil
 }

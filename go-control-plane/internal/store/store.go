@@ -49,6 +49,18 @@ type LogEntry struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// LogChunk represents a streamed log segment.
+type LogChunk struct {
+	ID        int64  `json:"id,omitempty"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	RunID     string `json:"run_id,omitempty"`
+	Attempt   int    `json:"attempt,omitempty"`
+	Seq       int64  `json:"seq,omitempty"`
+	Content   string `json:"content"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 // PendingInput represents an uploaded requirements file awaiting planning.
 type PendingInput struct {
 	ID           int64           `json:"id"`
@@ -206,6 +218,8 @@ type Store interface {
 	GetLog(ctx context.Context, name, version string) (LogEntry, error)
 	SearchLogs(ctx context.Context, q string, limit int) ([]LogEntry, error)
 	PutLog(ctx context.Context, entry LogEntry) error
+	PutLogChunk(ctx context.Context, chunk LogChunk) (int64, error)
+	ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]LogChunk, error)
 
 	// Plan/Manifest/Artifacts
 	Plan(ctx context.Context) ([]PlanNode, error)

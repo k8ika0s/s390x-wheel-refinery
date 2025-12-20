@@ -1,0 +1,6 @@
+flowchart LR
+  worker[Worker Runner] -- "NDJSON log chunks" --> cp[Control-plane API]
+  cp -- "insert log_chunks" --> db[(Postgres)]
+  ui[UI Log Viewer] -- "GET /api/logs/chunks" --> cp
+  cp -- "WebSocket log chunks" --> ui
+  worker -- "POST /api/logs (final entry)" --> cp
