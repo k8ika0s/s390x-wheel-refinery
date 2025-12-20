@@ -47,6 +47,8 @@ This draft captures the intended endpoints for the Go control plane, matching th
 
 **Worker Trigger**
 - `POST /worker/trigger` → drain queue via local or webhook, returns detail + queue length. Honors `X-Worker-Token`/`token` when `WORKER_TOKEN` is set; open otherwise.
+- `POST /worker/heartbeat` → upsert worker status (worker_id, pools, active builds). Requires `X-Worker-Token` when configured.
+- `GET /workers` → list worker heartbeat statuses and last-seen timestamps.
 - `POST /worker/smoke` (optional) → validate mounts/config without draining. Same token behavior.
 
 **Hints**

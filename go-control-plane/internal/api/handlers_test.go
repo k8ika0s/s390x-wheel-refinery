@@ -175,6 +175,12 @@ func (f *fakeStore) RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int6
 func (f *fakeStore) DeleteBuilds(ctx context.Context, status string) (int64, error) {
 	return 0, nil
 }
+func (f *fakeStore) UpsertWorkerStatus(ctx context.Context, status store.WorkerStatus) error {
+	return nil
+}
+func (f *fakeStore) ListWorkers(ctx context.Context) ([]store.WorkerStatus, error) {
+	return nil, nil
+}
 func (f *fakeStore) GetSettings(ctx context.Context) (settings.Settings, error) {
 	return settings.ApplyDefaults(settings.Settings{}), nil
 }

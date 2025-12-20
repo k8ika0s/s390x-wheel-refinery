@@ -122,6 +122,10 @@ export function fetchMetrics(token) {
   return request("/api/metrics", {}, token);
 }
 
+export function fetchWorkers(token) {
+  return request("/api/workers", {}, token);
+}
+
 export function triggerWorker(token) {
   return request("/api/worker/trigger", { method: "POST" }, token);
 }

@@ -86,6 +86,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs", h.logsIngest)
 	mux.HandleFunc("/api/logs/stream/", h.logsStream)
 	mux.HandleFunc("/api/logs/chunks/", h.logsChunks)
+	mux.HandleFunc("/api/workers", h.workers)
+	mux.HandleFunc("/api/worker/heartbeat", h.workerHeartbeat)
 	mux.HandleFunc("/api/worker/trigger", h.workerTrigger)
 	mux.HandleFunc("/api/worker/smoke", h.workerSmoke)
 }
@@ -138,6 +140,12 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	}
 	type hintMetrics struct {
 		Count int `json:"count"`
+	}
+	type workerMetrics struct {
+		Total         int   `json:"total"`
+		Online        int   `json:"online"`
+		Stale         int   `json:"stale"`
+		LatestSeenSec int64 `json:"latest_seen_seconds,omitempty"`
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
@@ -216,6 +224,32 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 			hm.Count = count
 		}
 	}
+	wm := workerMetrics{}
+	if h.Store != nil {
+		if list, err := h.Store.ListWorkers(ctx); err == nil {
+			now := time.Now().Unix()
+			for _, ws := range list {
+				wm.Total++
+				interval := ws.HeartbeatIntervalSec
+				if interval <= 0 {
+					interval = 15
+				}
+				threshold := int64(interval * 2)
+				if threshold < 30 {
+					threshold = 30
+				}
+				age := now - ws.LastSeen
+				if ws.LastSeen > wm.LatestSeenSec {
+					wm.LatestSeenSec = ws.LastSeen
+				}
+				if age <= threshold {
+					wm.Online++
+				} else {
+					wm.Stale++
+				}
+			}
+		}
+	}
 	poolPlan := 0
 	poolBuild := 0
 	if h.Store != nil {
@@ -238,6 +272,7 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		"pending":         pm,
 		"build":           buildStats,
 		"hints":           hm,
+		"workers":         wm,
 		"db":              dbm,
 		"status_counts":   sum.StatusCounts,
 		"recent_failures": sum.Failures,
@@ -309,6 +344,31 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&buf, "# HELP refinery_pending_inputs_total Pending uploads awaiting planning.\n")
 		fmt.Fprintf(&buf, "# TYPE refinery_pending_inputs_total gauge\n")
 		fmt.Fprintf(&buf, "refinery_pending_inputs_total %d\n", len(list))
+	}
+	if list, err := h.Store.ListWorkers(ctx); err == nil {
+		total := 0
+		online := 0
+		now := time.Now().Unix()
+		for _, ws := range list {
+			total++
+			interval := ws.HeartbeatIntervalSec
+			if interval <= 0 {
+				interval = 15
+			}
+			threshold := int64(interval * 2)
+			if threshold < 30 {
+				threshold = 30
+			}
+			if now-ws.LastSeen <= threshold {
+				online++
+			}
+		}
+		fmt.Fprintf(&buf, "# HELP refinery_workers_total Total workers reporting heartbeats.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_workers_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_workers_total %d\n", total)
+		fmt.Fprintf(&buf, "# HELP refinery_workers_online Workers seen within heartbeat window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_workers_online gauge\n")
+		fmt.Fprintf(&buf, "refinery_workers_online %d\n", online)
 	}
 	fmt.Fprintf(&buf, "# HELP refinery_db_up Database connectivity (1=up,0=down).\n")
 	fmt.Fprintf(&buf, "# TYPE refinery_db_up gauge\n")
@@ -1109,15 +1169,15 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Package      string   `json:"package"`
-		Version      string   `json:"version"`
-		Status       string   `json:"status"`
-		Error        string   `json:"error,omitempty"`
-		FailureSummary string `json:"failure_summary,omitempty"`
-		Attempts     int      `json:"attempts,omitempty"`
-		BackoffUntil int64    `json:"backoff_until,omitempty"`
-		Recipes      []string `json:"recipes,omitempty"`
-		HintIDs      []string `json:"hint_ids,omitempty"`
+		Package        string   `json:"package"`
+		Version        string   `json:"version"`
+		Status         string   `json:"status"`
+		Error          string   `json:"error,omitempty"`
+		FailureSummary string   `json:"failure_summary,omitempty"`
+		Attempts       int      `json:"attempts,omitempty"`
+		BackoffUntil   int64    `json:"backoff_until,omitempty"`
+		Recipes        []string `json:"recipes,omitempty"`
+		HintIDs        []string `json:"hint_ids,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -1885,6 +1945,67 @@ func (h *Handler) workerTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 	stats, _ := h.Queue.Stats(ctx)
 	writeJSON(w, http.StatusOK, map[string]any{"detail": strings.Join(detail, "; "), "queue_length": stats.Length})
+}
+
+func (h *Handler) workers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if h.Store == nil {
+		writeJSON(w, http.StatusOK, []store.WorkerStatus{})
+		return
+	}
+	list, err := h.Store.ListWorkers(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *Handler) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	var body struct {
+		WorkerID             string `json:"worker_id"`
+		RunID                string `json:"run_id,omitempty"`
+		ActiveBuilds         int    `json:"active_builds,omitempty"`
+		BuildPoolSize        int    `json:"build_pool_size,omitempty"`
+		PlanPoolSize         int    `json:"plan_pool_size,omitempty"`
+		HeartbeatIntervalSec int    `json:"heartbeat_interval_sec,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if body.WorkerID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "worker_id required"})
+		return
+	}
+	if h.Store == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"detail": "no store configured"})
+		return
+	}
+	status := store.WorkerStatus{
+		WorkerID:             body.WorkerID,
+		RunID:                body.RunID,
+		ActiveBuilds:         body.ActiveBuilds,
+		BuildPoolSize:        body.BuildPoolSize,
+		PlanPoolSize:         body.PlanPoolSize,
+		HeartbeatIntervalSec: body.HeartbeatIntervalSec,
+	}
+	if err := h.Store.UpsertWorkerStatus(r.Context(), status); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"detail": "ok"})
 }
 
 func (h *Handler) workerSmoke(w http.ResponseWriter, r *http.Request) {

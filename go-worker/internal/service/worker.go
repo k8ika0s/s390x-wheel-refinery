@@ -50,6 +50,7 @@ type Worker struct {
 	autoHintLast map[string]time.Time
 	// buildPoolSize allows dynamic overrides from control-plane settings.
 	buildPoolSize *atomic.Int32
+	activeBuilds  atomic.Int32
 }
 
 type result struct {
@@ -157,6 +158,8 @@ func (w *Worker) Drain(ctx context.Context) error {
 	for i, job := range jobs {
 		i, job := i, job
 		g.Go(func() error {
+			w.activeBuilds.Add(1)
+			defer w.activeBuilds.Add(-1)
 			attempt := reqAttempts[queueKey(job.Name, job.Version)]
 			if job.WheelAction == "reuse" && job.WheelDigest != "" {
 				if err := w.fetchWheel(ctx, job); err != nil {

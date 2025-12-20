@@ -157,26 +157,39 @@ type PlanSummary struct {
 
 // BuildStatus tracks a build job derived from a plan.
 type BuildStatus struct {
-	ID           int64    `json:"id"`
-	Package      string   `json:"package"`
-	Version      string   `json:"version"`
-	PythonTag    string   `json:"python_tag"`
-	PlatformTag  string   `json:"platform_tag"`
-	Status       string   `json:"status"`
-	Attempts     int      `json:"attempts"`
-	LastError    string   `json:"last_error,omitempty"`
-	FailureSummary string `json:"failure_summary,omitempty"`
-	OldestAgeSec int64    `json:"oldest_age_seconds,omitempty"`
-	CreatedAt    int64    `json:"created_at"`
-	UpdatedAt    int64    `json:"updated_at"`
-	LeasedAt     int64    `json:"leased_at,omitempty"`
-	StartedAt    int64    `json:"started_at,omitempty"`
-	FinishedAt   int64    `json:"finished_at,omitempty"`
-	RunID        string   `json:"run_id,omitempty"`
-	PlanID       int64    `json:"plan_id,omitempty"`
-	BackoffUntil int64    `json:"backoff_until,omitempty"`
-	Recipes      []string `json:"recipes,omitempty"`
-	HintIDs      []string `json:"hint_ids,omitempty"`
+	ID             int64    `json:"id"`
+	Package        string   `json:"package"`
+	Version        string   `json:"version"`
+	PythonTag      string   `json:"python_tag"`
+	PlatformTag    string   `json:"platform_tag"`
+	Status         string   `json:"status"`
+	Attempts       int      `json:"attempts"`
+	LastError      string   `json:"last_error,omitempty"`
+	FailureSummary string   `json:"failure_summary,omitempty"`
+	OldestAgeSec   int64    `json:"oldest_age_seconds,omitempty"`
+	CreatedAt      int64    `json:"created_at"`
+	UpdatedAt      int64    `json:"updated_at"`
+	LeasedAt       int64    `json:"leased_at,omitempty"`
+	StartedAt      int64    `json:"started_at,omitempty"`
+	FinishedAt     int64    `json:"finished_at,omitempty"`
+	RunID          string   `json:"run_id,omitempty"`
+	PlanID         int64    `json:"plan_id,omitempty"`
+	BackoffUntil   int64    `json:"backoff_until,omitempty"`
+	Recipes        []string `json:"recipes,omitempty"`
+	HintIDs        []string `json:"hint_ids,omitempty"`
+}
+
+// WorkerStatus tracks worker heartbeat metadata.
+type WorkerStatus struct {
+	WorkerID             string `json:"worker_id"`
+	RunID                string `json:"run_id,omitempty"`
+	LastSeen             int64  `json:"last_seen"`
+	ActiveBuilds         int    `json:"active_builds"`
+	BuildPoolSize        int    `json:"build_pool_size"`
+	PlanPoolSize         int    `json:"plan_pool_size"`
+	HeartbeatIntervalSec int    `json:"heartbeat_interval_sec,omitempty"`
+	CreatedAt            int64  `json:"created_at,omitempty"`
+	UpdatedAt            int64  `json:"updated_at,omitempty"`
 }
 
 // PackageSummary aggregates status for a package.
@@ -254,6 +267,10 @@ type Store interface {
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
 	RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int64, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)
+
+	// Worker health
+	UpsertWorkerStatus(ctx context.Context, status WorkerStatus) error
+	ListWorkers(ctx context.Context) ([]WorkerStatus, error)
 
 	// Settings
 	GetSettings(ctx context.Context) (settings.Settings, error)

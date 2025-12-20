@@ -12,6 +12,7 @@ import {
   deleteHint,
   bulkUploadHints,
   fetchMetrics,
+  fetchWorkers,
   fetchQueue,
   fetchSummary,
   fetchTopFailures,
@@ -68,6 +69,14 @@ const formatDuration = (seconds) => {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m ${secs}s`;
   return `${secs}s`;
+};
+const workerHeartbeatThreshold = (worker) => {
+  const interval = Number(worker?.heartbeat_interval_sec) || 15;
+  return Math.max(interval * 2, 30);
+};
+const isWorkerOnline = (worker, nowSec) => {
+  if (!worker?.last_seen) return false;
+  return nowSec - Number(worker.last_seen) <= workerHeartbeatThreshold(worker);
 };
 const pickStatusSince = (build) => {
   if (!build) return 0;
@@ -1472,6 +1481,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [enqueueingBuilds, setEnqueueingBuilds] = useState(false);
   const [planBuilds, setPlanBuilds] = useState([]);
   const [planBuildActions, setPlanBuildActions] = useState({});
+  const [workers, setWorkers] = useState([]);
+  const [workersError, setWorkersError] = useState("");
   const [planTab, setPlanTab] = useState("builds");
   const [planGraphOpen, setPlanGraphOpen] = useState(false);
   const [planGraphLayout, setPlanGraphLayout] = useState("horizontal");
@@ -1522,6 +1533,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     const wantsInputs = activeView === "inputs";
     const wantsPlans = activeView === "plans";
     const wantsBuilds = activeView === "builds";
+    const wantsWorkers = wantsBuilds || activeView === "settings";
     const wantsRecent = wantsOverview || wantsBuilds;
     if (wantsBuilds) {
       setBuildsLoading(true);
@@ -1543,8 +1555,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       const queuePromise = wantsOverview || wantsQueues ? fetchQueue(authToken) : Promise.resolve(null);
       const metricsPromise = fetchMetrics(authToken).catch(() => null);
       const planBuildsPromise = wantsPlans && selectedPlanId ? fetchBuilds({ planId: selectedPlanId, limit: 500 }, authToken).catch(() => null) : Promise.resolve(null);
+      const workersPromise = wantsWorkers ? fetchWorkers(authToken).catch(() => null) : Promise.resolve(null);
 
-      const [recent, summary, failures, slowest, queue, metrics, planBuildList] = await Promise.all([
+      const [recent, summary, failures, slowest, queue, metrics, planBuildList, workersList] = await Promise.all([
         recentPromise,
         summaryPromise,
         failuresPromise,
@@ -1552,6 +1565,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
         queuePromise,
         metricsPromise,
         planBuildsPromise,
+        workersPromise,
       ]);
 
       const data = {
@@ -1618,6 +1632,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       }
       if (wantsPlans && Array.isArray(planBuildList)) {
         setPlanBuilds(planBuildList);
+      }
+      if (wantsWorkers) {
+        if (Array.isArray(workersList)) {
+          setWorkers(workersList);
+          setWorkersError("");
+        } else if (workersList === null) {
+          setWorkersError("Failed to load workers.");
+        }
       }
       setDashboard((prev) => ({
         summary: data.summary ?? prev?.summary ?? null,
@@ -2244,6 +2266,17 @@ const enqueuePlanForInput = async (pi, verb) => {
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
   const hints = toArray(hintsState);
   const metrics = dashboard?.metrics;
+  const workerList = toArray(workers);
+  const workerMetrics = metrics?.workers || {};
+  const workerTotal = Number.isFinite(workerMetrics.total) ? workerMetrics.total : workerList.length;
+  const workerOnline = Number.isFinite(workerMetrics.online)
+    ? workerMetrics.online
+    : workerList.reduce((sum, w) => sum + (isWorkerOnline(w, nowSec) ? 1 : 0), 0);
+  const workerActiveBuilds = workerList.reduce((sum, w) => sum + (Number(w?.active_builds) || 0), 0);
+  const workerLatestSeen = Number.isFinite(workerMetrics.latest_seen_seconds)
+    ? workerMetrics.latest_seen_seconds
+    : workerList.reduce((max, w) => Math.max(max, Number(w?.last_seen) || 0), 0);
+  const workerLatestAge = workerLatestSeen ? formatDuration(Math.max(0, nowSec - workerLatestSeen)) : "—";
   const hintsCount = Number.isFinite(metrics?.hints?.count) ? metrics.hints.count : hints.length;
   const hintTotalPages = hintQuery ? null : Math.max(1, Math.ceil(hintsCount / hintPageSize));
   const hintNextDisabled = hintQuery ? hints.length < hintPageSize : hintPage >= hintTotalPages;
@@ -3508,6 +3541,16 @@ const enqueuePlanForInput = async (pi, verb) => {
               ))}
             </div>
             <div className="text-xs text-slate-400">Oldest queued: {buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}</div>
+            {workerTotal > 0 ? (
+              <div className="text-xs text-slate-400 flex flex-wrap gap-3">
+                <span>Workers online: {workerOnline}/{workerTotal}</span>
+                <span>Active builds: {workerActiveBuilds}</span>
+                <span>Last heartbeat: {workerLatestAge}</span>
+              </div>
+            ) : (
+              <div className="text-xs text-amber-200">No workers reporting heartbeats.</div>
+            )}
+            {workersError && <div className="text-xs text-amber-200">{workersError}</div>}
             {buildQueueLength > 0 && settingsData?.auto_build === false && (
               <div className="glass subtle px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 text-xs flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <span>Auto-build is off; make sure builds were enqueued manually from the Plans page.</span>
@@ -3842,6 +3885,52 @@ const enqueuePlanForInput = async (pi, verb) => {
             Defaults inform queue enqueues and UI polling limits. Worker runtime Python still follows the configured worker image/env.
           </div>
         </div>
+      </div>
+      <div className="glass p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Workers</span>
+            <span className="chip text-xs">🧑‍🏭</span>
+          </div>
+          <div className="text-xs text-slate-400">Online: {workerOnline}/{workerTotal || 0}</div>
+        </div>
+        {workerTotal ? (
+          <div className="overflow-x-auto">
+            <table className="min-w-full w-full table-fixed text-xs border border-border rounded-lg">
+              <thead className="bg-slate-900 text-slate-400">
+                <tr>
+                  <th className="text-left px-2 py-2">Worker</th>
+                  <th className="text-left px-2 py-2">Status</th>
+                  <th className="text-left px-2 py-2">Active</th>
+                  <th className="text-left px-2 py-2">Build pool</th>
+                  <th className="text-left px-2 py-2">Plan pool</th>
+                  <th className="text-left px-2 py-2">Last seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {workerList.map((w) => {
+                  const online = isWorkerOnline(w, nowSec);
+                  const lastSeenAge = w.last_seen ? formatDuration(Math.max(0, nowSec - Number(w.last_seen))) : "—";
+                  return (
+                    <tr key={w.worker_id} className="border-t border-slate-800">
+                      <td className="px-2 py-2">{w.worker_id}</td>
+                      <td className="px-2 py-2">
+                        <span className={`chip ${online ? "chip-active" : ""}`}>{online ? "online" : "stale"}</span>
+                      </td>
+                      <td className="px-2 py-2">{w.active_builds ?? 0}</td>
+                      <td className="px-2 py-2">{w.build_pool_size ?? 0}</td>
+                      <td className="px-2 py-2">{w.plan_pool_size ?? 0}</td>
+                      <td className="px-2 py-2 text-slate-400">{lastSeenAge}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-sm text-slate-400">No workers reporting heartbeats yet.</div>
+        )}
+        {workersError && <div className="text-xs text-amber-200">{workersError}</div>}
       </div>
     </div>
   );

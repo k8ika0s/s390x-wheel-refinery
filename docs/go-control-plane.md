@@ -18,6 +18,7 @@ We want a fast, scalable API service in Go that acts as the “traffic controlle
 - **Plan storage:** persist the build plan graph in Postgres (JSONB) so UI can fetch the latest plan quickly; worker will write, API will read.
 - **Worker trigger:** support both HTTP webhook (POST, token optional) and local trigger. Keep payload compatible with current Python worker (`{action:"drain"}`); optionally support a smoke/dry-run.
 - **Worker trigger:** support both HTTP webhook (POST, token optional) and local trigger. Keep payload compatible with current Python worker (`{action:"drain"}`); optionally support a smoke/dry-run. If `WORKER_TOKEN` is set, require `X-Worker-Token`/`token`; otherwise open.
+- **Worker health:** accept periodic heartbeats and expose current worker status/last-seen to the UI.
 - **API surface:** summary, recent/history search, queue (list/enqueue/clear/stats), worker trigger, hint CRUD, log fetch/search, metrics/health, config view, manifests/artifact links. Build plan exposed, but no “why” reasoning needed.
 
 ### First implementation steps (proposed)

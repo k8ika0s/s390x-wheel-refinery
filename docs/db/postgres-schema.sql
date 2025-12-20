@@ -104,6 +104,19 @@ CREATE TABLE IF NOT EXISTS build_status (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS worker_status (
+    worker_id    TEXT PRIMARY KEY,
+    run_id       TEXT,
+    last_seen    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    active_builds INT NOT NULL DEFAULT 0,
+    build_pool_size INT NOT NULL DEFAULT 0,
+    plan_pool_size INT NOT NULL DEFAULT 0,
+    heartbeat_interval_sec INT NOT NULL DEFAULT 0,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_worker_status_last_seen ON worker_status(last_seen);
+
 CREATE TABLE IF NOT EXISTS pending_inputs (
     id          BIGSERIAL PRIMARY KEY,
     filename    TEXT NOT NULL,

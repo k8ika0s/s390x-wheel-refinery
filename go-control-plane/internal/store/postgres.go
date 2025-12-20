@@ -163,6 +163,19 @@ CREATE TABLE IF NOT EXISTS build_status (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS worker_status (
+    worker_id    TEXT PRIMARY KEY,
+    run_id       TEXT,
+    last_seen    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    active_builds INT NOT NULL DEFAULT 0,
+    build_pool_size INT NOT NULL DEFAULT 0,
+    plan_pool_size INT NOT NULL DEFAULT 0,
+    heartbeat_interval_sec INT NOT NULL DEFAULT 0,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_worker_status_last_seen ON worker_status(last_seen);
 CREATE INDEX IF NOT EXISTS idx_build_status_pkg ON build_status(package, version);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_build_status_pkg_version_unique ON build_status(package, version);
 CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
@@ -1753,6 +1766,71 @@ func (p *PostgresStore) RequeueStaleLeases(ctx context.Context, maxAgeSec int) (
 	}
 	count, _ := res.RowsAffected()
 	return count, nil
+}
+
+// UpsertWorkerStatus records worker heartbeats and pool usage.
+func (p *PostgresStore) UpsertWorkerStatus(ctx context.Context, status WorkerStatus) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
+	if status.WorkerID == "" {
+		return fmt.Errorf("worker_id required")
+	}
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO worker_status (
+			worker_id, run_id, last_seen, active_builds, build_pool_size, plan_pool_size, heartbeat_interval_sec, updated_at
+		)
+		VALUES ($1,$2,NOW(),$3,$4,$5,$6,NOW())
+		ON CONFLICT (worker_id) DO UPDATE
+		SET run_id = EXCLUDED.run_id,
+		    last_seen = NOW(),
+		    active_builds = EXCLUDED.active_builds,
+		    build_pool_size = EXCLUDED.build_pool_size,
+		    plan_pool_size = EXCLUDED.plan_pool_size,
+		    heartbeat_interval_sec = EXCLUDED.heartbeat_interval_sec,
+		    updated_at = NOW()
+	`, status.WorkerID, nullableString(status.RunID), status.ActiveBuilds, status.BuildPoolSize, status.PlanPoolSize, status.HeartbeatIntervalSec)
+	return err
+}
+
+// ListWorkers returns the latest worker heartbeat status.
+func (p *PostgresStore) ListWorkers(ctx context.Context) ([]WorkerStatus, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT worker_id,
+		       run_id,
+		       active_builds,
+		       build_pool_size,
+		       plan_pool_size,
+		       heartbeat_interval_sec,
+		       EXTRACT(EPOCH FROM last_seen)::bigint AS last_seen,
+		       EXTRACT(EPOCH FROM created_at)::bigint AS created_at,
+		       EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at
+		FROM worker_status
+		ORDER BY worker_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WorkerStatus
+	for rows.Next() {
+		var ws WorkerStatus
+		var runID sql.NullString
+		if err := rows.Scan(&ws.WorkerID, &runID, &ws.ActiveBuilds, &ws.BuildPoolSize, &ws.PlanPoolSize, &ws.HeartbeatIntervalSec, &ws.LastSeen, &ws.CreatedAt, &ws.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if runID.Valid {
+			ws.RunID = runID.String
+		}
+		out = append(out, ws)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Helpers for pq string arrays without importing driver types in interface.

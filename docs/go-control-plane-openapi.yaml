@@ -336,6 +336,34 @@ paths:
                 properties:
                   detail: { type: string }
                   queue_length: { type: integer }
+  /worker/heartbeat:
+    post:
+      summary: Record worker heartbeat
+      parameters:
+        - in: header
+          name: X-Worker-Token
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerHeartbeat"
+      responses:
+        "200":
+          description: Heartbeat accepted
+  /workers:
+    get:
+      summary: List worker statuses
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkerStatus"
   /worker/smoke:
     post:
       summary: Optional smoke/dry-run
@@ -601,6 +629,27 @@ components:
         seq: { type: integer, format: int64 }
         content: { type: string }
         timestamp: { type: integer, format: int64 }
+    WorkerHeartbeat:
+      type: object
+      properties:
+        worker_id: { type: string }
+        run_id: { type: string }
+        active_builds: { type: integer }
+        build_pool_size: { type: integer }
+        plan_pool_size: { type: integer }
+        heartbeat_interval_sec: { type: integer }
+    WorkerStatus:
+      type: object
+      properties:
+        worker_id: { type: string }
+        run_id: { type: string }
+        last_seen: { type: integer, format: int64 }
+        active_builds: { type: integer }
+        build_pool_size: { type: integer }
+        plan_pool_size: { type: integer }
+        heartbeat_interval_sec: { type: integer }
+        created_at: { type: integer, format: int64 }
+        updated_at: { type: integer, format: int64 }
     QueueItem:
       type: object
       properties:

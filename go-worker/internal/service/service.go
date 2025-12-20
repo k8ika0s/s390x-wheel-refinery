@@ -16,6 +16,14 @@ import (
 // Run starts the worker HTTP server (stub for now).
 func Run() error {
 	cfg := overlaySettingsFromControlPlane(fromEnv())
+	workerID := cfg.WorkerID
+	if workerID == "" {
+		workerID = defaultWorkerID()
+	}
+	workerRunID := cfg.WorkerRunID
+	if workerRunID == "" {
+		workerRunID = defaultWorkerRunID(workerID)
+	}
 	planPool := atomic.Int32{}
 	buildPool := atomic.Int32{}
 	var pyVersion atomic.Value
@@ -60,6 +68,7 @@ func Run() error {
 		go plannerLoop(ctx, cfg, popURL, statusURL, listURL, &planPool, &pyVersion, &platformTag)
 	}
 	go pollSettings(ctx, cfg, &planPool, &buildPool, &pyVersion, &platformTag)
+	go heartbeatLoop(ctx, cfg, w, workerID, workerRunID, &planPool, &buildPool)
 	if cfg.AutoBuild {
 		go buildLoop(ctx, cfg, runDrain)
 	}
