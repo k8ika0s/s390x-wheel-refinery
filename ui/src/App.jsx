@@ -545,12 +545,13 @@ function PageHeader({ title, subtitle, badge }) {
 
 function Summary({ summary }) {
   if (!summary) return null;
-  const { status_counts = {}, failures = [] } = summary;
+  const statusCounts = summary.status_counts || {};
+  const failures = toArray(summary.failures);
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <StatCard title="Status counts (recent)">
         <div className="space-y-2">
-          {Object.entries(status_counts).map(([k, v]) => (
+          {Object.entries(statusCounts).map(([k, v]) => (
             <div key={k} className="flex items-center justify-between text-sm text-slate-200">
               <span className="text-slate-300">{k}</span>
               <span className="chip">{v}</span>
