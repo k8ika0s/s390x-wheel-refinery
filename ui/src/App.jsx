@@ -2471,7 +2471,6 @@ const enqueuePlanForInput = async (pi, verb) => {
             {reqError && <div className="text-red-300 text-xs">{reqError}</div>}
             <div className="flex flex-wrap gap-2">
               <button className="btn btn-primary" onClick={() => handleUploadReqs(false)} disabled={!reqFile}>Upload only</button>
-              <button className="btn btn-secondary" onClick={() => handleUploadReqs(true)} disabled={!reqFile}>Upload & Trigger worker</button>
             </div>
             <div className="text-slate-400 text-xs">
               Lints basic text (&lt;128KB, no nulls, ≤2000 lines, ≤800 chars/line) then stores it in object storage and registers the pending input.
@@ -2497,7 +2496,6 @@ const enqueuePlanForInput = async (pi, verb) => {
             {wheelError && <div className="text-red-300 text-xs">{wheelError}</div>}
             <div className="flex flex-wrap gap-2">
               <button className="btn btn-primary" onClick={() => handleUploadWheel(false)} disabled={!wheelFile}>Upload wheel</button>
-              <button className="btn btn-secondary" onClick={() => handleUploadWheel(true)} disabled={!wheelFile}>Upload & Trigger worker</button>
             </div>
             <div className="text-slate-400 text-xs">
               Parses wheel metadata on upload, stores the immutable input in object storage, and registers it for planning.
