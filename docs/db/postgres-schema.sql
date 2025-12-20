@@ -116,6 +116,10 @@ CREATE TABLE IF NOT EXISTS worker_status (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_worker_status_last_seen ON worker_status(last_seen);
+CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
+CREATE INDEX IF NOT EXISTS idx_build_status_plan_id ON build_status(plan_id);
+CREATE INDEX IF NOT EXISTS idx_build_status_updated_at ON build_status(updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_build_status_pkg_version ON build_status(package, version);
 
 CREATE TABLE IF NOT EXISTS pending_inputs (
     id          BIGSERIAL PRIMARY KEY,
