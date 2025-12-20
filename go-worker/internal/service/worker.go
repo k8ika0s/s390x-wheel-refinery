@@ -475,10 +475,10 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	if doErr != nil {
 		return
 	}
-	body, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		log.Printf("report build status failed: status=%s body=%s", resp.Status, strings.TrimSpace(string(body)))
+		log.Printf("report build status failed: status=%s body=%s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 }
 
