@@ -7,7 +7,7 @@ This guide is written in plain language for day to day use. It explains how to u
 - Builds missing s390x wheels in a controlled container.
 - Retries failed builds with automatic fixes when possible.
 - Streams build logs live in the UI.
-- Stores outputs (wheels, repairs, manifests) and keeps history.
+- Stores outputs (wheels, repairs, manifests) in object storage and/or CAS, with local staging for debugging.
 
 If you are new, think of it as a factory: you drop in a shopping list (requirements), and the system produces s390x wheels, while recording every step and retry it makes.
 
@@ -172,11 +172,14 @@ These paths are inside the worker container or bind mounts:
 - `/cache/plans` - plan snapshots
 - `/cache/cas` - CAS staging
 - `/cache/pip` - pip downloads
-- `/output` - built wheels and manifests
+- `/output` - local staging for built wheels and manifests (not the long-term source of truth)
 
 Shared storage:
-- **MinIO/S3** for uploaded inputs.
-- **Zot/CAS** for immutable artifacts.
+- **MinIO/S3** for uploaded inputs and published artifacts when enabled.
+- **Zot/CAS** for immutable artifacts (wheels, runtimes, packs) when enabled.
+
+## Artifact library and future pip repo
+The long-term goal is to grow object storage into a large, searchable library of s390x wheels across Python versions, packages, and versions. Once it is hardened and populated, this library can be exposed as a pip-compatible repository for s390x builders.
 
 ## Where to go next
 - `docs/automatic-build-repair-system.md` for deep technical detail.
