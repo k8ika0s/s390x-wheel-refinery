@@ -2810,22 +2810,28 @@ const enqueuePlanForInput = async (pi, verb) => {
         <TopList
           title="Top failures"
           items={failuresTop}
-          render={(f) => (
-            <div key={f?.name || `fail-${Math.random()}`} className="flex items-center justify-between text-sm text-slate-200">
-              <span>{f?.name || "unknown"}</span>
-              <span className="chip">{f?.failures ?? 0} failures</span>
-            </div>
-          )}
+          render={(f, idx) => {
+            const key = f?.name ? `fail-${f.name}` : `fail-${idx}`;
+            return (
+              <div key={key} className="flex items-center justify-between text-sm text-slate-200">
+                <span>{f?.name || "unknown"}</span>
+                <span className="chip">{f?.failures ?? 0} failures</span>
+              </div>
+            );
+          }}
         />
         <TopList
           title="Top slow packages"
           items={slowestTop}
-          render={(s) => (
-            <div key={s?.name || `slow-${Math.random()}`} className="flex items-center justify-between text-sm text-slate-200">
-              <span>{s?.name || "unknown"}</span>
-              <span className="chip">{s?.avg_duration ?? "?"}s avg</span>
-            </div>
-          )}
+          render={(s, idx) => {
+            const key = s?.name ? `slow-${s.name}` : `slow-${idx}`;
+            return (
+              <div key={key} className="flex items-center justify-between text-sm text-slate-200">
+                <span>{s?.name || "unknown"}</span>
+                <span className="chip">{s?.avg_duration ?? "?"}s avg</span>
+              </div>
+            );
+          }}
         />
         <StatCard title="Hints">
           <div className="space-y-2 max-h-52 overflow-auto text-sm text-slate-200">
