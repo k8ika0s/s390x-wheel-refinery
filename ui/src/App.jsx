@@ -2874,13 +2874,13 @@ const enqueuePlanForInput = async (pi, verb) => {
               {selectedPlanNodes.length > 0 ? (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
-                    {["builds", "hints", "recipes"].map((tab) => (
+                    {["builds", "non-builds", "hints", "recipes"].map((tab) => (
                       <button
                         key={tab}
                         className={`chip ${planTab === tab ? "chip-active" : "hover:bg-slate-800"}`}
                         onClick={() => setPlanTab(tab)}
                       >
-                        {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                        {tab === "non-builds" ? "Non-builds" : tab.charAt(0).toUpperCase() + tab.slice(1)}
                       </button>
                     ))}
                   </div>
@@ -2923,6 +2923,27 @@ const enqueuePlanForInput = async (pi, verb) => {
                       }) : (
                         <EmptyState title="No build nodes" detail="This plan does not include build steps." icon="✅" />
                       )
+                    )}
+                    {planTab === "non-builds" && (
+                      (selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() !== "build")).length
+                        ? selectedPlanNodes
+                            .filter((n) => (n?.action || "").toLowerCase() !== "build")
+                            .map((node, idx) => (
+                              <div
+                                key={`${node.name}-${node.version}-${idx}`}
+                                className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between"
+                              >
+                                <div className="flex flex-col min-w-0">
+                                  <span className="font-semibold text-slate-100 truncate" title={node.name}>{node.name}</span>
+                                  <span className="text-slate-400 truncate">{node.version || "version?"}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {node.action && <span className="chip">{node.action}</span>}
+                                  {node.python_version && <span className="chip chip-muted">{node.python_version}</span>}
+                                </div>
+                              </div>
+                            ))
+                        : <EmptyState title="No non-build nodes" detail="All plan nodes are build steps." icon="✅" />
                     )}
                     {planTab === "hints" && (
                       <div className="space-y-2 text-xs text-slate-200">
