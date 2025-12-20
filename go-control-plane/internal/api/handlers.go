@@ -2288,6 +2288,8 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 		attempt := parseIntDefault(r.URL.Query().Get("attempt"), 0, 1000)
 		key := logStreamKey(name, version)
 		seqFallback := int64(0)
+		trimEvery := 50
+		trimCounter := 0
 		scanner := bufio.NewScanner(r.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
@@ -2328,7 +2330,11 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if h.Config.LogChunkMax > 0 {
-				_, _ = h.Store.TrimLogChunks(r.Context(), name, version, h.Config.LogChunkMax)
+				trimCounter++
+				if trimCounter >= trimEvery {
+					_, _ = h.Store.TrimLogChunks(r.Context(), name, version, h.Config.LogChunkMax)
+					trimCounter = 0
+				}
 			}
 			chunk.ID = id
 			h.getLogHub().publish(key, chunk)
@@ -2336,6 +2342,9 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 		if err := scanner.Err(); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
+		}
+		if h.Config.LogChunkMax > 0 && trimCounter > 0 {
+			_, _ = h.Store.TrimLogChunks(r.Context(), name, version, h.Config.LogChunkMax)
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "log stream ingested"})
 	case http.MethodGet:
