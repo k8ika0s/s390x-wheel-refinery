@@ -1141,6 +1141,10 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const buildCreatedLabel = formatEpoch(buildStatus?.created_at);
   const buildUpdatedLabel = formatEpoch(buildStatus?.updated_at);
   const buildBackoffLabel = formatEpoch(buildStatus?.backoff_until);
+  const buildBackoffReason = buildStatus?.backoff_reason || "";
+  const buildBackoffSeconds = Number(buildStatus?.backoff_seconds) || 0;
+  const backoffRemainingSec = buildStatus?.backoff_until ? Math.max(0, buildStatus.backoff_until - nowSec) : 0;
+  const backoffRemainingLabel = backoffRemainingSec ? formatDuration(backoffRemainingSec) : "—";
   const buildPackageName = buildStatus?.package || summary?.name || name;
   const buildVersionLabel = buildStatus?.version || summary?.latest?.version || "";
   const failureSummary = buildStatus?.failure_summary || "";
@@ -1201,6 +1205,18 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Backoff until</span>
                     <span>{buildBackoffLabel}</span>
+                  </div>
+                )}
+                {buildBackoffReason && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Backoff reason</span>
+                    <span className="capitalize">{buildBackoffReason}</span>
+                  </div>
+                )}
+                {buildBackoffSeconds > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Retry in</span>
+                    <span>{backoffRemainingLabel}</span>
                   </div>
                 )}
                 {buildStatus.recipes?.length > 0 && (
@@ -4210,6 +4226,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                                     <div><span className="text-slate-500">Started:</span> {formatTimestamp(b.started_at) || "-"}</div>
                                     <div><span className="text-slate-500">Finished:</span> {formatTimestamp(b.finished_at) || "-"}</div>
                                     <div><span className="text-slate-500">Backoff:</span> {formatTimestamp(b.backoff_until) || "-"}</div>
+                                    <div><span className="text-slate-500">Backoff reason:</span> {b.backoff_reason || "-"}</div>
+                                    <div><span className="text-slate-500">Backoff delay:</span> {b.backoff_seconds ? formatDuration(b.backoff_seconds) : "-"}</div>
                                     <div className="md:col-span-2"><span className="text-slate-500">Hints:</span> {hintsLabel}</div>
                                     <div className="md:col-span-3"><span className="text-slate-500">Recipes:</span> {recipesLabel}</div>
                                   </div>

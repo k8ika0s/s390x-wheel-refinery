@@ -46,6 +46,10 @@ type Config struct {
 	RunnerTimeoutSec     int
 	RequeueOnFailure     bool
 	MaxRequeueAttempts   int
+	BackoffBaseSec       int
+	BackoffMaxSec        int
+	BackoffTransientMult int
+	BackoffResourceMult  int
 	AutoFixEnabled       bool
 	AutoSaveHints        bool
 	AutoFixMinConfidence string
@@ -122,6 +126,10 @@ func fromEnv() Config {
 		RunnerTimeoutSec:     getenvInt("RUNNER_TIMEOUT_SEC", 900),
 		RequeueOnFailure:     getenvBool("REQUEUE_ON_FAILURE", false),
 		MaxRequeueAttempts:   getenvInt("MAX_REQUEUE_ATTEMPTS", 3),
+		BackoffBaseSec:       getenvInt("BACKOFF_BASE_SEC", 5),
+		BackoffMaxSec:        getenvInt("BACKOFF_MAX_SEC", 600),
+		BackoffTransientMult: getenvInt("BACKOFF_TRANSIENT_MULTIPLIER", 6),
+		BackoffResourceMult:  getenvInt("BACKOFF_RESOURCE_MULTIPLIER", 12),
 		AutoFixEnabled:       getenvBool("AUTO_FIX_ENABLED", true),
 		AutoSaveHints:        getenvBool("AUTO_SAVE_HINTS", true),
 		AutoFixMinConfidence: getenv("AUTO_FIX_MIN_CONFIDENCE", "low"),

@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS build_status (
     status        TEXT NOT NULL DEFAULT 'queued',
     attempts      INT NOT NULL DEFAULT 0,
     backoff_until TIMESTAMPTZ,
+    backoff_reason TEXT,
+    backoff_seconds INT,
     last_error    TEXT,
     failure_summary TEXT,
     recipes       JSONB,

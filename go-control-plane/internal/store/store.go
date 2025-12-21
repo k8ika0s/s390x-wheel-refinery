@@ -177,6 +177,8 @@ type BuildStatus struct {
 	RunID          string   `json:"run_id,omitempty"`
 	PlanID         int64    `json:"plan_id,omitempty"`
 	BackoffUntil   int64    `json:"backoff_until,omitempty"`
+	BackoffReason  string   `json:"backoff_reason,omitempty"`
+	BackoffSeconds int      `json:"backoff_seconds,omitempty"`
 	Recipes        []string `json:"recipes,omitempty"`
 	HintIDs        []string `json:"hint_ids,omitempty"`
 }
@@ -277,7 +279,7 @@ type Store interface {
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error)
 	BuildQueueStats(ctx context.Context) (BuildQueueStats, error)
-	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, recipes []string, hintIDs []string) error
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
 	RequeueStaleBuilds(ctx context.Context, leaseAgeSec int, buildAgeSec int) ([]BuildStatus, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)

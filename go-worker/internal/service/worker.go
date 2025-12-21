@@ -171,7 +171,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				defer logStream.Close()
 				job.LogWriter = logStream
 			}
-			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, "", attempt, 0, job.Recipes, nil)
+			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, "", attempt, backoffMeta{}, job.Recipes, nil)
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			if err != nil && strings.TrimSpace(logContent) == "" {
 				logContent = fmt.Sprintf("error: %s", err.Error())
@@ -250,12 +250,20 @@ func (w *Worker) Drain(ctx context.Context) error {
 			}
 		}
 		// report build status to control-plane
-		backoffUntil := int64(0)
+		var backoff backoffMeta
 		if status == "retry" {
-			backoffUntil = backoffTime(res.attempt)
+			logForBackoff := res.log
+			if strings.TrimSpace(logForBackoff) == "" {
+				logForBackoff = summary
+			}
+			backoff = w.backoffForRetry(res.attempt, res.err, logForBackoff)
 		}
 		if len(recipesForStatus) > 0 {
 			meta["recipes"] = recipesForStatus
+		}
+		if status == "retry" && backoff.Until > 0 {
+			meta["backoff_reason"] = backoff.Reason
+			meta["backoff_seconds"] = backoff.Seconds
 		}
 		if autoFix.Applied || len(autoFix.HintIDs) > 0 || len(autoFix.SavedHintIDs) > 0 {
 			meta["automation"] = map[string]any{
@@ -270,7 +278,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"impact_reason":  autoFix.ImpactReason,
 			}
 		}
-		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, backoffUntil, recipesForStatus, autoFix.HintIDs)
+		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, backoff, recipesForStatus, autoFix.HintIDs)
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
@@ -357,6 +365,10 @@ func (w *Worker) Drain(ctx context.Context) error {
 			if summary != "" {
 				logPayload["failure_summary"] = summary
 			}
+		}
+		if status == "retry" && backoff.Until > 0 {
+			logPayload["backoff_reason"] = backoff.Reason
+			logPayload["backoff_seconds"] = backoff.Seconds
 		}
 		if autoFix.Applied {
 			logPayload["auto_fix"] = map[string]any{
@@ -454,7 +466,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) {
+func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, summary string, attempts int, backoff backoffMeta, recipes []string, hintIDs []string) {
 	if w.Cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -471,8 +483,14 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	if summary != "" {
 		body["failure_summary"] = summary
 	}
-	if backoffUntil > 0 {
-		body["backoff_until"] = backoffUntil
+	if backoff.Until > 0 {
+		body["backoff_until"] = backoff.Until
+	}
+	if backoff.Reason != "" {
+		body["backoff_reason"] = backoff.Reason
+	}
+	if backoff.Seconds > 0 {
+		body["backoff_seconds"] = backoff.Seconds
 	}
 	if len(recipes) > 0 {
 		body["recipes"] = recipes
@@ -955,20 +973,137 @@ func (w *Worker) fetchPlanSnapshot(ctx context.Context, planID int64) (plan.Snap
 	return plan.Snapshot{RunID: payload.RunID, Plan: payload.Plan, DAG: payload.DAG}, nil
 }
 
-// backoffTime returns a Unix timestamp for the next retry using capped exponential backoff with jitter.
-func backoffTime(attempt int) int64 {
+type backoffMeta struct {
+	Until   int64
+	Seconds int
+	Reason  string
+}
+
+// backoffForRetry returns a retry schedule using adaptive backoff with jitter.
+func (w *Worker) backoffForRetry(attempt int, err error, logText string) backoffMeta {
+	reason := classifyBackoffReason(err, logText)
+	baseSec := w.Cfg.BackoffBaseSec
+	if baseSec <= 0 {
+		baseSec = 5
+	}
+	maxSec := w.Cfg.BackoffMaxSec
+	if maxSec <= 0 {
+		maxSec = 600
+	}
+	if maxSec < baseSec {
+		maxSec = baseSec
+	}
+	mult := 1
+	switch reason {
+	case "transient":
+		mult = w.Cfg.BackoffTransientMult
+	case "resource":
+		mult = w.Cfg.BackoffResourceMult
+	}
+	if mult < 1 {
+		mult = 1
+	}
 	if attempt < 1 {
 		attempt = 1
 	}
-	base := 5 * time.Second
-	max := 10 * time.Minute
-	d := base * time.Duration(1<<(attempt-1))
-	if d > max {
-		d = max
+	exp := attempt - 1
+	if exp > 10 {
+		exp = 10
 	}
-	// Add up to 1s jitter to avoid thundering herd.
+	delay := time.Duration(baseSec) * time.Second
+	delay *= time.Duration(1 << exp)
+	delay *= time.Duration(mult)
+	maxDelay := time.Duration(maxSec) * time.Second
+	if delay > maxDelay {
+		delay = maxDelay
+	}
 	jitter := time.Duration(rand.Int63n(int64(time.Second)))
-	return time.Now().Add(d + jitter).Unix()
+	total := delay + jitter
+	seconds := int(total.Seconds())
+	if seconds < 1 {
+		seconds = 1
+	}
+	return backoffMeta{
+		Until:   time.Now().Add(total).Unix(),
+		Seconds: seconds,
+		Reason:  reason,
+	}
+}
+
+func classifyBackoffReason(err error, logText string) string {
+	text := strings.ToLower(strings.TrimSpace(logText))
+	if err != nil {
+		errText := strings.ToLower(err.Error())
+		if text != "" {
+			text = errText + " " + text
+		} else {
+			text = errText
+		}
+	}
+	if text == "" {
+		return "default"
+	}
+	if matchAny(text, resourceBackoffHints) {
+		return "resource"
+	}
+	if matchAny(text, transientBackoffHints) {
+		return "transient"
+	}
+	return "default"
+}
+
+func matchAny(text string, patterns []string) bool {
+	for _, p := range patterns {
+		if p == "" {
+			continue
+		}
+		if strings.Contains(text, p) {
+			return true
+		}
+	}
+	return false
+}
+
+var transientBackoffHints = []string{
+	"connection reset",
+	"connection refused",
+	"connection aborted",
+	"connection closed",
+	"network is unreachable",
+	"no route to host",
+	"i/o timeout",
+	"tls handshake timeout",
+	"timeout",
+	"timed out",
+	"context deadline exceeded",
+	"temporary failure",
+	"temporary failure in name resolution",
+	"service unavailable",
+	"bad gateway",
+	"gateway timeout",
+	"too many requests",
+	"rate limit",
+	"429",
+	"502",
+	"503",
+	"504",
+	"unexpected eof",
+	"connection timed out",
+}
+
+var resourceBackoffHints = []string{
+	"out of memory",
+	"oom",
+	"cannot allocate memory",
+	"memory exhausted",
+	"killed",
+	"signal: killed",
+	"no space left on device",
+	"disk quota exceeded",
+	"no space",
+	"too many open files",
+	"resource temporarily unavailable",
+	"file too large",
 }
 
 // writeManifest writes manifest.json locally (best effort).
