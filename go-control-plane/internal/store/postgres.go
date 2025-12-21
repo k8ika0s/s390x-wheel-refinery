@@ -215,6 +215,7 @@ CREATE TABLE IF NOT EXISTS pending_inputs (
 );
 CREATE INDEX IF NOT EXISTS idx_pending_inputs_status ON pending_inputs(status);
 CREATE INDEX IF NOT EXISTS idx_pending_inputs_deleted ON pending_inputs(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_pending_inputs_digest ON pending_inputs(digest);
 
 ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS source_type TEXT;
 ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS object_bucket TEXT;
@@ -242,6 +243,8 @@ CREATE TABLE IF NOT EXISTS plan_metadata (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_plan_metadata_pending_input_created_at ON plan_metadata(pending_input, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_plan_metadata_plan_id ON plan_metadata(plan_id);
 `
 
 // RunMigrations ensures schema is present.
