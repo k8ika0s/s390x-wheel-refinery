@@ -1395,6 +1395,11 @@ function PackageDetail({ token, pushToast, apiBase }) {
                       <div className="text-slate-400">Applied: {entry.automation.applied ? "yes" : "no"}</div>
                     )}
                     {entry.automation?.reason && <div className="text-slate-400">{entry.automation.reason}</div>}
+                    {toArray(entry.automation?.decision_trace).length > 0 && (
+                      <div className="text-slate-400">
+                        Decision trace: {toArray(entry.automation?.decision_trace).join(" · ")}
+                      </div>
+                    )}
                     {entry.recipes.length > 0 && <div className="text-slate-400">Recipes: {entry.recipes.join(", ")}</div>}
                     {entry.hints.length > 0 && <div className="text-slate-400">Hints: {entry.hints.join(", ")}</div>}
                     {entry.savedHints.length > 0 && <div className="text-slate-400">Saved hints: {entry.savedHints.join(", ")}</div>}

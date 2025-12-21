@@ -288,7 +288,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 		if quarantined {
 			meta["quarantined"] = true
 		}
-		if autoFix.Applied || len(autoFix.HintIDs) > 0 || len(autoFix.SavedHintIDs) > 0 {
+		if autoFix.Applied || len(autoFix.HintIDs) > 0 || len(autoFix.SavedHintIDs) > 0 || len(autoFix.BlockedHints) > 0 || autoFix.BlockedReason != "" || len(autoFix.DecisionTrace) > 0 {
 			meta["automation"] = map[string]any{
 				"applied":        autoFix.Applied,
 				"recipes":        recipesForStatus,
@@ -299,6 +299,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"blocked_hints":  autoFix.BlockedHints,
 				"impact":         autoFix.Impact,
 				"impact_reason":  autoFix.ImpactReason,
+				"decision_trace": autoFix.DecisionTrace,
 			}
 		}
 		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, res.duration.Milliseconds(), reason, backoff, recipesForStatus, autoFix.HintIDs)
