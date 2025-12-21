@@ -46,6 +46,11 @@ This draft captures the intended endpoints for the Go control plane, matching th
 - Plan stored in Postgres (JSONB) for quick UI fetch; manifests/logs/history also in Postgres.
 - Session helper: `POST /session/token?token=` sets `worker_token` cookie (browser convenience for protected worker/queue actions).
 
+**Python versions/recipes**
+- `GET /python-versions` → list managed python versions from the recipes directory.
+- `GET /python-versions/{version}` → fetch recipe content/metadata for a version.
+- `PUT /python-versions/{version}` → create/update a recipe (JSON: `{ recipe: "..." }`).
+
 **Queue**
 - `GET /queue` → items (package, version, tags, recipes, enqueued_at).
 - `GET /queue/stats` → length, oldest age.

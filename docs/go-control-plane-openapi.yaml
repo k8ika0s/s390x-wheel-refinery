@@ -36,6 +36,57 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Config"
+  /python-versions:
+    get:
+      summary: List managed python versions
+      responses:
+        "200":
+          description: Python versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PythonRecipeInfo"
+  /python-versions/{version}:
+    get:
+      summary: Fetch python recipe content
+      parameters:
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Python recipe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PythonRecipeDetail"
+        "404":
+          description: Not found
+    put:
+      summary: Create or update a python recipe
+      parameters:
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                recipe: { type: string }
+      responses:
+        "200":
+          description: Python recipe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PythonRecipeDetail"
   /summary:
     get:
       summary: Recent status counts and failures
@@ -611,6 +662,19 @@ components:
             type: array
             items: { type: string }
         note: { type: string }
+    PythonRecipeInfo:
+      type: object
+      properties:
+        version: { type: string }
+        name: { type: string }
+        filename: { type: string }
+        updated_at: { type: string }
+    PythonRecipeDetail:
+      allOf:
+        - $ref: "#/components/schemas/PythonRecipeInfo"
+        - type: object
+          properties:
+            recipe: { type: string }
     LogEntry:
       type: object
       properties:
