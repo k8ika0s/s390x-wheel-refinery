@@ -1,11 +1,15 @@
 package runner
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +30,7 @@ type Job struct {
 	WheelSourceDigest string
 	RepairToolVersion string
 	RepairPolicyHash  string
+	LogWriter         io.Writer
 }
 
 // Runner executes build jobs.
@@ -81,18 +86,72 @@ func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string,
 		defer cancel()
 	}
 	execCmd := exec.CommandContext(runCtx, bin, args...)
-	output, err := execCmd.CombinedOutput()
-	elapsed := time.Since(start)
-	trimmed := strings.TrimSpace(string(output))
+	stdout, err := execCmd.StdoutPipe()
 	if err != nil {
-		reason := "error"
+		return time.Since(start), "", err
+	}
+	stderr, err := execCmd.StderrPipe()
+	if err != nil {
+		return time.Since(start), "", err
+	}
+	if err := execCmd.Start(); err != nil {
+		return time.Since(start), "", err
+	}
+
+	var mu sync.Mutex
+	var buf bytes.Buffer
+	writeChunk := func(chunk []byte) {
+		if len(chunk) == 0 {
+			return
+		}
+		mu.Lock()
+		buf.Write(chunk)
+		mu.Unlock()
+		if job.LogWriter != nil {
+			_, _ = job.LogWriter.Write(chunk)
+		}
+	}
+	stream := func(r io.Reader) {
+		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			writeChunk(append(append([]byte{}, line...), '\n'))
+		}
+		if err := scanner.Err(); err != nil {
+			writeChunk([]byte(fmt.Sprintf("runner: log stream error: %v\n", err)))
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		stream(stdout)
+	}()
+	go func() {
+		defer wg.Done()
+		stream(stderr)
+	}()
+
+	err = execCmd.Wait()
+	wg.Wait()
+	elapsed := time.Since(start)
+	statusLine := ""
+	reason := ""
+	if err != nil {
+		reason = "error"
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			reason = "timeout"
 		}
-		logContent := fmt.Sprintf("%s\nstatus=error reason=%s elapsed_ms=%d", trimmed, reason, elapsed.Milliseconds())
+		statusLine = fmt.Sprintf("status=error reason=%s elapsed_ms=%d\n", reason, elapsed.Milliseconds())
+	} else {
+		statusLine = fmt.Sprintf("status=ok elapsed_ms=%d\n", elapsed.Milliseconds())
+	}
+	writeChunk([]byte(statusLine))
+	logContent := strings.TrimRight(buf.String(), "\n")
+	if err != nil {
 		return elapsed, logContent, fmt.Errorf("podman run failed (%s): %w", reason, err)
 	}
-	logContent := fmt.Sprintf("%s\nstatus=ok elapsed_ms=%d", trimmed, elapsed.Milliseconds())
 	return elapsed, logContent, nil
 }
 

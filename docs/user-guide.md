@@ -1,75 +1,187 @@
-# s390x Wheel Refinery — Friendly Guide
+# s390x Wheel Refinery User Guide
 
-This guide is for anyone (non-technical to semi-technical) who wants to turn any pile of Python wheels into s390x wheels for mainframe use.
+This guide is written in plain language for day to day use. It explains how to upload inputs, generate plans, run builds, and read logs from the UI.
 
-## What it does (in plain words)
-- Reads the wheels or `requirements.txt` you upload through the UI/API.
-- Reuses wheels that already work on s390x and rebuilds the rest.
-- Learns from failures: suggests missing system packages, tries again with those, and remembers what worked.
-- Runs safely in a container so your machine stays clean.
-- Shows a web dashboard with statuses, hints, and live logs.
+## What this system does
+- Takes Python package lists or wheel files you upload.
+- Builds missing s390x wheels in a controlled container.
+- Retries failed builds with automatic fixes when possible.
+- Streams build logs live in the UI.
+- Stores outputs (wheels, repairs, manifests) in object storage and/or CAS, with local staging for debugging.
 
-## Quickest paths
+If you are new, think of it as a factory: you drop in a shopping list (requirements), and the system produces s390x wheels, while recording every step and retry it makes.
+
+## Quick start (local)
 1) Start the stack:
 ```
 podman compose -f podman-compose.yml up
 ```
-2) Open the dashboard at `http://localhost:3000`.
-3) Upload a `requirements.txt` or wheel file in the **Inputs** tab.
-4) Let auto-plan/build run, or trigger plan/build manually from the UI.
-
-## Dashboard (React SPA)
-Run the Go control-plane and UI:
+2) Open the UI:
 ```
-# Compose stack (Postgres/Redis/Redpanda + Go control-plane + UI + Go worker)
-podman compose -f podman-compose.yml up
-# worker runs privileged to allow embedded podman
+http://localhost:3000
 ```
-API will be on :8080, UI on :3000. For local UI dev from `ui/`, run `npm install && VITE_API_BASE=http://localhost:8080 npm run dev`. The SPA shows recent events, failures/slow packages, hint catalog, queue depth with items, worker trigger, variant history, per-package detail pages, and log viewing (via `/api/logs/...`). It includes a sticky header with environment/API and token badges, toasts, skeleton states, paginated/sortable event tables with sticky headers, a richer queue table (select, bulk retry, clear), tabs on package detail (overview/events/hints), paginated variants/failures, and log viewers with autoscroll/download controls.
+3) Upload a `requirements.txt` in the Inputs tab.
+4) Watch the plan and build progress in Plans and Builds.
 
-## Key options (plain-English)
-- `--python 3.11`: Target Python version for the rebuilt wheels.
-- `--container-preset rocky` (or `fedora`/`ubuntu`): Run in a container so the host isn’t changed. Add `--container-cpu`/`--container-memory` to limit resources.
-- `--jobs 2`: Build multiple packages at once (after a first warm-up run with `--jobs 1`).
-- `--auto-apply-suggestions`: When the tool spots missing libs/headers, it suggests system packages and can auto-try again with them.
-- `--fallback-latest`: If the exact version isn’t available for s390x, try the latest compatible one.
-- `--skip-known-failures`: Don’t retry packages that already failed.
-- `--attempt-timeout`, `--max-attempts`, `--attempt-backoff-base/max`: Control how long/ how many times to try and how long to wait between tries.
-- `--schedule shortest-first`: Build shorter packages first using past timing data.
-- **requirements.txt support**: Upload `requirements.txt` from the UI/API to seed the plan. Optional `CONSTRAINTS_PATH` to force pins. Unpinned specs (`>=`, `~=`) are resolved via your index (`INDEX_URL`/`EXTRA_INDEX_URL`, with `INDEX_USERNAME/PASSWORD` for private repos). Limit dependency expansion with `MAX_DEPS` (default 1000). Per-package overrides via `PLAN_OVERRIDES_JSON`.
+## Core concepts in simple terms
+- **Pending input**: An uploaded requirements file or wheel waiting to be planned.
+- **Plan**: A list of build jobs (the DAG) created from your input.
+- **Build job**: A single package/version that needs a wheel.
+- **Worker**: The service that runs builds.
+- **Auto plan**: Uploads are automatically sent to planning.
+- **Auto build**: Plans automatically enqueue builds.
+- **Hints and recipes**: Known fixes for build failures (install a system lib, set env var, etc).
 
-## Where things go
-- New s390x wheels: `/output`
-- Logs: `/cache/logs/...`
-- Manifest: `/output/manifest.json` (what happened to each package)
-- History database: `/cache/history.db` (used by the dashboard)
+## Typical flow (UI)
+1) Upload a `requirements.txt` (Inputs page).
+2) The file appears in Pending Inputs.
+3) If auto plan is on, planning starts automatically. If not, click Enqueue.
+4) A plan is saved and appears in the Plans page.
+5) If auto build is on, builds are enqueued automatically. If not, click Enqueue builds.
+6) The Builds page shows the queue and status.
+7) Click a package to see events and live logs.
 
-## Handling failures
-1) Open the dashboard, find the failing package.
-2) Read the hint (e.g., “Suggested packages: dnf: openblas-devel | apt: libopenblas-dev”).
-3) Re-run with `--auto-apply-suggestions` (or add those packages to your build image).
-4) If it keeps failing, use `--skip-known-failures` to move on, then address it later.
+## Uploading inputs
+### Requirements file (recommended)
+Your file can be as simple as:
+```
+six==1.16.0
+requests==2.32.3
+```
 
-## Retry later with the queue
-- On a package page in the dashboard, click **Retry with recipe** (or call `POST /api/queue/enqueue`), which drops a request into the queue backend (file/Redis/Kafka, defaults to file/Redis via compose).
-- When you’re ready, trigger the Go worker (compose includes one) to consume the queue; the worker applies queued recipes as overrides and rebuilds matching packages. The queue is emptied as it runs.
-- The dashboard shows queue length and a **Run worker now** button. It works when the control-plane can reach the worker (local or webhook) and both share `/output` and `/cache`.
-- Optional auth: set `WORKER_TOKEN` to require `X-Worker-Token` (or `?token=`) for queue/worker actions.
-- CLI queue check: use the Go API `/api/queue`/`/api/queue/stats` or the UI.
-- Cookie tip: if you don’t want the token in URLs, set a cookie named `worker_token` in the browser (or call `POST /api/session/token?token=<your_token>`); the UI will send it automatically when triggering the worker.
+Upload from the UI:
+- Inputs page -> Upload requirements.txt
 
-## Tips for AI/ML stacks
-- Use `rocky` preset or a custom image with OpenBLAS/LAPACK and build tools installed.
-- Keep `/cache` between runs so successes/hints/logs are remembered.
-- Start with `--jobs 1` to warm up, then increase `--jobs` for speed.
+Or upload with the API:
+```
+curl -X POST -F "file=@requirements.txt" http://localhost:8080/api/requirements/upload
+```
 
-## If you want more control
-- Inspect `manifest.json` for per-package details (attempt, log path, hints).
-- Query history from CLI: `refinery history --db /cache/history.db --recent 20 --top-failures 10 --json`
-- Limit container resources: `--container-cpu 2 --container-memory 4g`
-- Run tests (for maintainers): `pip install -e .[dev] && pytest -q`
-- CI (for maintainers): GitHub Actions runs lint, pytest, container/web smokes, and a dummy-wheel orchestration smoke on PRs.
-- Dashboard shows recent failures, hints, and recipes (when available) for troubleshooting.
-- Package pages show recent failures and variant history so you can see what worked and what didn’t.
+### Wheel file
+Upload a wheel if you already have one and want it indexed:
+```
+curl -X POST -F "file=@package.whl" http://localhost:8080/api/wheels/upload
+```
 
-Run the command, watch the dashboard, and collect your s390x wheels. The tool learns from each run to make the next one smoother.
+## Planning
+Planning turns your input into a build graph.
+
+### Auto plan
+- If `AUTO_PLAN=true` on the control-plane, new uploads go straight into planning.
+- The pending input will move from `pending` to `planning`.
+
+### Manual plan
+- Inputs page -> Enqueue (or Replan on failed).
+- API:
+```
+POST /api/pending-inputs/{id}/enqueue-plan
+```
+
+## Building
+Builds are stored in `build_status` and drained by the worker.
+
+### Auto build (control-plane + worker)
+- If the control-plane has `AUTO_BUILD=true`, plans enqueue builds right away.
+- If the worker has `AUTO_BUILD=true`, it continuously polls the build queue.
+- Both must be on for fully automatic builds.
+
+### Manual build
+- Plans page -> Enqueue builds
+- Per-node enqueue buttons exist for individual build nodes.
+- API:
+```
+POST /api/plans/{id}/enqueue-builds
+POST /api/plans/{id}/enqueue-build
+```
+
+## Watching progress
+### Builds page
+- Shows queue status and active jobs.
+- Expand a row to see timestamps, plan/run IDs, recipes, and errors.
+
+### Package view
+- Shows event history and automation timeline.
+- Log viewer includes live tail, search, highlight, wrap, and download.
+
+### Log streaming
+- Live logs stream into the UI while a build runs.
+- Final logs are also stored for download.
+
+## Auto fixes, hints, and recipes
+When a build fails, the worker:
+1) Checks the hint catalog for known fixes.
+2) Applies recipes if allowed.
+3) Retries automatically if attempts remain.
+
+You can review:
+- Applied recipes and hints in events.
+- Auto-saved hints in the Hints page.
+
+## Seed build for quick testing
+Use the seed script to enqueue a known simple package and watch logs:
+```
+API_BASE=http://localhost:8080 PACKAGE=six VERSION=1.16.0 ./scripts/seed-build.sh
+```
+This will upload a tiny requirements file, create a plan, enqueue builds, and tail logs until completion.
+
+## Status glossary
+### Pending input
+- `pending`: uploaded, waiting for plan enqueue
+- `planning`: enqueued to plan queue
+- `planned`: plan saved and linked
+- `queued` or `build_queued`: builds enqueued
+- `failed`: planning failed
+
+### Build
+- `pending`: waiting in build_status
+- `leased`: claimed by worker
+- `building`: container running
+- `retry`: requeued after auto-fix
+- `built`: succeeded
+- `failed`: failed with no retry
+- `cached` / `reused`: reused existing output
+- `missing`: missing input
+- `skipped_known_failure`: known failure skip
+- `system_recipe_failed`: system recipe failed before build
+
+## Troubleshooting
+### Nothing is building
+- Check auto build in Settings (control-plane).
+- Check worker auto build (worker env `AUTO_BUILD=true`).
+- Verify the worker is running and reporting heartbeats.
+
+### Input stuck in pending
+- Auto plan may be off.
+- Use Enqueue in the Inputs page.
+
+### Build stuck in leased/building
+- Worker may have died mid-run.
+- Requeue by clearing builds or wait for lease timeout.
+
+### No logs appear
+- Check worker token in UI (Settings).
+- Confirm the worker can reach `/api/logs/stream`.
+- Try opening `/api/logs/chunks/{name}/{version}` directly.
+
+### Token issues
+- Set `WORKER_TOKEN` in your environment and add the token in the UI Settings page.
+- The UI sends it as `X-Worker-Token` for worker actions.
+
+## File locations
+These paths are inside the worker container or bind mounts:
+- `/cache/plans` - plan snapshots
+- `/cache/cas` - CAS staging
+- `/cache/pip` - pip downloads
+- `/output` - local staging for built wheels and manifests (not the long-term source of truth)
+
+Shared storage:
+- **MinIO/S3** for uploaded inputs and published artifacts when enabled.
+- **Zot/CAS** for immutable artifacts (wheels, runtimes, packs) when enabled.
+
+## Artifact library and future pip repo
+The long-term goal is to grow object storage into a large, searchable library of s390x wheels across Python versions, packages, and versions. Once it is hardened and populated, this library can be exposed as a pip-compatible repository for s390x builders.
+
+## Where to go next
+- `docs/automatic-build-repair-system.md` for deep technical detail.
+- `docs/plan-build-queues.md` for the queue model.
+- `docs/diagrams/README.md` for diagram index.

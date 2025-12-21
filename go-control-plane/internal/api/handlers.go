@@ -2,9 +2,11 @@ package api
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +16,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
@@ -21,6 +24,7 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
+	"golang.org/x/net/websocket"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,6 +35,8 @@ type Handler struct {
 	PlanQ      queue.PlanQueueBackend
 	InputStore objectstore.Store
 	Config     config.Config
+	logHubOnce sync.Once
+	logHub     *logHub
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
@@ -78,7 +84,10 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs/", h.logsByNameVersion)
 	mux.HandleFunc("/api/logs/search", h.logsSearch)
 	mux.HandleFunc("/api/logs", h.logsIngest)
-	mux.HandleFunc("/api/logs/stream", h.logsStream)
+	mux.HandleFunc("/api/logs/stream/", h.logsStream)
+	mux.HandleFunc("/api/logs/chunks/", h.logsChunks)
+	mux.HandleFunc("/api/workers", h.workers)
+	mux.HandleFunc("/api/worker/heartbeat", h.workerHeartbeat)
 	mux.HandleFunc("/api/worker/trigger", h.workerTrigger)
 	mux.HandleFunc("/api/worker/smoke", h.workerSmoke)
 }
@@ -132,6 +141,12 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	type hintMetrics struct {
 		Count int `json:"count"`
 	}
+	type workerMetrics struct {
+		Total         int   `json:"total"`
+		Online        int   `json:"online"`
+		Stale         int   `json:"stale"`
+		LatestSeenSec int64 `json:"latest_seen_seconds,omitempty"`
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
@@ -156,8 +171,8 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 
 	pm := pendingMetrics{}
 	if h.Store != nil {
-		if list, err := h.Store.ListPendingInputs(ctx, ""); err == nil {
-			pm.Count = len(list)
+		if count, err := h.Store.PendingInputCount(ctx, ""); err == nil {
+			pm.Count = count
 		}
 	}
 	if pq, ok := h.PlanQ.(interface {
@@ -183,22 +198,11 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 
 	buildStats := buildMetrics{}
 	if h.Store != nil {
-		list, err := h.Store.ListBuilds(ctx, "", 500)
-		if err == nil {
-			var oldest int64
-			for _, b := range list {
-				if strings.EqualFold(b.Status, "pending") {
-					buildStats.Pending++
-				}
-				if strings.EqualFold(b.Status, "retry") {
-					buildStats.Retry++
-				}
-				buildStats.Length++
-				if oldest == 0 || b.OldestAgeSec > oldest {
-					oldest = b.OldestAgeSec
-				}
-			}
-			buildStats.OldestAgeSec = oldest
+		if stats, err := h.Store.BuildQueueStats(ctx); err == nil {
+			buildStats.Length = stats.Length
+			buildStats.OldestAgeSec = stats.OldestAgeSec
+			buildStats.Pending = stats.Pending
+			buildStats.Retry = stats.Retry
 		}
 	}
 	hm := hintMetrics{}
@@ -207,6 +211,32 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	}); ok && counter != nil {
 		if count, err := counter.HintCount(ctx); err == nil {
 			hm.Count = count
+		}
+	}
+	wm := workerMetrics{}
+	if h.Store != nil {
+		if list, err := h.Store.ListWorkers(ctx); err == nil {
+			now := time.Now().Unix()
+			for _, ws := range list {
+				wm.Total++
+				interval := ws.HeartbeatIntervalSec
+				if interval <= 0 {
+					interval = 15
+				}
+				threshold := int64(interval * 2)
+				if threshold < 30 {
+					threshold = 30
+				}
+				age := now - ws.LastSeen
+				if ws.LastSeen > wm.LatestSeenSec {
+					wm.LatestSeenSec = ws.LastSeen
+				}
+				if age <= threshold {
+					wm.Online++
+				} else {
+					wm.Stale++
+				}
+			}
 		}
 	}
 	poolPlan := 0
@@ -231,6 +261,7 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		"pending":         pm,
 		"build":           buildStats,
 		"hints":           hm,
+		"workers":         wm,
 		"db":              dbm,
 		"status_counts":   sum.StatusCounts,
 		"recent_failures": sum.Failures,
@@ -302,6 +333,31 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&buf, "# HELP refinery_pending_inputs_total Pending uploads awaiting planning.\n")
 		fmt.Fprintf(&buf, "# TYPE refinery_pending_inputs_total gauge\n")
 		fmt.Fprintf(&buf, "refinery_pending_inputs_total %d\n", len(list))
+	}
+	if list, err := h.Store.ListWorkers(ctx); err == nil {
+		total := 0
+		online := 0
+		now := time.Now().Unix()
+		for _, ws := range list {
+			total++
+			interval := ws.HeartbeatIntervalSec
+			if interval <= 0 {
+				interval = 15
+			}
+			threshold := int64(interval * 2)
+			if threshold < 30 {
+				threshold = 30
+			}
+			if now-ws.LastSeen <= threshold {
+				online++
+			}
+		}
+		fmt.Fprintf(&buf, "# HELP refinery_workers_total Total workers reporting heartbeats.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_workers_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_workers_total %d\n", total)
+		fmt.Fprintf(&buf, "# HELP refinery_workers_online Workers seen within heartbeat window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_workers_online gauge\n")
+		fmt.Fprintf(&buf, "refinery_workers_online %d\n", online)
 	}
 	fmt.Fprintf(&buf, "# HELP refinery_db_up Database connectivity (1=up,0=down).\n")
 	fmt.Fprintf(&buf, "# TYPE refinery_db_up gauge\n")
@@ -924,6 +980,28 @@ func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = h.Store.UpdatePendingInputStatus(r.Context(), id, "planning", "")
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "enqueued for planning"})
+	case "restore":
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		if h.Store == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store not configured"})
+			return
+		}
+		if _, err := h.Store.RestorePendingInput(r.Context(), id); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "pending input not found"})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"detail": "pending input restored", "id": id})
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
 	}
@@ -1035,8 +1113,19 @@ func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		status := r.URL.Query().Get("status")
+		pkg := r.URL.Query().Get("package")
+		version := r.URL.Query().Get("version")
 		limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 1000)
-		list, err := h.Store.ListBuilds(r.Context(), status, limit)
+		var planID int64
+		if planStr := r.URL.Query().Get("plan_id"); planStr != "" {
+			id, err := strconv.ParseInt(planStr, 10, 64)
+			if err != nil || id <= 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid plan_id"})
+				return
+			}
+			planID = id
+		}
+		list, err := h.Store.ListBuilds(r.Context(), status, limit, planID, pkg, version)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -1069,14 +1158,15 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Package      string   `json:"package"`
-		Version      string   `json:"version"`
-		Status       string   `json:"status"`
-		Error        string   `json:"error,omitempty"`
-		Attempts     int      `json:"attempts,omitempty"`
-		BackoffUntil int64    `json:"backoff_until,omitempty"`
-		Recipes      []string `json:"recipes,omitempty"`
-		HintIDs      []string `json:"hint_ids,omitempty"`
+		Package        string   `json:"package"`
+		Version        string   `json:"version"`
+		Status         string   `json:"status"`
+		Error          string   `json:"error,omitempty"`
+		FailureSummary string   `json:"failure_summary,omitempty"`
+		Attempts       int      `json:"attempts,omitempty"`
+		BackoffUntil   int64    `json:"backoff_until,omitempty"`
+		Recipes        []string `json:"recipes,omitempty"`
+		HintIDs        []string `json:"hint_ids,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -1086,9 +1176,47 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package, version, and status required"})
 		return
 	}
-	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.Attempts, body.BackoffUntil, body.Recipes, body.HintIDs); err != nil {
+	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.Recipes, body.HintIDs); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if body.Status == "building" || body.Status == "pending" || body.Status == "retry" {
+		detail := "build status updated"
+		switch body.Status {
+		case "building":
+			detail = "build started"
+		case "pending":
+			detail = "build queued"
+		case "retry":
+			detail = "build retry scheduled"
+		}
+		meta := map[string]any{}
+		if body.Attempts > 0 {
+			meta["attempt"] = body.Attempts
+		}
+		if len(body.Recipes) > 0 {
+			meta["recipes"] = body.Recipes
+		}
+		if len(body.HintIDs) > 0 {
+			meta["hint_ids"] = body.HintIDs
+		}
+		_ = h.Store.RecordEvent(r.Context(), store.Event{
+			Name:           body.Package,
+			Version:        body.Version,
+			Status:         body.Status,
+			Detail:         detail,
+			Metadata:       meta,
+			Timestamp:      time.Now().Unix(),
+			MatchedHintIDs: body.HintIDs,
+		})
+		if body.Status == "building" {
+			_ = h.Store.PutLog(r.Context(), store.LogEntry{
+				Name:      body.Package,
+				Version:   body.Version,
+				Content:   fmt.Sprintf("build started at %s\nstatus=building", time.Now().Format(time.RFC3339)),
+				Timestamp: time.Now().Unix(),
+			})
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "build status updated"})
 }
@@ -1103,6 +1231,9 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	max := parseIntDefault(r.URL.Query().Get("max"), 5, 100)
+	if h.Store != nil && h.Config.BuildLeaseTimeout > 0 {
+		_, _ = h.Store.RequeueStaleLeases(r.Context(), h.Config.BuildLeaseTimeout)
+	}
 	builds, err := h.Store.LeaseBuilds(r.Context(), max)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1294,7 +1425,15 @@ func (h *Handler) topFailures(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	type topFailure struct {
+		Name     string `json:"name"`
+		Failures int64  `json:"failures"`
+	}
+	out := make([]topFailure, 0, len(res))
+	for _, st := range res {
+		out = append(out, topFailure{Name: st.Name, Failures: int64(st.Value)})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) topSlowest(w http.ResponseWriter, r *http.Request) {
@@ -1308,7 +1447,15 @@ func (h *Handler) topSlowest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	type topSlow struct {
+		Name        string  `json:"name"`
+		AvgDuration float64 `json:"avg_duration"`
+	}
+	out := make([]topSlow, 0, len(res))
+	for _, st := range res {
+		out = append(out, topSlow{Name: st.Name, AvgDuration: st.Value})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
@@ -1450,7 +1597,7 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, snap)
 	case http.MethodPost:
-		if action != "enqueue-builds" {
+		if action != "enqueue-builds" && action != "enqueue-build" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
 			return
 		}
@@ -1463,32 +1610,90 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		if snap.Queued {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "plan already enqueued"})
+		if action == "enqueue-builds" {
+			if snap.Queued {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "plan already enqueued"})
+				return
+			}
+			if err := h.Store.QueueBuildsFromPlan(r.Context(), snap.RunID, snap.ID, snap.Plan); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			if h.Store != nil {
+				// Mark any linked pending inputs as queued so the UI reflects progress.
+				if count, err := h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "queued"); err == nil && count == 0 {
+					// If nothing was updated, the linkage might be missing; fall back to clearing any "planned" rows for this plan.
+					_, _ = h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "build_queued")
+				}
+			}
+			count := 0
+			for _, node := range snap.Plan {
+				if strings.EqualFold(node.Action, "build") {
+					count++
+				}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"detail":   "builds enqueued",
+				"plan_id":  snap.ID,
+				"run_id":   snap.RunID,
+				"enqueued": count,
+			})
 			return
 		}
-		if err := h.Store.QueueBuildsFromPlan(r.Context(), snap.RunID, snap.ID, snap.Plan); err != nil {
+		var body struct {
+			Package string `json:"package"`
+			Version string `json:"version"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		pkg := strings.TrimSpace(body.Package)
+		ver := strings.TrimSpace(body.Version)
+		if pkg == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package required"})
+			return
+		}
+		var target *store.PlanNode
+		ambiguous := false
+		for i, node := range snap.Plan {
+			if !strings.EqualFold(node.Action, "build") {
+				continue
+			}
+			if !strings.EqualFold(node.Name, pkg) {
+				continue
+			}
+			if ver != "" && !strings.EqualFold(node.Version, ver) {
+				continue
+			}
+			if target != nil && ver == "" {
+				ambiguous = true
+				break
+			}
+			target = &snap.Plan[i]
+		}
+		if ambiguous {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "multiple versions found; include version"})
+			return
+		}
+		if target == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "build node not found"})
+			return
+		}
+		if err := h.Store.QueueBuildsFromPlan(r.Context(), snap.RunID, snap.ID, []store.PlanNode{*target}); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		if h.Store != nil {
-			// Mark any linked pending inputs as queued so the UI reflects progress.
 			if count, err := h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "queued"); err == nil && count == 0 {
-				// If nothing was updated, the linkage might be missing; fall back to clearing any "planned" rows for this plan.
 				_, _ = h.Store.UpdatePendingInputsForPlan(r.Context(), snap.ID, "build_queued")
 			}
 		}
-		count := 0
-		for _, node := range snap.Plan {
-			if strings.EqualFold(node.Action, "build") {
-				count++
-			}
-		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"detail":   "builds enqueued",
+			"detail":   "build enqueued",
 			"plan_id":  snap.ID,
 			"run_id":   snap.RunID,
-			"enqueued": count,
+			"enqueued": 1,
 		})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -1731,6 +1936,67 @@ func (h *Handler) workerTrigger(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"detail": strings.Join(detail, "; "), "queue_length": stats.Length})
 }
 
+func (h *Handler) workers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if h.Store == nil {
+		writeJSON(w, http.StatusOK, []store.WorkerStatus{})
+		return
+	}
+	list, err := h.Store.ListWorkers(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+func (h *Handler) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	var body struct {
+		WorkerID             string `json:"worker_id"`
+		RunID                string `json:"run_id,omitempty"`
+		ActiveBuilds         int    `json:"active_builds,omitempty"`
+		BuildPoolSize        int    `json:"build_pool_size,omitempty"`
+		PlanPoolSize         int    `json:"plan_pool_size,omitempty"`
+		HeartbeatIntervalSec int    `json:"heartbeat_interval_sec,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if body.WorkerID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "worker_id required"})
+		return
+	}
+	if h.Store == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"detail": "no store configured"})
+		return
+	}
+	status := store.WorkerStatus{
+		WorkerID:             body.WorkerID,
+		RunID:                body.RunID,
+		ActiveBuilds:         body.ActiveBuilds,
+		BuildPoolSize:        body.BuildPoolSize,
+		PlanPoolSize:         body.PlanPoolSize,
+		HeartbeatIntervalSec: body.HeartbeatIntervalSec,
+	}
+	if err := h.Store.UpsertWorkerStatus(r.Context(), status); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"detail": "ok"})
+}
+
 func (h *Handler) workerSmoke(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -1941,7 +2207,17 @@ func (h *Handler) logsByNameVersion(w http.ResponseWriter, r *http.Request) {
 	name, version := parts[2], parts[3]
 	logEntry, err := h.Store.GetLog(r.Context(), name, version)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "log not found"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	raw := r.URL.Query().Get("raw")
+	if raw == "1" || strings.EqualFold(raw, "true") || strings.Contains(r.Header.Get("Accept"), "text/plain") {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(logEntry.Content))
 		return
 	}
 	writeJSON(w, http.StatusOK, logEntry)
@@ -1962,30 +2238,151 @@ func (h *Handler) logsSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, results)
 }
 
-func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) logsChunks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 	parts := splitPath(r.URL.Path)
-	if len(parts) < 4 {
+	if len(parts) < 5 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name/version required"})
 		return
 	}
-	name, version := parts[2], parts[3]
-	entry, err := h.Store.GetLog(r.Context(), name, version)
+	name, version := parts[3], parts[4]
+	after := parseInt64Default(r.URL.Query().Get("after"), 0)
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 2000)
+	tail := r.URL.Query().Get("tail")
+	tailOn := tail == "1" || strings.EqualFold(tail, "true")
+	var chunks []store.LogChunk
+	var err error
+	if tailOn {
+		chunks, err = h.Store.TailLogChunks(r.Context(), name, version, limit)
+	} else {
+		chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("event: log\n"))
-	payload, _ := json.Marshal(entry)
-	_, _ = w.Write([]byte("data: " + string(payload) + "\n\n"))
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
+	writeJSON(w, http.StatusOK, chunks)
+}
+
+func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
+	parts := splitPath(r.URL.Path)
+	if len(parts) < 5 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name/version required"})
+		return
+	}
+	name, version := parts[3], parts[4]
+	switch r.Method {
+	case http.MethodPost:
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
+		if h.Store == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store not configured"})
+			return
+		}
+		runID := r.URL.Query().Get("run_id")
+		attempt := parseIntDefault(r.URL.Query().Get("attempt"), 0, 1000)
+		key := logStreamKey(name, version)
+		seqFallback := int64(0)
+		trimEvery := 50
+		trimCounter := 0
+		scanner := bufio.NewScanner(r.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			var payload struct {
+				Seq       int64  `json:"seq"`
+				Content   string `json:"content"`
+				Timestamp int64  `json:"timestamp"`
+			}
+			if err := json.Unmarshal([]byte(line), &payload); err != nil {
+				payload.Content = line
+			}
+			if payload.Content == "" {
+				continue
+			}
+			if payload.Timestamp == 0 {
+				payload.Timestamp = time.Now().Unix()
+			}
+			if payload.Seq == 0 {
+				seqFallback++
+				payload.Seq = seqFallback
+			}
+			chunk := store.LogChunk{
+				Name:      name,
+				Version:   version,
+				RunID:     runID,
+				Attempt:   attempt,
+				Seq:       payload.Seq,
+				Content:   payload.Content,
+				Timestamp: payload.Timestamp,
+			}
+			id, err := h.Store.PutLogChunk(r.Context(), chunk)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			if h.Config.LogChunkMax > 0 {
+				trimCounter++
+				if trimCounter >= trimEvery {
+					_, _ = h.Store.TrimLogChunks(r.Context(), name, version, h.Config.LogChunkMax)
+					trimCounter = 0
+				}
+			}
+			chunk.ID = id
+			h.getLogHub().publish(key, chunk)
+		}
+		if err := scanner.Err(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if h.Config.LogChunkMax > 0 && trimCounter > 0 {
+			_, _ = h.Store.TrimLogChunks(r.Context(), name, version, h.Config.LogChunkMax)
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"detail": "log stream ingested"})
+	case http.MethodGet:
+		after := parseInt64Default(r.URL.Query().Get("after"), 0)
+		limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 2000)
+		tail := r.URL.Query().Get("tail")
+		tailOn := tail == "1" || strings.EqualFold(tail, "true")
+		key := logStreamKey(name, version)
+		websocket.Handler(func(ws *websocket.Conn) {
+			defer ws.Close()
+			if h.Store != nil {
+				var chunks []store.LogChunk
+				var err error
+				if tailOn {
+					chunks, err = h.Store.TailLogChunks(r.Context(), name, version, limit)
+				} else {
+					chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+				}
+				if err == nil {
+					for _, chunk := range chunks {
+						_ = websocket.JSON.Send(ws, chunk)
+						after = chunk.ID
+					}
+				}
+			}
+			ch, unsubscribe := h.getLogHub().subscribe(key)
+			defer unsubscribe()
+			for chunk := range ch {
+				if chunk.ID <= after {
+					continue
+				}
+				if err := websocket.JSON.Send(ws, chunk); err != nil {
+					return
+				}
+			}
+		}).ServeHTTP(w, r)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
 }
 
@@ -1999,6 +2396,17 @@ func parseIntDefault(val string, def int, max int) int {
 	}
 	if max > 0 && i > max {
 		return max
+	}
+	return i
+}
+
+func parseInt64Default(val string, def int64) int64 {
+	if val == "" {
+		return def
+	}
+	i, err := strconv.ParseInt(val, 10, 64)
+	if err != nil || i <= 0 {
+		return def
 	}
 	return i
 }

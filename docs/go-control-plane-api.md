@@ -47,6 +47,8 @@ This draft captures the intended endpoints for the Go control plane, matching th
 
 **Worker Trigger**
 - `POST /worker/trigger` → drain queue via local or webhook, returns detail + queue length. Honors `X-Worker-Token`/`token` when `WORKER_TOKEN` is set; open otherwise.
+- `POST /worker/heartbeat` → upsert worker status (worker_id, pools, active builds). Requires `X-Worker-Token` when configured.
+- `GET /workers` → list worker heartbeat statuses and last-seen timestamps.
 - `POST /worker/smoke` (optional) → validate mounts/config without draining. Same token behavior.
 
 **Hints**
@@ -56,10 +58,12 @@ This draft captures the intended endpoints for the Go control plane, matching th
 - `DELETE /hints/{id}` → delete.
 
 **Logs**
-- `GET /logs/{name}/{version}` → log content/metadata.
+- `GET /logs/{name}/{version}` → log content/metadata (latest stored entry); `?raw=1` returns plain text.
 - `GET /logs/search?q=&limit=` → simple text search over logs.
-- `POST /logs` → ingest/store a log entry (name/version/content/timestamp auto-set if omitted).
-- `GET /logs/stream/{name}/{version}` → SSE-style single-event stream of the latest log entry.
+- `POST /logs` → ingest/store a full log entry (name/version/content/timestamp auto-set if omitted).
+- `GET /logs/chunks/{name}/{version}?after=&limit=` → list stored log chunks (for replay); `tail=1` returns the newest chunks.
+- `POST /logs/stream/{name}/{version}` → worker streaming ingest (NDJSON chunks).
+- `GET /logs/stream/{name}/{version}?after=&limit=` → WebSocket stream of log chunks (live tail).
 
 ### Data shapes (coarse)
 - Event: `{run_id,name,version,python_tag,platform_tag,status,detail,metadata,timestamp,matched_hint_ids?}`

@@ -27,7 +27,8 @@ type fakeStore struct {
 		status string
 		errMsg string
 	}
-	queuedBuilds []store.PlanNode
+	restoredPendingID int64
+	queuedBuilds      []store.PlanNode
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -82,6 +83,18 @@ func (f *fakeStore) SearchLogs(ctx context.Context, q string, limit int) ([]stor
 func (f *fakeStore) PutLog(ctx context.Context, entry store.LogEntry) error {
 	return nil
 }
+func (f *fakeStore) PutLogChunk(ctx context.Context, chunk store.LogChunk) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]store.LogChunk, error) {
+	return nil, nil
+}
+func (f *fakeStore) TailLogChunks(ctx context.Context, name, version string, limit int) ([]store.LogChunk, error) {
+	return nil, nil
+}
+func (f *fakeStore) TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error) {
+	return 0, nil
+}
 func (f *fakeStore) Plan(ctx context.Context) ([]store.PlanNode, error) {
 	return f.lastPlan, nil
 }
@@ -126,6 +139,9 @@ func (f *fakeStore) AddPendingInput(ctx context.Context, pi store.PendingInput) 
 func (f *fakeStore) ListPendingInputs(ctx context.Context, status string) ([]store.PendingInput, error) {
 	return f.listPending, nil
 }
+func (f *fakeStore) PendingInputCount(ctx context.Context, status string) (int, error) {
+	return len(f.listPending), nil
+}
 func (f *fakeStore) UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error {
 	f.pendingStatuses = append(f.pendingStatuses, struct {
 		id     int64
@@ -137,23 +153,39 @@ func (f *fakeStore) UpdatePendingInputStatus(ctx context.Context, id int64, stat
 func (f *fakeStore) DeletePendingInput(ctx context.Context, id int64) (store.PendingInput, error) {
 	return store.PendingInput{ID: id}, nil
 }
+func (f *fakeStore) RestorePendingInput(ctx context.Context, id int64) (store.PendingInput, error) {
+	f.restoredPendingID = id
+	return store.PendingInput{ID: id, Status: "pending"}, nil
+}
 func (f *fakeStore) LinkPlanToPendingInput(ctx context.Context, pendingID, planID int64) error {
 	return nil
 }
 func (f *fakeStore) UpdatePendingInputsForPlan(ctx context.Context, planID int64, status string) (int64, error) {
 	return 0, nil
 }
-func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int) ([]store.BuildStatus, error) {
+func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]store.BuildStatus, error) {
 	return nil, nil
 }
-func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error {
+func (f *fakeStore) BuildQueueStats(ctx context.Context) (store.BuildQueueStats, error) {
+	return store.BuildQueueStats{}, nil
+}
+func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error {
 	return nil
 }
 func (f *fakeStore) LeaseBuilds(ctx context.Context, max int) ([]store.BuildStatus, error) {
 	return nil, nil
 }
+func (f *fakeStore) RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int64, error) {
+	return 0, nil
+}
 func (f *fakeStore) DeleteBuilds(ctx context.Context, status string) (int64, error) {
 	return 0, nil
+}
+func (f *fakeStore) UpsertWorkerStatus(ctx context.Context, status store.WorkerStatus) error {
+	return nil
+}
+func (f *fakeStore) ListWorkers(ctx context.Context) ([]store.WorkerStatus, error) {
+	return nil, nil
 }
 func (f *fakeStore) GetSettings(ctx context.Context) (settings.Settings, error) {
 	return settings.ApplyDefaults(settings.Settings{}), nil
@@ -429,6 +461,27 @@ func TestPendingInputStatusUpdate(t *testing.T) {
 	}
 	if len(fs.pendingStatuses) != 1 || fs.pendingStatuses[0].id != 9 || fs.pendingStatuses[0].status != "planned" {
 		t.Fatalf("expected planned update, got %+v", fs.pendingStatuses)
+	}
+}
+
+func TestPendingInputRestore(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{Store: fs, Queue: &fakeQueue{}, Config: config.Config{}}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/pending-inputs/12/restore", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	if fs.restoredPendingID != 12 {
+		t.Fatalf("expected restore id 12, got %d", fs.restoredPendingID)
 	}
 }
 

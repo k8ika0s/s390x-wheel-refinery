@@ -141,6 +141,7 @@ services:
     volumes:
       - ./output:/output
       - ./cache:/cache
+      - ./recipes:/app/recipes:ro
       - podman-storage:/var/lib/containers
     depends_on:
       - control-plane

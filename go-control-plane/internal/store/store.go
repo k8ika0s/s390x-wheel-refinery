@@ -14,17 +14,17 @@ var ErrNotFound = errors.New("not found")
 
 // Event represents a build event history row.
 type Event struct {
-	RunID          string
-	Name           string
-	Version        string
-	PythonTag      string
-	PlatformTag    string
-	Status         string
-	Detail         string
-	Metadata       map[string]any
-	Timestamp      int64
-	MatchedHintIDs []string
-	DurationMS     int64
+	RunID          string         `json:"run_id,omitempty"`
+	Name           string         `json:"name"`
+	Version        string         `json:"version"`
+	PythonTag      string         `json:"python_tag,omitempty"`
+	PlatformTag    string         `json:"platform_tag,omitempty"`
+	Status         string         `json:"status"`
+	Detail         string         `json:"detail,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	Timestamp      int64          `json:"timestamp"`
+	MatchedHintIDs []string       `json:"matched_hint_ids,omitempty"`
+	DurationMS     int64          `json:"duration_ms,omitempty"`
 }
 
 // Hint represents a hint catalog entry.
@@ -43,10 +43,22 @@ type Hint struct {
 
 // LogEntry represents stored log metadata/content.
 type LogEntry struct {
-	Name      string
-	Version   string
-	Content   string
-	Timestamp int64
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	Content   string `json:"content,omitempty"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// LogChunk represents a streamed log segment.
+type LogChunk struct {
+	ID        int64  `json:"id,omitempty"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	RunID     string `json:"run_id,omitempty"`
+	Attempt   int    `json:"attempt,omitempty"`
+	Seq       int64  `json:"seq,omitempty"`
+	Content   string `json:"content"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 // PendingInput represents an uploaded requirements file awaiting planning.
@@ -62,6 +74,7 @@ type PendingInput struct {
 	ObjectKey    string          `json:"object_key,omitempty"`
 	ContentType  string          `json:"content_type,omitempty"`
 	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	PlanID       *int64          `json:"plan_id,omitempty"`
 	LoadedAt     *time.Time      `json:"loaded_at,omitempty"`
 	PlannedAt    *time.Time      `json:"planned_at,omitempty"`
 	ProcessedAt  *time.Time      `json:"processed_at,omitempty"`
@@ -88,10 +101,10 @@ type ManifestEntry struct {
 
 // Artifact represents a downloadable/browsable build artifact.
 type Artifact struct {
-	Name    string
-	Version string
-	Path    string
-	URL     string
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Path    string `json:"path"`
+	URL     string `json:"url"`
 }
 
 // PlanHint captures a matched hint attached to a plan node.
@@ -144,41 +157,68 @@ type PlanSummary struct {
 
 // BuildStatus tracks a build job derived from a plan.
 type BuildStatus struct {
-	ID           int64    `json:"id"`
-	Package      string   `json:"package"`
-	Version      string   `json:"version"`
-	PythonTag    string   `json:"python_tag"`
-	PlatformTag  string   `json:"platform_tag"`
-	Status       string   `json:"status"`
-	Attempts     int      `json:"attempts"`
-	LastError    string   `json:"last_error,omitempty"`
-	OldestAgeSec int64    `json:"oldest_age_seconds,omitempty"`
-	CreatedAt    int64    `json:"created_at"`
-	UpdatedAt    int64    `json:"updated_at"`
-	RunID        string   `json:"run_id,omitempty"`
-	PlanID       int64    `json:"plan_id,omitempty"`
-	BackoffUntil int64    `json:"backoff_until,omitempty"`
-	Recipes      []string `json:"recipes,omitempty"`
-	HintIDs      []string `json:"hint_ids,omitempty"`
+	ID             int64    `json:"id"`
+	Package        string   `json:"package"`
+	Version        string   `json:"version"`
+	PythonTag      string   `json:"python_tag"`
+	PlatformTag    string   `json:"platform_tag"`
+	Status         string   `json:"status"`
+	Attempts       int      `json:"attempts"`
+	LastError      string   `json:"last_error,omitempty"`
+	FailureSummary string   `json:"failure_summary,omitempty"`
+	OldestAgeSec   int64    `json:"oldest_age_seconds,omitempty"`
+	CreatedAt      int64    `json:"created_at"`
+	UpdatedAt      int64    `json:"updated_at"`
+	LeasedAt       int64    `json:"leased_at,omitempty"`
+	StartedAt      int64    `json:"started_at,omitempty"`
+	FinishedAt     int64    `json:"finished_at,omitempty"`
+	RunID          string   `json:"run_id,omitempty"`
+	PlanID         int64    `json:"plan_id,omitempty"`
+	BackoffUntil   int64    `json:"backoff_until,omitempty"`
+	Recipes        []string `json:"recipes,omitempty"`
+	HintIDs        []string `json:"hint_ids,omitempty"`
+}
+
+// BuildQueueStats captures aggregate queue counts.
+type BuildQueueStats struct {
+	Length       int   `json:"length"`
+	OldestAgeSec int64 `json:"oldest_age_seconds,omitempty"`
+	Pending      int   `json:"pending"`
+	Retry        int   `json:"retry"`
+	Leased       int   `json:"leased"`
+	Building     int   `json:"building"`
+}
+
+// WorkerStatus tracks worker heartbeat metadata.
+type WorkerStatus struct {
+	WorkerID             string `json:"worker_id"`
+	RunID                string `json:"run_id,omitempty"`
+	LastSeen             int64  `json:"last_seen"`
+	ActiveBuilds         int    `json:"active_builds"`
+	BuildPoolSize        int    `json:"build_pool_size"`
+	PlanPoolSize         int    `json:"plan_pool_size"`
+	HeartbeatIntervalSec int    `json:"heartbeat_interval_sec,omitempty"`
+	CreatedAt            int64  `json:"created_at,omitempty"`
+	UpdatedAt            int64  `json:"updated_at,omitempty"`
 }
 
 // PackageSummary aggregates status for a package.
 type PackageSummary struct {
-	Name         string
-	StatusCounts map[string]int
-	Latest       *Event
+	Name         string         `json:"name"`
+	StatusCounts map[string]int `json:"status_counts"`
+	Latest       *Event         `json:"latest,omitempty"`
 }
 
 // Summary aggregates recent status counts and failures.
 type Summary struct {
-	StatusCounts map[string]int
-	Failures     []Event
+	StatusCounts map[string]int `json:"status_counts"`
+	Failures     []Event        `json:"failures"`
 }
 
 // Stat is a simple key/value for leaderboard style metrics.
 type Stat struct {
-	Name  string
-	Value float64
+	Name  string  `json:"name"`
+	Value float64 `json:"value"`
 }
 
 // Store abstracts history, hints, logs, manifests.
@@ -205,6 +245,10 @@ type Store interface {
 	GetLog(ctx context.Context, name, version string) (LogEntry, error)
 	SearchLogs(ctx context.Context, q string, limit int) ([]LogEntry, error)
 	PutLog(ctx context.Context, entry LogEntry) error
+	PutLogChunk(ctx context.Context, chunk LogChunk) (int64, error)
+	ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]LogChunk, error)
+	TailLogChunks(ctx context.Context, name, version string, limit int) ([]LogChunk, error)
+	TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error)
 
 	// Plan/Manifest/Artifacts
 	Plan(ctx context.Context) ([]PlanNode, error)
@@ -221,16 +265,24 @@ type Store interface {
 	// Pending inputs & planning
 	AddPendingInput(ctx context.Context, pi PendingInput) (int64, error)
 	ListPendingInputs(ctx context.Context, status string) ([]PendingInput, error)
+	PendingInputCount(ctx context.Context, status string) (int, error)
 	UpdatePendingInputStatus(ctx context.Context, id int64, status, errMsg string) error
 	DeletePendingInput(ctx context.Context, id int64) (PendingInput, error)
+	RestorePendingInput(ctx context.Context, id int64) (PendingInput, error)
 	LinkPlanToPendingInput(ctx context.Context, pendingID, planID int64) error
 	UpdatePendingInputsForPlan(ctx context.Context, planID int64, status string) (int64, error)
 
 	// Build status/queue visibility
-	ListBuilds(ctx context.Context, status string, limit int) ([]BuildStatus, error)
-	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error
+	ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error)
+	BuildQueueStats(ctx context.Context) (BuildQueueStats, error)
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
+	RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int64, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)
+
+	// Worker health
+	UpsertWorkerStatus(ctx context.Context, status WorkerStatus) error
+	ListWorkers(ctx context.Context) ([]WorkerStatus, error)
 
 	// Settings
 	GetSettings(ctx context.Context) (settings.Settings, error)

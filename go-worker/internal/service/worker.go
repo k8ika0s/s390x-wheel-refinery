@@ -50,6 +50,7 @@ type Worker struct {
 	autoHintLast map[string]time.Time
 	// buildPoolSize allows dynamic overrides from control-plane settings.
 	buildPoolSize *atomic.Int32
+	activeBuilds  atomic.Int32
 }
 
 type result struct {
@@ -157,13 +158,24 @@ func (w *Worker) Drain(ctx context.Context) error {
 	for i, job := range jobs {
 		i, job := i, job
 		g.Go(func() error {
-			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, reqAttempts[queueKey(job.Name, job.Version)], 0, job.Recipes, nil)
+			w.activeBuilds.Add(1)
+			defer w.activeBuilds.Add(-1)
+			attempt := reqAttempts[queueKey(job.Name, job.Version)]
 			if job.WheelAction == "reuse" && job.WheelDigest != "" {
 				if err := w.fetchWheel(ctx, job); err != nil {
 					return fmt.Errorf("fetch wheel %s: %w", job.WheelDigest, err)
 				}
 			}
+			logStream := w.openLogStream(ctx, job, attempt)
+			if logStream != nil {
+				defer logStream.Close()
+				job.LogWriter = logStream
+			}
+			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, "", attempt, 0, job.Recipes, nil)
 			dur, logContent, err := w.Runner.Run(ctx, job)
+			if err != nil && strings.TrimSpace(logContent) == "" {
+				logContent = fmt.Sprintf("error: %s", err.Error())
+			}
 			repID := artifact.ID{}
 			results[i] = result{
 				job:      job,
@@ -171,7 +183,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				log:      logContent,
 				err:      err,
 				repair:   repID,
-				attempt:  reqAttempts[queueKey(job.Name, job.Version)],
+				attempt:  attempt,
 			}
 			if err == nil && w.Cfg.RepairPushEnabled && job.WheelDigest != "" && w.Pusher.BaseURL != "" {
 				repKey := artifact.RepairKey{InputWheelDigest: job.WheelDigest}
@@ -208,10 +220,20 @@ func (w *Worker) Drain(ctx context.Context) error {
 		detail := ""
 		recipesForStatus := res.job.Recipes
 		autoFix := autoFixResult{}
+		summary := ""
 		if res.err != nil {
 			status = "failed"
 			meta["error"] = res.err.Error()
-			autoFix = w.autoFix(ctx, res.job, res.log, hintCatalog, knownHints)
+			summary = summarizeLog(res.log)
+			if summary == "" {
+				summary = res.err.Error()
+			}
+			meta["failure_summary"] = summary
+			logForHints := res.log
+			if strings.TrimSpace(logForHints) == "" {
+				logForHints = summary
+			}
+			autoFix = w.autoFix(ctx, res.job, logForHints, hintCatalog, knownHints)
 			if autoFix.Applied {
 				recipesForStatus = autoFix.Recipes
 			}
@@ -248,7 +270,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"impact_reason":  autoFix.ImpactReason,
 			}
 		}
-		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, res.attempt, backoffUntil, recipesForStatus, autoFix.HintIDs)
+		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, backoffUntil, recipesForStatus, autoFix.HintIDs)
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
@@ -332,6 +354,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.err != nil {
 			logPayload["error"] = res.err.Error()
+			if summary != "" {
+				logPayload["failure_summary"] = summary
+			}
 		}
 		if autoFix.Applied {
 			logPayload["auto_fix"] = map[string]any{
@@ -387,8 +412,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 			}
 		}
 		if w.Reporter != nil {
-			_ = w.Reporter.PostLog(logPayload)
-			_ = w.Reporter.PostManifest([]map[string]any{entry})
+			if err := w.Reporter.PostLog(logPayload); err != nil {
+				log.Printf("post log failed: %v", err)
+			}
+			if err := w.Reporter.PostManifest([]map[string]any{entry}); err != nil {
+				log.Printf("post manifest failed: %v", err)
+			}
 			if autoFix.Applied {
 				detail = fmt.Sprintf("auto-fix applied: %s", autoFix.Reason)
 			}
@@ -399,17 +428,19 @@ func (w *Worker) Drain(ctx context.Context) error {
 					detail = res.err.Error()
 				}
 			}
-			_ = w.Reporter.PostEvent(map[string]any{
-				"name":           res.job.Name,
-				"version":        res.job.Version,
-				"python_tag":     res.job.PythonTag,
-				"platform_tag":   res.job.PlatformTag,
-				"status":         status,
-				"detail":         detail,
-				"timestamp":      time.Now().Unix(),
-				"metadata":       meta,
-				"MatchedHintIDs": autoFix.HintIDs,
-			})
+			if err := w.Reporter.PostEvent(map[string]any{
+				"name":             res.job.Name,
+				"version":          res.job.Version,
+				"python_tag":       res.job.PythonTag,
+				"platform_tag":     res.job.PlatformTag,
+				"status":           status,
+				"detail":           detail,
+				"timestamp":        time.Now().Unix(),
+				"metadata":         meta,
+				"matched_hint_ids": autoFix.HintIDs,
+			}); err != nil {
+				log.Printf("post event failed: %v", err)
+			}
 		}
 
 		if res.err == nil {
@@ -423,7 +454,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, attempts int, backoffUntil int64, recipes []string, hintIDs []string) {
+func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) {
 	if w.Cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -436,6 +467,9 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	}
 	if err != nil {
 		body["error"] = err.Error()
+	}
+	if summary != "" {
+		body["failure_summary"] = summary
 	}
 	if backoffUntil > 0 {
 		body["backoff_until"] = backoffUntil
@@ -460,7 +494,11 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	if doErr != nil {
 		return
 	}
+	respBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("report build status failed: status=%s body=%s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
 }
 
 func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Request) []runner.Job {

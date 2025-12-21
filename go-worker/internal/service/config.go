@@ -24,6 +24,7 @@ type Config struct {
 	PlanPollIntervalSec  int
 	PlanPopBatch         int
 	AutoBuild            bool
+	BuildPollIntervalSec int
 	BuildPopURL          string
 	BuildStatusURL       string
 	KafkaBrokers         string
@@ -38,6 +39,9 @@ type Config struct {
 	WorkerToken          string
 	ControlPlaneURL      string
 	ControlPlaneToken    string
+	WorkerID             string
+	WorkerRunID          string
+	HeartbeatIntervalSec int
 	PodmanBin            string
 	RunnerTimeoutSec     int
 	RequeueOnFailure     bool
@@ -96,6 +100,7 @@ func fromEnv() Config {
 		PlanPollIntervalSec:  getenvInt("PLAN_POLL_INTERVAL_SEC", 15),
 		PlanPopBatch:         getenvInt("PLAN_POP_BATCH", 5),
 		AutoBuild:            getenvBool("AUTO_BUILD", true),
+		BuildPollIntervalSec: getenvInt("BUILD_POLL_INTERVAL_SEC", 5),
 		BuildPopURL:          getenv("BUILD_POP_URL", ""),
 		BuildStatusURL:       getenv("BUILD_STATUS_URL", ""),
 		KafkaBrokers:         getenv("KAFKA_BROKERS", ""),
@@ -110,6 +115,9 @@ func fromEnv() Config {
 		WorkerToken:          getenv("WORKER_TOKEN", ""),
 		ControlPlaneURL:      getenv("CONTROL_PLANE_URL", ""),
 		ControlPlaneToken:    getenv("CONTROL_PLANE_TOKEN", ""),
+		WorkerID:             getenv("WORKER_ID", ""),
+		WorkerRunID:          getenv("WORKER_RUN_ID", ""),
+		HeartbeatIntervalSec: getenvInt("WORKER_HEARTBEAT_INTERVAL_SEC", 15),
 		PodmanBin:            getenv("PODMAN_BIN", ""), // empty = stub podman; set to podman binary to execute
 		RunnerTimeoutSec:     getenvInt("RUNNER_TIMEOUT_SEC", 900),
 		RequeueOnFailure:     getenvBool("REQUEUE_ON_FAILURE", false),
