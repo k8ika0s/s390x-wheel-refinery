@@ -1224,6 +1224,18 @@ function PackageDetail({ token, pushToast, apiBase }) {
                     <span>{buildBackoffLabel}</span>
                   </div>
                 )}
+                {buildStatus.reason_code && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Reason</span>
+                    <span className="capitalize">{buildStatus.reason_code.replace(/_/g, " ")}</span>
+                  </div>
+                )}
+                {buildStatus.reason_detail && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Reason detail</span>
+                    <span>{buildStatus.reason_detail}</span>
+                  </div>
+                )}
                 {buildBackoffReason && (
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Backoff reason</span>
@@ -1416,12 +1428,14 @@ function PackageDetail({ token, pushToast, apiBase }) {
                     : "—";
                   const errorLabel = attempt.failure_summary || attempt.last_error || "";
                   const recipesLabel = attempt.recipes.length ? attempt.recipes.join(", ") : "none";
+                  const reasonChip = attempt.reason_code ? attempt.reason_code.replace(/_/g, " ") : "";
                   return (
                     <div key={`${attempt.package}-${attempt.version}-${attempt.attempt}`} className="border border-border rounded-lg p-3 text-xs text-slate-200">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="chip">Attempt {attempt.attempt}</span>
                           <span className={`status ${attempt.status}`}>{attempt.status}</span>
+                          {reasonChip && <span className="chip text-[10px]" title={attempt.reason_detail || ""}>{reasonChip}</span>}
                           {idx < attemptsTimeline.length - 1 && <span className="text-slate-500">→</span>}
                         </div>
                         <div className="text-slate-400 flex flex-wrap gap-3">
@@ -4236,6 +4250,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                         const statusSince = pickStatusSince(b);
                         const statusAge = statusSince ? formatDuration(Math.max(0, nowSec - statusSince)) : "—";
                         const errorLabel = b.failure_summary || b.last_error || "-";
+                        const reasonLabel = b.reason_code || "";
+                        const reasonDetail = b.reason_detail || "";
                         const rowKey = buildRowKey(b) || `${b.package}-${b.version}-${idx}`;
                         const pulseKey = b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version);
                         const isExpanded = Boolean(expandedBuilds[rowKey]);
@@ -4278,7 +4294,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                               <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
                               <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
                               <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{recipesLabel}</td>
-                              <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{errorLabel}</td>
+                              <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">
+                                {reasonLabel ? (
+                                  <span className="chip text-[10px]" title={reasonDetail || errorLabel}>
+                                    {reasonLabel}
+                                  </span>
+                                ) : (
+                                  errorLabel
+                                )}
+                              </td>
                             </tr>
                             {isExpanded && (
                               <tr className="border-t border-slate-800 bg-slate-900/30">
@@ -4295,6 +4319,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                                     <div><span className="text-slate-500">Backoff:</span> {formatTimestamp(b.backoff_until) || "-"}</div>
                                     <div><span className="text-slate-500">Backoff reason:</span> {b.backoff_reason || "-"}</div>
                                     <div><span className="text-slate-500">Backoff delay:</span> {b.backoff_seconds ? formatDuration(b.backoff_seconds) : "-"}</div>
+                                    <div><span className="text-slate-500">Reason:</span> {b.reason_code || "-"}</div>
+                                    <div><span className="text-slate-500">Reason detail:</span> {b.reason_detail || "-"}</div>
                                     <div className="md:col-span-2"><span className="text-slate-500">Hints:</span> {hintsLabel}</div>
                                     <div className="md:col-span-3"><span className="text-slate-500">Recipes:</span> {recipesLabel}</div>
                                   </div>

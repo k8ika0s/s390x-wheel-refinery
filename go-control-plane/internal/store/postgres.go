@@ -160,6 +160,8 @@ CREATE TABLE IF NOT EXISTS build_status (
     backoff_until TIMESTAMPTZ,
     backoff_reason TEXT,
     backoff_seconds INT,
+    reason_code TEXT,
+    reason_detail TEXT,
     last_error    TEXT,
     failure_summary TEXT,
     recipes       JSONB,
@@ -187,6 +189,8 @@ CREATE TABLE IF NOT EXISTS build_attempts (
     duration_ms   BIGINT,
     recipes       JSONB,
     hint_ids      TEXT[],
+    reason_code TEXT,
+    reason_detail TEXT,
     run_id        TEXT,
     plan_id       BIGINT,
     started_at    TIMESTAMPTZ,
@@ -201,6 +205,8 @@ CREATE INDEX IF NOT EXISTS idx_build_attempts_created_at ON build_attempts(creat
 
 ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS recipes JSONB;
 ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS hint_ids TEXT[];
+ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS reason_code TEXT;
+ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS reason_detail TEXT;
 
 CREATE TABLE IF NOT EXISTS worker_status (
     worker_id    TEXT PRIMARY KEY,
@@ -226,6 +232,8 @@ CREATE INDEX IF NOT EXISTS idx_build_status_started_at ON build_status(started_a
 
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS backoff_reason TEXT;
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS backoff_seconds INT;
+ALTER TABLE build_status ADD COLUMN IF NOT EXISTS reason_code TEXT;
+ALTER TABLE build_status ADD COLUMN IF NOT EXISTS reason_detail TEXT;
 
 CREATE TABLE IF NOT EXISTS pending_inputs (
     id          BIGSERIAL PRIMARY KEY,
@@ -613,7 +621,7 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	q := `SELECT id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), COALESCE(failure_summary,''), run_id, plan_id, extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint, COALESCE(extract(epoch from leased_at),0)::bigint, COALESCE(extract(epoch from started_at),0)::bigint, COALESCE(extract(epoch from finished_at),0)::bigint, COALESCE(extract(epoch from backoff_until),0)::bigint, COALESCE(backoff_reason,''), COALESCE(backoff_seconds,0), COALESCE(recipes, '[]'::jsonb), COALESCE(hint_ids, '{}'::text[]) FROM build_status`
+	q := `SELECT id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), COALESCE(failure_summary,''), run_id, plan_id, extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint, COALESCE(extract(epoch from leased_at),0)::bigint, COALESCE(extract(epoch from started_at),0)::bigint, COALESCE(extract(epoch from finished_at),0)::bigint, COALESCE(extract(epoch from backoff_until),0)::bigint, COALESCE(backoff_reason,''), COALESCE(backoff_seconds,0), COALESCE(reason_code,''), COALESCE(reason_detail,''), COALESCE(recipes, '[]'::jsonb), COALESCE(hint_ids, '{}'::text[]) FROM build_status`
 	args := []any{}
 	clauses := []string{}
 	if status != "" {
@@ -650,7 +658,7 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 		var bs BuildStatus
 		var recipes json.RawMessage
 		var hints pq.StringArray
-		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.OldestAgeSec, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &recipes, &hints); err != nil {
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.OldestAgeSec, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &recipes, &hints); err != nil {
 			return nil, err
 		}
 		if len(recipes) > 0 {
@@ -709,7 +717,7 @@ func (p *PostgresStore) DeleteBuilds(ctx context.Context, status string) (int64,
 }
 
 // UpdateBuildStatus upserts build status by package/version.
-func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, recipes []string, hintIDs []string) error {
+func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string) error {
 	if err := p.ensureDB(); err != nil {
 		return err
 	}
@@ -747,6 +755,16 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 	if backoffSeconds > 0 {
 		backoffSecondsVal = backoffSeconds
 	}
+	reasonCode = strings.TrimSpace(reasonCode)
+	var reasonCodeVal any
+	if reasonCode != "" {
+		reasonCodeVal = reasonCode
+	}
+	reasonDetail = strings.TrimSpace(reasonDetail)
+	var reasonDetailVal any
+	if reasonDetail != "" {
+		reasonDetailVal = reasonDetail
+	}
 	var recipesRaw any
 	if recipes != nil {
 		if data, err := json.Marshal(recipes); err == nil {
@@ -758,8 +776,8 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 		hints = pqStringArrayParam(hintIDs)
 	}
 	_, err := p.db.ExecContext(ctx, `
-		INSERT INTO build_status (package, version, status, last_error, failure_summary, attempts, backoff_until, backoff_reason, backoff_seconds, recipes, hint_ids, leased_at, started_at, finished_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		INSERT INTO build_status (package, version, status, last_error, failure_summary, attempts, backoff_until, backoff_reason, backoff_seconds, reason_code, reason_detail, recipes, hint_ids, leased_at, started_at, finished_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT (package, version) DO UPDATE
 		SET status = EXCLUDED.status,
 		    last_error = EXCLUDED.last_error,
@@ -781,6 +799,14 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 		        WHEN EXCLUDED.status = 'retry' THEN EXCLUDED.backoff_seconds
 		        ELSE NULL
 		    END,
+		    reason_code = CASE
+		        WHEN EXCLUDED.status IN ('failed','retry','quarantined') THEN EXCLUDED.reason_code
+		        ELSE NULL
+		    END,
+		    reason_detail = CASE
+		        WHEN EXCLUDED.status IN ('failed','retry','quarantined') THEN EXCLUDED.reason_detail
+		        ELSE NULL
+		    END,
 		    recipes = COALESCE(EXCLUDED.recipes, build_status.recipes),
 		    hint_ids = COALESCE(EXCLUDED.hint_ids, build_status.hint_ids),
 		    leased_at = CASE
@@ -799,7 +825,7 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 		        ELSE build_status.finished_at
 		    END,
 		    updated_at = NOW()
-	`, pkg, version, statusLower, errMsg, summaryVal, attempts, backoff, backoffReasonVal, backoffSecondsVal, recipesRaw, hints, leasedAt, startedAt, finishedAt)
+	`, pkg, version, statusLower, errMsg, summaryVal, attempts, backoff, backoffReasonVal, backoffSecondsVal, reasonCodeVal, reasonDetailVal, recipesRaw, hints, leasedAt, startedAt, finishedAt)
 	return err
 }
 
@@ -834,6 +860,16 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 	if attempt.BackoffSeconds > 0 {
 		backoffSecondsVal = attempt.BackoffSeconds
 	}
+	attempt.ReasonCode = strings.TrimSpace(attempt.ReasonCode)
+	var reasonCodeVal any
+	if attempt.ReasonCode != "" {
+		reasonCodeVal = attempt.ReasonCode
+	}
+	attempt.ReasonDetail = strings.TrimSpace(attempt.ReasonDetail)
+	var reasonDetailVal any
+	if attempt.ReasonDetail != "" {
+		reasonDetailVal = attempt.ReasonDetail
+	}
 	var durationVal any
 	if attempt.DurationMS > 0 {
 		durationVal = attempt.DurationMS
@@ -852,9 +888,9 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 		INSERT INTO build_attempts (
 			package, version, attempt, status, last_error, failure_summary,
 			backoff_until, backoff_reason, backoff_seconds, duration_ms,
-			recipes, hint_ids, run_id, plan_id, started_at, finished_at
+			recipes, hint_ids, reason_code, reason_detail, run_id, plan_id, started_at, finished_at
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		ON CONFLICT (package, version, attempt) DO UPDATE
 		SET status = EXCLUDED.status,
 		    last_error = EXCLUDED.last_error,
@@ -878,6 +914,8 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 		    duration_ms = COALESCE(EXCLUDED.duration_ms, build_attempts.duration_ms),
 		    recipes = COALESCE(EXCLUDED.recipes, build_attempts.recipes),
 		    hint_ids = COALESCE(EXCLUDED.hint_ids, build_attempts.hint_ids),
+		    reason_code = COALESCE(EXCLUDED.reason_code, build_attempts.reason_code),
+		    reason_detail = COALESCE(EXCLUDED.reason_detail, build_attempts.reason_detail),
 		    run_id = COALESCE(EXCLUDED.run_id, build_attempts.run_id),
 		    plan_id = COALESCE(EXCLUDED.plan_id, build_attempts.plan_id),
 		    started_at = CASE
@@ -889,7 +927,7 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 		        ELSE build_attempts.finished_at
 		    END,
 		    updated_at = NOW()
-	`, attempt.Package, attempt.Version, attempt.Attempt, statusLower, attempt.LastError, attempt.FailureSummary, backoff, backoffReasonVal, backoffSecondsVal, durationVal, recipesRaw, hints, nullableString(attempt.RunID), nullableInt64(attempt.PlanID), startedAt, finishedAt)
+	`, attempt.Package, attempt.Version, attempt.Attempt, statusLower, attempt.LastError, attempt.FailureSummary, backoff, backoffReasonVal, backoffSecondsVal, durationVal, recipesRaw, hints, reasonCodeVal, reasonDetailVal, nullableString(attempt.RunID), nullableInt64(attempt.PlanID), startedAt, finishedAt)
 	return err
 }
 
@@ -908,6 +946,7 @@ func (p *PostgresStore) ListBuildAttempts(ctx context.Context, pkg, version stri
 		SELECT id, package, version, attempt, status, COALESCE(last_error,''), COALESCE(failure_summary,''),
 		       COALESCE(extract(epoch from backoff_until),0)::bigint, COALESCE(backoff_reason,''), COALESCE(backoff_seconds,0),
 		       COALESCE(duration_ms,0), COALESCE(recipes, '[]'::jsonb), COALESCE(hint_ids, '{}'::text[]),
+		       COALESCE(reason_code,''), COALESCE(reason_detail,''),
 		       COALESCE(extract(epoch from started_at),0)::bigint, COALESCE(extract(epoch from finished_at),0)::bigint,
 		       COALESCE(run_id,''), COALESCE(plan_id,0), extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint
 		FROM build_attempts
@@ -926,7 +965,7 @@ func (p *PostgresStore) ListBuildAttempts(ctx context.Context, pkg, version stri
 		var hints pq.StringArray
 		if err := rows.Scan(&entry.ID, &entry.Package, &entry.Version, &entry.Attempt, &entry.Status, &entry.LastError, &entry.FailureSummary,
 			&entry.BackoffUntil, &entry.BackoffReason, &entry.BackoffSeconds, &entry.DurationMS, &recipes, &hints,
-			&entry.StartedAt, &entry.FinishedAt, &entry.RunID, &entry.PlanID, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
+			&entry.ReasonCode, &entry.ReasonDetail, &entry.StartedAt, &entry.FinishedAt, &entry.RunID, &entry.PlanID, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if len(recipes) > 0 {
@@ -2002,7 +2041,7 @@ func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int) ([]BuildStatus
 		    updated_at = NOW()
 		FROM cte
 		WHERE b.id = cte.id
-		RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts, COALESCE(b.last_error,''), COALESCE(b.failure_summary,''), b.run_id, b.plan_id, COALESCE(extract(epoch from b.backoff_until),0)::bigint, COALESCE(b.backoff_reason,''), COALESCE(b.backoff_seconds,0), extract(epoch from b.created_at)::bigint, extract(epoch from b.updated_at)::bigint, COALESCE(extract(epoch from b.leased_at),0)::bigint, COALESCE(extract(epoch from b.started_at),0)::bigint, COALESCE(extract(epoch from b.finished_at),0)::bigint, COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[])
+		RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts, COALESCE(b.last_error,''), COALESCE(b.failure_summary,''), b.run_id, b.plan_id, COALESCE(extract(epoch from b.backoff_until),0)::bigint, COALESCE(b.backoff_reason,''), COALESCE(b.backoff_seconds,0), COALESCE(b.reason_code,''), COALESCE(b.reason_detail,''), extract(epoch from b.created_at)::bigint, extract(epoch from b.updated_at)::bigint, COALESCE(extract(epoch from b.leased_at),0)::bigint, COALESCE(extract(epoch from b.started_at),0)::bigint, COALESCE(extract(epoch from b.finished_at),0)::bigint, COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[])
 	`, max)
 	if err != nil {
 		return nil, err
@@ -2013,7 +2052,7 @@ func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int) ([]BuildStatus
 		var bs BuildStatus
 		var recipes json.RawMessage
 		var hints pq.StringArray
-		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints); err != nil {
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints); err != nil {
 			return nil, err
 		}
 		if len(recipes) > 0 {
@@ -2077,7 +2116,7 @@ func (p *PostgresStore) RequeueStaleBuilds(ctx context.Context, leaseAgeSec int,
 			WHERE b.id = cte.id
 			RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts,
 			          COALESCE(b.last_error,''), COALESCE(b.failure_summary,''), b.run_id, b.plan_id,
-			          COALESCE(extract(epoch from b.backoff_until),0)::bigint, COALESCE(b.backoff_reason,''), COALESCE(b.backoff_seconds,0), extract(epoch from b.created_at)::bigint,
+			          COALESCE(extract(epoch from b.backoff_until),0)::bigint, COALESCE(b.backoff_reason,''), COALESCE(b.backoff_seconds,0), COALESCE(b.reason_code,''), COALESCE(b.reason_detail,''), extract(epoch from b.created_at)::bigint,
 			          extract(epoch from b.updated_at)::bigint, COALESCE(extract(epoch from b.leased_at),0)::bigint,
 			          COALESCE(extract(epoch from b.started_at),0)::bigint, COALESCE(extract(epoch from b.finished_at),0)::bigint,
 			          COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[]),
@@ -2111,7 +2150,7 @@ func (p *PostgresStore) RequeueStaleBuilds(ctx context.Context, leaseAgeSec int,
 			WHERE b.id = cte.id
 			RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts,
 			          COALESCE(b.last_error,''), COALESCE(b.failure_summary,''), b.run_id, b.plan_id,
-			          COALESCE(extract(epoch from b.backoff_until),0)::bigint, COALESCE(b.backoff_reason,''), COALESCE(b.backoff_seconds,0), extract(epoch from b.created_at)::bigint,
+			          COALESCE(extract(epoch from b.backoff_until),0)::bigint, COALESCE(b.backoff_reason,''), COALESCE(b.backoff_seconds,0), COALESCE(b.reason_code,''), COALESCE(b.reason_detail,''), extract(epoch from b.created_at)::bigint,
 			          extract(epoch from b.updated_at)::bigint, COALESCE(extract(epoch from b.leased_at),0)::bigint,
 			          COALESCE(extract(epoch from b.started_at),0)::bigint, COALESCE(extract(epoch from b.finished_at),0)::bigint,
 			          COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[]),
@@ -2145,7 +2184,7 @@ func (p *PostgresStore) RequeueStaleBuilds(ctx context.Context, leaseAgeSec int,
 			WHERE b.id = cte.id
 			RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts,
 			          COALESCE(b.last_error,''), COALESCE(b.failure_summary,''), b.run_id, b.plan_id,
-			          COALESCE(extract(epoch from b.backoff_until),0)::bigint, COALESCE(b.backoff_reason,''), COALESCE(b.backoff_seconds,0), extract(epoch from b.created_at)::bigint,
+			          COALESCE(extract(epoch from b.backoff_until),0)::bigint, COALESCE(b.backoff_reason,''), COALESCE(b.backoff_seconds,0), COALESCE(b.reason_code,''), COALESCE(b.reason_detail,''), extract(epoch from b.created_at)::bigint,
 			          extract(epoch from b.updated_at)::bigint, COALESCE(extract(epoch from b.leased_at),0)::bigint,
 			          COALESCE(extract(epoch from b.started_at),0)::bigint, COALESCE(extract(epoch from b.finished_at),0)::bigint,
 			          COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[]),
@@ -2163,7 +2202,7 @@ func (p *PostgresStore) RequeueStaleBuilds(ctx context.Context, leaseAgeSec int,
 		var bs BuildStatus
 		var recipes json.RawMessage
 		var hints pq.StringArray
-		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints, &bs.PreviousStatus, &bs.StaleAgeSec); err != nil {
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints, &bs.PreviousStatus, &bs.StaleAgeSec); err != nil {
 			return nil, err
 		}
 		if len(recipes) > 0 {

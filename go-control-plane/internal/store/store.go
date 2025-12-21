@@ -179,6 +179,8 @@ type BuildStatus struct {
 	BackoffUntil   int64    `json:"backoff_until,omitempty"`
 	BackoffReason  string   `json:"backoff_reason,omitempty"`
 	BackoffSeconds int      `json:"backoff_seconds,omitempty"`
+	ReasonCode     string   `json:"reason_code,omitempty"`
+	ReasonDetail   string   `json:"reason_detail,omitempty"`
 	Recipes        []string `json:"recipes,omitempty"`
 	HintIDs        []string `json:"hint_ids,omitempty"`
 }
@@ -198,6 +200,8 @@ type BuildAttempt struct {
 	DurationMS     int64  `json:"duration_ms,omitempty"`
 	Recipes        []string `json:"recipes,omitempty"`
 	HintIDs        []string `json:"hint_ids,omitempty"`
+	ReasonCode     string `json:"reason_code,omitempty"`
+	ReasonDetail   string `json:"reason_detail,omitempty"`
 	StartedAt      int64  `json:"started_at,omitempty"`
 	FinishedAt     int64  `json:"finished_at,omitempty"`
 	RunID          string `json:"run_id,omitempty"`
@@ -304,7 +308,7 @@ type Store interface {
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error)
 	BuildQueueStats(ctx context.Context) (BuildQueueStats, error)
-	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, recipes []string, hintIDs []string) error
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string) error
 	UpsertBuildAttempt(ctx context.Context, attempt BuildAttempt) error
 	ListBuildAttempts(ctx context.Context, pkg, version string, limit int) ([]BuildAttempt, error)
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)

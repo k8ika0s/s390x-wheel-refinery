@@ -171,7 +171,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				defer logStream.Close()
 				job.LogWriter = logStream
 			}
-			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, "", attempt, 0, backoffMeta{}, job.Recipes, nil)
+			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, "", attempt, 0, failureReason{}, backoffMeta{}, job.Recipes, nil)
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			if err != nil && strings.TrimSpace(logContent) == "" {
 				logContent = fmt.Sprintf("error: %s", err.Error())
@@ -221,6 +221,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 		recipesForStatus := res.job.Recipes
 		autoFix := autoFixResult{}
 		summary := ""
+		reason := failureReason{}
 		quarantined := false
 		quarantineAfter := w.Cfg.QuarantineAfterAttempts
 		if res.err != nil {
@@ -234,6 +235,13 @@ func (w *Worker) Drain(ctx context.Context) error {
 			logForHints := res.log
 			if strings.TrimSpace(logForHints) == "" {
 				logForHints = summary
+			}
+			reason = classifyFailureReason(res.err, logForHints)
+			if reason.Code != "" {
+				meta["reason_code"] = reason.Code
+				if reason.Detail != "" {
+					meta["reason_detail"] = reason.Detail
+				}
 			}
 			autoFix = w.autoFix(ctx, res.job, logForHints, hintCatalog, knownHints)
 			if autoFix.Applied {
@@ -293,7 +301,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"impact_reason":  autoFix.ImpactReason,
 			}
 		}
-		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, res.duration.Milliseconds(), backoff, recipesForStatus, autoFix.HintIDs)
+		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, res.duration.Milliseconds(), reason, backoff, recipesForStatus, autoFix.HintIDs)
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
@@ -379,6 +387,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 			logPayload["error"] = res.err.Error()
 			if summary != "" {
 				logPayload["failure_summary"] = summary
+			}
+		}
+		if reason.Code != "" {
+			logPayload["reason_code"] = reason.Code
+			if reason.Detail != "" {
+				logPayload["reason_detail"] = reason.Detail
 			}
 		}
 		if quarantined {
@@ -493,7 +507,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, summary string, attempts int, durationMs int64, backoff backoffMeta, recipes []string, hintIDs []string) {
+func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, summary string, attempts int, durationMs int64, reason failureReason, backoff backoffMeta, recipes []string, hintIDs []string) {
 	if w.Cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -512,6 +526,12 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	}
 	if durationMs > 0 {
 		body["duration_ms"] = durationMs
+	}
+	if reason.Code != "" {
+		body["reason_code"] = reason.Code
+		if reason.Detail != "" {
+			body["reason_detail"] = reason.Detail
+		}
 	}
 	if backoff.Until > 0 {
 		body["backoff_until"] = backoff.Until

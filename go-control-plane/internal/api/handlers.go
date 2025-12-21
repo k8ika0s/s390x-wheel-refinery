@@ -1192,6 +1192,8 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		BackoffReason  string   `json:"backoff_reason,omitempty"`
 		BackoffSeconds int      `json:"backoff_seconds,omitempty"`
 		DurationMS     int64    `json:"duration_ms,omitempty"`
+		ReasonCode     string   `json:"reason_code,omitempty"`
+		ReasonDetail   string   `json:"reason_detail,omitempty"`
 		Recipes        []string `json:"recipes,omitempty"`
 		HintIDs        []string `json:"hint_ids,omitempty"`
 	}
@@ -1203,7 +1205,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package, version, and status required"})
 		return
 	}
-	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.BackoffReason, body.BackoffSeconds, body.Recipes, body.HintIDs); err != nil {
+	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.BackoffReason, body.BackoffSeconds, body.ReasonCode, body.ReasonDetail, body.Recipes, body.HintIDs); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1219,6 +1221,8 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 			BackoffReason:  body.BackoffReason,
 			BackoffSeconds: body.BackoffSeconds,
 			DurationMS:     body.DurationMS,
+			ReasonCode:     body.ReasonCode,
+			ReasonDetail:   body.ReasonDetail,
 			Recipes:        body.Recipes,
 			HintIDs:        body.HintIDs,
 		})
