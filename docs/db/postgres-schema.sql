@@ -21,6 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_name_timestamp ON events(name, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_status_timestamp ON events(status, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_name_version_timestamp ON events(name, version, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_events_duration_ms ON events(duration_ms) WHERE duration_ms IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS hints (
     id       TEXT PRIMARY KEY,

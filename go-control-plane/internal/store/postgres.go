@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_name_timestamp ON events(name, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_status_timestamp ON events(status, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_name_version_timestamp ON events(name, version, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_events_duration_ms ON events(duration_ms) WHERE duration_ms IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS hints (
     id       TEXT PRIMARY KEY,
@@ -879,11 +881,41 @@ func (p *PostgresStore) RecordEvent(ctx context.Context, evt Event) error {
 		return err
 	}
 	metaBytes, _ := json.Marshal(evt.Metadata)
+	durationMS := evt.DurationMS
+	if durationMS == 0 && evt.Metadata != nil {
+		if v, ok := evt.Metadata["duration_ms"]; ok {
+			durationMS = parseDurationMS(v)
+		}
+	}
+	var durationVal any
+	if durationMS > 0 {
+		durationVal = durationMS
+	}
 	_, err := p.db.ExecContext(ctx, `
-	    INSERT INTO events (run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,timestamp)
-	    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,TO_TIMESTAMP($10))`,
-		evt.RunID, evt.Name, evt.Version, evt.PythonTag, evt.PlatformTag, evt.Status, evt.Detail, metaBytes, pq.Array(evt.MatchedHintIDs), evt.Timestamp)
+	    INSERT INTO events (run_id,name,version,python_tag,platform_tag,status,detail,metadata,matched_hint_ids,duration_ms,timestamp)
+	    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TO_TIMESTAMP($11))`,
+		evt.RunID, evt.Name, evt.Version, evt.PythonTag, evt.PlatformTag, evt.Status, evt.Detail, metaBytes, pq.Array(evt.MatchedHintIDs), durationVal, evt.Timestamp)
 	return err
+}
+
+func parseDurationMS(value any) int64 {
+	switch v := value.(type) {
+	case int:
+		return int64(v)
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return n
+		}
+	case string:
+		if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 func (p *PostgresStore) Summary(ctx context.Context, failureLimit int) (Summary, error) {
@@ -1084,8 +1116,8 @@ func (p *PostgresStore) TopSlowest(ctx context.Context, limit int) ([]Stat, erro
 	if limit > 200 {
 		limit = 200
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT name, avg((metadata->>'duration_ms')::bigint)::float AS avg_ms
-		FROM events WHERE metadata ? 'duration_ms' GROUP BY name ORDER BY avg_ms DESC LIMIT $1`, limit)
+	rows, err := p.db.QueryContext(ctx, `SELECT name, avg(duration_ms)::float AS avg_ms
+		FROM events WHERE duration_ms IS NOT NULL AND duration_ms > 0 GROUP BY name ORDER BY avg_ms DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
