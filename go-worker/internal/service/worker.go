@@ -171,7 +171,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				defer logStream.Close()
 				job.LogWriter = logStream
 			}
-			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, "", attempt, backoffMeta{}, job.Recipes, nil)
+			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, "", attempt, 0, backoffMeta{}, job.Recipes, nil)
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			if err != nil && strings.TrimSpace(logContent) == "" {
 				logContent = fmt.Sprintf("error: %s", err.Error())
@@ -293,7 +293,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"impact_reason":  autoFix.ImpactReason,
 			}
 		}
-		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, backoff, recipesForStatus, autoFix.HintIDs)
+		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, res.duration.Milliseconds(), backoff, recipesForStatus, autoFix.HintIDs)
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
@@ -493,7 +493,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, summary string, attempts int, backoff backoffMeta, recipes []string, hintIDs []string) {
+func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, summary string, attempts int, durationMs int64, backoff backoffMeta, recipes []string, hintIDs []string) {
 	if w.Cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -509,6 +509,9 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	}
 	if summary != "" {
 		body["failure_summary"] = summary
+	}
+	if durationMs > 0 {
+		body["duration_ms"] = durationMs
 	}
 	if backoff.Until > 0 {
 		body["backoff_until"] = backoff.Until

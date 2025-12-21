@@ -283,7 +283,8 @@ export function fetchPackageDetail(name, token, limit = 50, opts = {}) {
     request(`/api/failures?name=${encodeURIComponent(name)}&limit=${limit}`, {}, token),
     request(`/api/recent?package=${encodeURIComponent(name)}&limit=${limit}`, {}, token),
     fetchBuilds({ package: name, version, limit: 50 }, token).catch(() => []),
-  ]).then(([summary, variants, failures, events, builds]) => ({ summary, variants, failures, events, builds }));
+    version ? fetchBuildAttempts(name, version, 50, token).catch(() => []) : Promise.resolve([]),
+  ]).then(([summary, variants, failures, events, builds, attempts]) => ({ summary, variants, failures, events, builds, attempts }));
 }
 
 export function fetchLog(name, version, token) {
@@ -327,6 +328,14 @@ export function fetchBuilds({ status, limit = 200, planId, package: pkg, version
   if (version) params.set("version", version);
   params.set("limit", limit);
   return request(`/api/builds?${params.toString()}`, {}, token);
+}
+
+export function fetchBuildAttempts(pkg, version, limit = 50, token) {
+  const params = new URLSearchParams();
+  params.set("package", pkg);
+  params.set("version", version);
+  params.set("limit", limit);
+  return request(`/api/builds/attempts?${params.toString()}`, {}, token);
 }
 
 export function clearBuilds(status, token) {

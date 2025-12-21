@@ -27,6 +27,13 @@ This draft captures the intended endpoints for the Go control plane, matching th
 - `GET /variants/{name}?limit=` → variant history for a package.
 - `GET /top-failures?limit=` / `GET /top-slowest?limit=` → stats.
 
+**Builds**
+- `GET /builds?status=&plan_id=&package=&version=&limit=` → build status rows.
+- `GET /builds/attempts?package=&version=&limit=` → per-attempt history for a package/version.
+- `POST /builds/status` → worker status updates (attempts/backoff/failure metadata).
+- `POST /build-queue/pop` → lease build items (worker).
+- `POST /build-queue/requeue-stale` → requeue stale leases/building items.
+
 **Plan/Manifest/Artifacts**
 - `GET /plan` → current build plan/graph (no “why” reasons).
 - `POST /plan` → save plan snapshot (worker writes run_id + plan array to Postgres).

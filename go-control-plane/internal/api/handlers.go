@@ -57,6 +57,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
 	mux.HandleFunc("/api/wheels/upload", h.wheelsUpload)
 	mux.HandleFunc("/api/builds", h.builds)
+	mux.HandleFunc("/api/builds/attempts", h.buildAttempts)
 	mux.HandleFunc("/api/builds/status", h.buildStatusUpdate)
 	mux.HandleFunc("/api/build-queue/pop", h.buildQueuePop)
 	mux.HandleFunc("/api/build-queue/requeue-stale", h.buildQueueRequeueStale)
@@ -1151,6 +1152,26 @@ func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) buildAttempts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	pkg := r.URL.Query().Get("package")
+	version := r.URL.Query().Get("version")
+	if pkg == "" || version == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package and version required"})
+		return
+	}
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 50, 200)
+	rows, err := h.Store.ListBuildAttempts(r.Context(), pkg, version, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
 func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -1170,6 +1191,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		BackoffUntil   int64    `json:"backoff_until,omitempty"`
 		BackoffReason  string   `json:"backoff_reason,omitempty"`
 		BackoffSeconds int      `json:"backoff_seconds,omitempty"`
+		DurationMS     int64    `json:"duration_ms,omitempty"`
 		Recipes        []string `json:"recipes,omitempty"`
 		HintIDs        []string `json:"hint_ids,omitempty"`
 	}
@@ -1184,6 +1206,20 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.BackoffReason, body.BackoffSeconds, body.Recipes, body.HintIDs); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if body.Attempts > 0 && shouldRecordBuildAttempt(body.Status) {
+		_ = h.Store.UpsertBuildAttempt(r.Context(), store.BuildAttempt{
+			Package:        body.Package,
+			Version:        body.Version,
+			Attempt:        body.Attempts,
+			Status:         body.Status,
+			LastError:      body.Error,
+			FailureSummary: body.FailureSummary,
+			BackoffUntil:   body.BackoffUntil,
+			BackoffReason:  body.BackoffReason,
+			BackoffSeconds: body.BackoffSeconds,
+			DurationMS:     body.DurationMS,
+		})
 	}
 	if body.Status == "building" || body.Status == "pending" || body.Status == "retry" {
 		detail := "build status updated"
@@ -1230,6 +1266,15 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "build status updated"})
+}
+
+func shouldRecordBuildAttempt(status string) bool {
+	switch strings.ToLower(status) {
+	case "building", "retry", "failed", "built", "quarantined":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {

@@ -179,6 +179,12 @@ func (f *fakeStore) BuildQueueStats(ctx context.Context) (store.BuildQueueStats,
 func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, recipes []string, hintIDs []string) error {
 	return nil
 }
+func (f *fakeStore) UpsertBuildAttempt(ctx context.Context, attempt store.BuildAttempt) error {
+	return nil
+}
+func (f *fakeStore) ListBuildAttempts(ctx context.Context, pkg, version string, limit int) ([]store.BuildAttempt, error) {
+	return nil, nil
+}
 func (f *fakeStore) LeaseBuilds(ctx context.Context, max int) ([]store.BuildStatus, error) {
 	return nil, nil
 }

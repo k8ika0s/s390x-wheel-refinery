@@ -173,6 +173,30 @@ CREATE TABLE IF NOT EXISTS build_status (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS build_attempts (
+    id            BIGSERIAL PRIMARY KEY,
+    package       TEXT NOT NULL,
+    version       TEXT NOT NULL,
+    attempt       INT NOT NULL,
+    status        TEXT NOT NULL,
+    last_error    TEXT,
+    failure_summary TEXT,
+    backoff_until TIMESTAMPTZ,
+    backoff_reason TEXT,
+    backoff_seconds INT,
+    duration_ms   BIGINT,
+    run_id        TEXT,
+    plan_id       BIGINT,
+    started_at    TIMESTAMPTZ,
+    finished_at   TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_build_attempts_pkg_version_attempt ON build_attempts(package, version, attempt);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_status ON build_attempts(status);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_pkg_version ON build_attempts(package, version);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_created_at ON build_attempts(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS worker_status (
     worker_id    TEXT PRIMARY KEY,
     run_id       TEXT,
@@ -772,6 +796,122 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 		    updated_at = NOW()
 	`, pkg, version, statusLower, errMsg, summaryVal, attempts, backoff, backoffReasonVal, backoffSecondsVal, recipesRaw, hints, leasedAt, startedAt, finishedAt)
 	return err
+}
+
+// UpsertBuildAttempt inserts or updates a build attempt record.
+func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAttempt) error {
+	if err := p.ensureDB(); err != nil {
+		return err
+	}
+	if attempt.Attempt <= 0 {
+		return nil
+	}
+	statusLower := strings.ToLower(attempt.Status)
+	now := time.Now()
+	var startedAt any
+	var finishedAt any
+	switch statusLower {
+	case "building":
+		startedAt = now
+	case "built", "failed", "retry", "quarantined":
+		finishedAt = now
+	}
+	var backoff any
+	if attempt.BackoffUntil > 0 {
+		backoff = time.Unix(attempt.BackoffUntil, 0)
+	}
+	attempt.BackoffReason = strings.TrimSpace(attempt.BackoffReason)
+	var backoffReasonVal any
+	if attempt.BackoffReason != "" {
+		backoffReasonVal = attempt.BackoffReason
+	}
+	var backoffSecondsVal any
+	if attempt.BackoffSeconds > 0 {
+		backoffSecondsVal = attempt.BackoffSeconds
+	}
+	var durationVal any
+	if attempt.DurationMS > 0 {
+		durationVal = attempt.DurationMS
+	}
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO build_attempts (
+			package, version, attempt, status, last_error, failure_summary,
+			backoff_until, backoff_reason, backoff_seconds, duration_ms,
+			run_id, plan_id, started_at, finished_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		ON CONFLICT (package, version, attempt) DO UPDATE
+		SET status = EXCLUDED.status,
+		    last_error = EXCLUDED.last_error,
+		    failure_summary = CASE
+		        WHEN EXCLUDED.status IN ('failed','retry','quarantined') THEN NULLIF(EXCLUDED.failure_summary, '')
+		        WHEN EXCLUDED.status IN ('pending','leased','building','built') THEN NULL
+		        ELSE build_attempts.failure_summary
+		    END,
+		    backoff_until = CASE
+		        WHEN EXCLUDED.status = 'retry' THEN EXCLUDED.backoff_until
+		        ELSE NULL
+		    END,
+		    backoff_reason = CASE
+		        WHEN EXCLUDED.status = 'retry' THEN EXCLUDED.backoff_reason
+		        ELSE NULL
+		    END,
+		    backoff_seconds = CASE
+		        WHEN EXCLUDED.status = 'retry' THEN EXCLUDED.backoff_seconds
+		        ELSE NULL
+		    END,
+		    duration_ms = COALESCE(EXCLUDED.duration_ms, build_attempts.duration_ms),
+		    run_id = COALESCE(EXCLUDED.run_id, build_attempts.run_id),
+		    plan_id = COALESCE(EXCLUDED.plan_id, build_attempts.plan_id),
+		    started_at = CASE
+		        WHEN EXCLUDED.status = 'building' THEN COALESCE(build_attempts.started_at, NOW())
+		        ELSE build_attempts.started_at
+		    END,
+		    finished_at = CASE
+		        WHEN EXCLUDED.status IN ('built','failed','retry','quarantined') THEN NOW()
+		        ELSE build_attempts.finished_at
+		    END,
+		    updated_at = NOW()
+	`, attempt.Package, attempt.Version, attempt.Attempt, statusLower, attempt.LastError, attempt.FailureSummary, backoff, backoffReasonVal, backoffSecondsVal, durationVal, nullableString(attempt.RunID), nullableInt64(attempt.PlanID), startedAt, finishedAt)
+	return err
+}
+
+// ListBuildAttempts returns attempt history for a package/version.
+func (p *PostgresStore) ListBuildAttempts(ctx context.Context, pkg, version string, limit int) ([]BuildAttempt, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, package, version, attempt, status, COALESCE(last_error,''), COALESCE(failure_summary,''),
+		       COALESCE(extract(epoch from backoff_until),0)::bigint, COALESCE(backoff_reason,''), COALESCE(backoff_seconds,0),
+		       COALESCE(duration_ms,0), COALESCE(extract(epoch from started_at),0)::bigint, COALESCE(extract(epoch from finished_at),0)::bigint,
+		       COALESCE(run_id,''), COALESCE(plan_id,0), extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint
+		FROM build_attempts
+		WHERE package = $1 AND version = $2
+		ORDER BY attempt DESC
+		LIMIT $3
+	`, pkg, version, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BuildAttempt
+	for rows.Next() {
+		var entry BuildAttempt
+		if err := rows.Scan(&entry.ID, &entry.Package, &entry.Version, &entry.Attempt, &entry.Status, &entry.LastError, &entry.FailureSummary,
+			&entry.BackoffUntil, &entry.BackoffReason, &entry.BackoffSeconds, &entry.DurationMS, &entry.StartedAt, &entry.FinishedAt,
+			&entry.RunID, &entry.PlanID, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, entry)
+	}
+	return out, rows.Err()
 }
 
 func (p *PostgresStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]Event, error) {

@@ -112,6 +112,30 @@ CREATE TABLE IF NOT EXISTS build_status (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS build_attempts (
+    id            BIGSERIAL PRIMARY KEY,
+    package       TEXT NOT NULL,
+    version       TEXT NOT NULL,
+    attempt       INT NOT NULL,
+    status        TEXT NOT NULL,
+    last_error    TEXT,
+    failure_summary TEXT,
+    backoff_until TIMESTAMPTZ,
+    backoff_reason TEXT,
+    backoff_seconds INT,
+    duration_ms   BIGINT,
+    run_id        TEXT,
+    plan_id       BIGINT,
+    started_at    TIMESTAMPTZ,
+    finished_at   TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_build_attempts_pkg_version_attempt ON build_attempts(package, version, attempt);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_status ON build_attempts(status);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_pkg_version ON build_attempts(package, version);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_created_at ON build_attempts(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS worker_status (
     worker_id    TEXT PRIMARY KEY,
     run_id       TEXT,

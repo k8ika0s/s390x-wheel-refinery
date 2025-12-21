@@ -1097,11 +1097,12 @@ function PackageDetail({ token, pushToast, apiBase }) {
   if (error) return <div className="error">{error}</div>;
   if (!data) return null;
 
-  const { summary, variants, failures, events, hints = [] } = data;
+  const { summary, variants, failures, events, hints = [], attempts = [] } = data;
   const variantsArr = toArray(variants).map(normalizeEvent);
   const failuresArr = toArray(failures).map(normalizeEvent);
   const eventsArr = toArray(events).map(normalizeEvent);
   const hintsArr = toArray(hints);
+  const attemptsArr = toArray(attempts);
   const logDownloadHref = selectedEvent ? `${apiBase || ""}/api/logs/${selectedEvent.name}/${selectedEvent.version}?raw=1` : null;
 
   const variantsPaged = paged(variantsArr, variantPage);
@@ -1385,6 +1386,50 @@ function PackageDetail({ token, pushToast, apiBase }) {
               </div>
             ) : (
               <EmptyState title="No automation history" detail="Builds have not reported auto-fix activity yet." />
+            )}
+          </StatCard>
+          <StatCard title="Attempts">
+            {attemptsArr.length ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-xs">
+                  <thead className="text-slate-400 sticky top-0 bg-slate-900">
+                    <tr className="border-b border-border">
+                      <th className="text-left py-2">Attempt</th>
+                      <th className="text-left py-2">Status</th>
+                      <th className="text-left py-2">Started</th>
+                      <th className="text-left py-2">Finished</th>
+                      <th className="text-left py-2">Duration</th>
+                      <th className="text-left py-2">Backoff</th>
+                      <th className="text-left py-2">Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attemptsArr.map((attempt) => {
+                      const durationLabel = attempt.duration_ms ? formatDuration(Math.max(0, attempt.duration_ms / 1000)) : "—";
+                      const backoffDelay = attempt.backoff_seconds ? formatDuration(attempt.backoff_seconds) : "";
+                      const backoffLabel = attempt.backoff_reason
+                        ? `${attempt.backoff_reason}${backoffDelay ? ` (${backoffDelay})` : ""}`
+                        : attempt.backoff_until
+                        ? formatTimestamp(attempt.backoff_until)
+                        : "—";
+                      const errorLabel = attempt.failure_summary || attempt.last_error || "—";
+                      return (
+                        <tr key={`${attempt.package}-${attempt.version}-${attempt.attempt}`} className="border-b border-slate-800">
+                          <td className="py-2 text-slate-200">{attempt.attempt}</td>
+                          <td className="py-2"><span className={`status ${attempt.status}`}>{attempt.status}</span></td>
+                          <td className="py-2 text-slate-400">{formatTimestamp(attempt.started_at) || "—"}</td>
+                          <td className="py-2 text-slate-400">{formatTimestamp(attempt.finished_at) || "—"}</td>
+                          <td className="py-2 text-slate-400">{durationLabel}</td>
+                          <td className="py-2 text-slate-400">{backoffLabel}</td>
+                          <td className="py-2 text-amber-200">{errorLabel}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <EmptyState title="No attempts yet" detail="Attempts will appear once a build starts." />
             )}
           </StatCard>
           <div className="glass p-4 space-y-3 min-w-0">
