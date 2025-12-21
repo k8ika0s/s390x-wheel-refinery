@@ -4978,7 +4978,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           </div>
         </div>
         <div className="text-xs text-slate-500">
-          Recipes are loaded from the control-plane recipes directory and used to validate the default python version.
+          Recipes are loaded from the control-plane recipes directory and used to validate the default python version. New versions
+          should also be added to recipes/versions.sh with PY### pins.
         </div>
       </div>
       <div className="glass p-4 space-y-3">
