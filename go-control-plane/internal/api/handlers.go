@@ -30,14 +30,14 @@ import (
 
 // Handler wires HTTP routes to store/queue backends.
 type Handler struct {
-	Store      store.Store
-	Queue      queue.Backend
-	PlanQ      queue.PlanQueueBackend
-	InputStore objectstore.Store
-	Config     config.Config
-	logHubOnce sync.Once
-	logHub     *logHub
-	logRetentionMu    sync.Mutex
+	Store                 store.Store
+	Queue                 queue.Backend
+	PlanQ                 queue.PlanQueueBackend
+	InputStore            objectstore.Store
+	Config                config.Config
+	logHubOnce            sync.Once
+	logHub                *logHub
+	logRetentionMu        sync.Mutex
 	lastLogRetentionSweep time.Time
 }
 
@@ -48,6 +48,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/metrics", h.promMetrics)
 	mux.HandleFunc("/api/config", h.config)
 	mux.HandleFunc("/api/settings", h.settings)
+	mux.HandleFunc("/api/python-versions", h.pythonVersions)
+	mux.HandleFunc("/api/python-versions/", h.pythonVersionByID)
 	mux.HandleFunc("/api/pending-inputs", h.pendingInputs)
 	mux.HandleFunc("/api/pending-inputs/clear", h.pendingInputsClear)
 	mux.HandleFunc("/api/pending-inputs/", h.pendingInputAction)
@@ -859,6 +861,17 @@ func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
 		if err := settings.Validate(s); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
+		}
+		if s.PythonVersion != "" {
+			versions, err := h.listPythonRecipes()
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			if len(versions) > 0 && !containsPythonVersion(versions, s.PythonVersion) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "python_version not in managed versions list"})
+				return
+			}
 		}
 		if h.Store != nil {
 			if err := h.Store.SaveSettings(r.Context(), s); err != nil {
