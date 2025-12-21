@@ -1231,8 +1231,31 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	max := parseIntDefault(r.URL.Query().Get("max"), 5, 100)
-	if h.Store != nil && h.Config.BuildLeaseTimeout > 0 {
-		_, _ = h.Store.RequeueStaleLeases(r.Context(), h.Config.BuildLeaseTimeout)
+	if h.Store != nil && (h.Config.BuildLeaseTimeout > 0 || h.Config.BuildStallTimeout > 0) {
+		stale, _ := h.Store.RequeueStaleBuilds(r.Context(), h.Config.BuildLeaseTimeout, h.Config.BuildStallTimeout)
+		for _, b := range stale {
+			detail := "requeued stale lease"
+			if b.PreviousStatus == "building" {
+				detail = "requeued stalled build"
+			}
+			if b.StaleAgeSec > 0 {
+				detail = fmt.Sprintf("%s (age %ds)", detail, b.StaleAgeSec)
+			}
+			_ = h.Store.RecordEvent(r.Context(), store.Event{
+				RunID:       b.RunID,
+				Name:        b.Package,
+				Version:     b.Version,
+				PythonTag:   b.PythonTag,
+				PlatformTag: b.PlatformTag,
+				Status:      "retry",
+				Detail:      detail,
+				Timestamp:   time.Now().Unix(),
+				Metadata: map[string]any{
+					"previous_status": b.PreviousStatus,
+					"stale_age_sec":   b.StaleAgeSec,
+				},
+			})
+		}
 	}
 	builds, err := h.Store.LeaseBuilds(r.Context(), max)
 	if err != nil {

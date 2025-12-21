@@ -1768,35 +1768,142 @@ func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int) ([]BuildStatus
 	return out, nil
 }
 
-// RequeueStaleLeases resets leased builds that have exceeded the max age.
-func (p *PostgresStore) RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int64, error) {
+// RequeueStaleBuilds resets leased/building builds that have exceeded the max age.
+func (p *PostgresStore) RequeueStaleBuilds(ctx context.Context, leaseAgeSec int, buildAgeSec int) ([]BuildStatus, error) {
 	if err := p.ensureDB(); err != nil {
-		return 0, err
+		return nil, err
 	}
-	if maxAgeSec <= 0 {
-		return 0, nil
+	if leaseAgeSec <= 0 && buildAgeSec <= 0 {
+		return nil, nil
 	}
-	res, err := p.db.ExecContext(ctx, `
-		UPDATE build_status
-		SET status = 'pending',
-		    last_error = CASE
-		        WHEN COALESCE(last_error, '') = '' THEN 'lease expired'
-		        ELSE last_error
-		    END,
-		    failure_summary = NULL,
-		    backoff_until = NULL,
-		    leased_at = NULL,
-		    started_at = NULL,
-		    finished_at = NULL,
-		    updated_at = NOW()
-		WHERE status = 'leased'
-		  AND COALESCE(leased_at, updated_at) < NOW() - ($1 * INTERVAL '1 second')
-	`, maxAgeSec)
+	type query struct {
+		sql  string
+		args []any
+	}
+	var q query
+	if leaseAgeSec > 0 && buildAgeSec > 0 {
+		q.sql = `
+			WITH cte AS (
+				SELECT id, status,
+				       CASE
+				           WHEN status = 'building' THEN EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, leased_at, updated_at)))::bigint
+				           ELSE EXTRACT(EPOCH FROM (NOW() - COALESCE(leased_at, updated_at)))::bigint
+				       END AS stale_age_seconds
+				FROM build_status
+				WHERE (status = 'leased' AND COALESCE(leased_at, updated_at) < NOW() - ($1 * INTERVAL '1 second'))
+				   OR (status = 'building' AND COALESCE(started_at, leased_at, updated_at) < NOW() - ($2 * INTERVAL '1 second'))
+			)
+			UPDATE build_status b
+			SET status = 'pending',
+			    last_error = CASE
+			        WHEN COALESCE(last_error, '') = '' AND cte.status = 'building' THEN 'build stalled'
+			        WHEN COALESCE(last_error, '') = '' THEN 'lease expired'
+			        ELSE last_error
+			    END,
+			    failure_summary = NULL,
+			    backoff_until = NULL,
+			    leased_at = NULL,
+			    started_at = NULL,
+			    finished_at = NULL,
+			    updated_at = NOW()
+			FROM cte
+			WHERE b.id = cte.id
+			RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts,
+			          COALESCE(b.last_error,''), COALESCE(b.failure_summary,''), b.run_id, b.plan_id,
+			          COALESCE(extract(epoch from b.backoff_until),0)::bigint, extract(epoch from b.created_at)::bigint,
+			          extract(epoch from b.updated_at)::bigint, COALESCE(extract(epoch from b.leased_at),0)::bigint,
+			          COALESCE(extract(epoch from b.started_at),0)::bigint, COALESCE(extract(epoch from b.finished_at),0)::bigint,
+			          COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[]),
+			          cte.status as previous_status, cte.stale_age_seconds
+		`
+		q.args = []any{leaseAgeSec, buildAgeSec}
+	} else if leaseAgeSec > 0 {
+		q.sql = `
+			WITH cte AS (
+				SELECT id, status,
+				       EXTRACT(EPOCH FROM (NOW() - COALESCE(leased_at, updated_at)))::bigint AS stale_age_seconds
+				FROM build_status
+				WHERE status = 'leased'
+				  AND COALESCE(leased_at, updated_at) < NOW() - ($1 * INTERVAL '1 second')
+			)
+			UPDATE build_status b
+			SET status = 'pending',
+			    last_error = CASE
+			        WHEN COALESCE(last_error, '') = '' THEN 'lease expired'
+			        ELSE last_error
+			    END,
+			    failure_summary = NULL,
+			    backoff_until = NULL,
+			    leased_at = NULL,
+			    started_at = NULL,
+			    finished_at = NULL,
+			    updated_at = NOW()
+			FROM cte
+			WHERE b.id = cte.id
+			RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts,
+			          COALESCE(b.last_error,''), COALESCE(b.failure_summary,''), b.run_id, b.plan_id,
+			          COALESCE(extract(epoch from b.backoff_until),0)::bigint, extract(epoch from b.created_at)::bigint,
+			          extract(epoch from b.updated_at)::bigint, COALESCE(extract(epoch from b.leased_at),0)::bigint,
+			          COALESCE(extract(epoch from b.started_at),0)::bigint, COALESCE(extract(epoch from b.finished_at),0)::bigint,
+			          COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[]),
+			          cte.status as previous_status, cte.stale_age_seconds
+		`
+		q.args = []any{leaseAgeSec}
+	} else {
+		q.sql = `
+			WITH cte AS (
+				SELECT id, status,
+				       EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, leased_at, updated_at)))::bigint AS stale_age_seconds
+				FROM build_status
+				WHERE status = 'building'
+				  AND COALESCE(started_at, leased_at, updated_at) < NOW() - ($1 * INTERVAL '1 second')
+			)
+			UPDATE build_status b
+			SET status = 'pending',
+			    last_error = CASE
+			        WHEN COALESCE(last_error, '') = '' THEN 'build stalled'
+			        ELSE last_error
+			    END,
+			    failure_summary = NULL,
+			    backoff_until = NULL,
+			    leased_at = NULL,
+			    started_at = NULL,
+			    finished_at = NULL,
+			    updated_at = NOW()
+			FROM cte
+			WHERE b.id = cte.id
+			RETURNING b.id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts,
+			          COALESCE(b.last_error,''), COALESCE(b.failure_summary,''), b.run_id, b.plan_id,
+			          COALESCE(extract(epoch from b.backoff_until),0)::bigint, extract(epoch from b.created_at)::bigint,
+			          extract(epoch from b.updated_at)::bigint, COALESCE(extract(epoch from b.leased_at),0)::bigint,
+			          COALESCE(extract(epoch from b.started_at),0)::bigint, COALESCE(extract(epoch from b.finished_at),0)::bigint,
+			          COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[]),
+			          cte.status as previous_status, cte.stale_age_seconds
+		`
+		q.args = []any{buildAgeSec}
+	}
+	rows, err := p.db.QueryContext(ctx, q.sql, q.args...)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	count, _ := res.RowsAffected()
-	return count, nil
+	defer rows.Close()
+	var out []BuildStatus
+	for rows.Next() {
+		var bs BuildStatus
+		var recipes json.RawMessage
+		var hints pq.StringArray
+		if err := rows.Scan(&bs.ID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints, &bs.PreviousStatus, &bs.StaleAgeSec); err != nil {
+			return nil, err
+		}
+		if len(recipes) > 0 {
+			_ = json.Unmarshal(recipes, &bs.Recipes)
+		}
+		if len(hints) > 0 {
+			bs.HintIDs = hints
+		}
+		out = append(out, bs)
+	}
+	return out, rows.Err()
 }
 
 // UpsertWorkerStatus records worker heartbeats and pool usage.

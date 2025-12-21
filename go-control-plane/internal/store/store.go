@@ -163,10 +163,12 @@ type BuildStatus struct {
 	PythonTag      string   `json:"python_tag"`
 	PlatformTag    string   `json:"platform_tag"`
 	Status         string   `json:"status"`
+	PreviousStatus string   `json:"previous_status,omitempty"`
 	Attempts       int      `json:"attempts"`
 	LastError      string   `json:"last_error,omitempty"`
 	FailureSummary string   `json:"failure_summary,omitempty"`
 	OldestAgeSec   int64    `json:"oldest_age_seconds,omitempty"`
+	StaleAgeSec    int64    `json:"stale_age_seconds,omitempty"`
 	CreatedAt      int64    `json:"created_at"`
 	UpdatedAt      int64    `json:"updated_at"`
 	LeasedAt       int64    `json:"leased_at,omitempty"`
@@ -277,7 +279,7 @@ type Store interface {
 	BuildQueueStats(ctx context.Context) (BuildQueueStats, error)
 	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
-	RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int64, error)
+	RequeueStaleBuilds(ctx context.Context, leaseAgeSec int, buildAgeSec int) ([]BuildStatus, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)
 
 	// Worker health
