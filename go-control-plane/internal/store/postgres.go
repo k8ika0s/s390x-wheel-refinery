@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 CREATE INDEX IF NOT EXISTS idx_logs_name ON logs(name);
 CREATE INDEX IF NOT EXISTS idx_logs_version ON logs(version);
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs USING BRIN (timestamp);
 
 CREATE TABLE IF NOT EXISTS log_chunks (
     id         BIGSERIAL PRIMARY KEY,
@@ -106,6 +107,7 @@ CREATE TABLE IF NOT EXISTS log_chunks (
 CREATE INDEX IF NOT EXISTS idx_log_chunks_name ON log_chunks(name);
 CREATE INDEX IF NOT EXISTS idx_log_chunks_version ON log_chunks(version);
 CREATE INDEX IF NOT EXISTS idx_log_chunks_name_version_id ON log_chunks(name, version, id);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_timestamp ON log_chunks USING BRIN (timestamp);
 
 CREATE TABLE IF NOT EXISTS manifests (
     id           BIGSERIAL PRIMARY KEY,
@@ -1449,6 +1451,38 @@ func (p *PostgresStore) TrimLogChunks(ctx context.Context, name, version string,
 	    WHERE name=$1 AND version=$2
 	      AND id < (SELECT id FROM cutoff)
 	`, name, version, max)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
+// TrimLogChunksBefore deletes log chunks older than cutoff.
+func (p *PostgresStore) TrimLogChunksBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	res, err := p.db.ExecContext(ctx, `
+	    DELETE FROM log_chunks
+	    WHERE timestamp < $1
+	`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
+// TrimLogsBefore deletes log entries older than cutoff.
+func (p *PostgresStore) TrimLogsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	res, err := p.db.ExecContext(ctx, `
+	    DELETE FROM logs
+	    WHERE timestamp < $1
+	`, cutoff)
 	if err != nil {
 		return 0, err
 	}

@@ -253,6 +253,8 @@ type Store interface {
 	ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]LogChunk, error)
 	TailLogChunks(ctx context.Context, name, version string, limit int) ([]LogChunk, error)
 	TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error)
+	TrimLogChunksBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	TrimLogsBefore(ctx context.Context, cutoff time.Time) (int64, error)
 
 	// Plan/Manifest/Artifacts
 	Plan(ctx context.Context) ([]PlanNode, error)

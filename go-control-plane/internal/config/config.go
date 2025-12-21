@@ -28,6 +28,9 @@ type Config struct {
 	BuildLeaseTimeout   int
 	BuildStallTimeout   int
 	LogChunkMax         int
+	LogChunkMaxAgeHours int
+	LogEntryMaxAgeHours int
+	LogRetentionSweepSec int
 	HintsDir            string
 	SeedHints           bool
 	ObjectStoreEndpoint string
@@ -66,6 +69,9 @@ func FromEnv() Config {
 		BuildLeaseTimeout:   getenvInt("BUILD_LEASE_TIMEOUT_SEC", 600),
 		BuildStallTimeout:   getenvInt("BUILD_STALL_TIMEOUT_SEC", 1800),
 		LogChunkMax:         getenvInt("LOG_CHUNK_MAX", 5000),
+		LogChunkMaxAgeHours: getenvInt("LOG_CHUNK_MAX_AGE_HOURS", 168),
+		LogEntryMaxAgeHours: getenvInt("LOG_ENTRY_MAX_AGE_HOURS", 720),
+		LogRetentionSweepSec: getenvInt("LOG_RETENTION_SWEEP_SEC", 300),
 		HintsDir:            getenv("HINTS_DIR", "/hints"),
 		SeedHints:           getenv("HINTS_SEED", "1") != "0",
 		ObjectStoreEndpoint: getenv("OBJECT_STORE_ENDPOINT", ""),

@@ -37,6 +37,8 @@ type Handler struct {
 	Config     config.Config
 	logHubOnce sync.Once
 	logHub     *logHub
+	logRetentionMu    sync.Mutex
+	lastLogRetentionSweep time.Time
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
@@ -1898,7 +1900,39 @@ func (h *Handler) logsIngest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	h.maybeSweepLogs(r.Context())
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "log saved"})
+}
+
+func (h *Handler) maybeSweepLogs(ctx context.Context) {
+	if h.Store == nil {
+		return
+	}
+	maxChunkAge := h.Config.LogChunkMaxAgeHours
+	maxLogAge := h.Config.LogEntryMaxAgeHours
+	if maxChunkAge <= 0 && maxLogAge <= 0 {
+		return
+	}
+	intervalSec := h.Config.LogRetentionSweepSec
+	if intervalSec <= 0 {
+		intervalSec = 300
+	}
+	h.logRetentionMu.Lock()
+	if !h.lastLogRetentionSweep.IsZero() && time.Since(h.lastLogRetentionSweep) < time.Duration(intervalSec)*time.Second {
+		h.logRetentionMu.Unlock()
+		return
+	}
+	h.lastLogRetentionSweep = time.Now()
+	h.logRetentionMu.Unlock()
+	now := time.Now()
+	if maxChunkAge > 0 {
+		cutoff := now.Add(-time.Duration(maxChunkAge) * time.Hour)
+		_, _ = h.Store.TrimLogChunksBefore(ctx, cutoff)
+	}
+	if maxLogAge > 0 {
+		cutoff := now.Add(-time.Duration(maxLogAge) * time.Hour)
+		_, _ = h.Store.TrimLogsBefore(ctx, cutoff)
+	}
 }
 
 func (h *Handler) queueList(w http.ResponseWriter, r *http.Request) {
@@ -2404,6 +2438,7 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 		if h.Config.LogChunkMax > 0 && trimCounter > 0 {
 			_, _ = h.Store.TrimLogChunks(r.Context(), name, version, h.Config.LogChunkMax)
 		}
+		h.maybeSweepLogs(r.Context())
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "log stream ingested"})
 	case http.MethodGet:
 		after := parseInt64Default(r.URL.Query().Get("after"), 0)

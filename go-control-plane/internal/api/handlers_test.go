@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
@@ -93,6 +94,12 @@ func (f *fakeStore) TailLogChunks(ctx context.Context, name, version string, lim
 	return nil, nil
 }
 func (f *fakeStore) TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) TrimLogChunksBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) TrimLogsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	return 0, nil
 }
 func (f *fakeStore) Plan(ctx context.Context) ([]store.PlanNode, error) {
