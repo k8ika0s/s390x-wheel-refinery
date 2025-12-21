@@ -57,6 +57,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/builds", h.builds)
 	mux.HandleFunc("/api/builds/status", h.buildStatusUpdate)
 	mux.HandleFunc("/api/build-queue/pop", h.buildQueuePop)
+	mux.HandleFunc("/api/build-queue/requeue-stale", h.buildQueueRequeueStale)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
 	mux.HandleFunc("/api/summary", h.summary)
 	mux.HandleFunc("/api/recent", h.recent)
@@ -1231,32 +1232,7 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	max := parseIntDefault(r.URL.Query().Get("max"), 5, 100)
-	if h.Store != nil && (h.Config.BuildLeaseTimeout > 0 || h.Config.BuildStallTimeout > 0) {
-		stale, _ := h.Store.RequeueStaleBuilds(r.Context(), h.Config.BuildLeaseTimeout, h.Config.BuildStallTimeout)
-		for _, b := range stale {
-			detail := "requeued stale lease"
-			if b.PreviousStatus == "building" {
-				detail = "requeued stalled build"
-			}
-			if b.StaleAgeSec > 0 {
-				detail = fmt.Sprintf("%s (age %ds)", detail, b.StaleAgeSec)
-			}
-			_ = h.Store.RecordEvent(r.Context(), store.Event{
-				RunID:       b.RunID,
-				Name:        b.Package,
-				Version:     b.Version,
-				PythonTag:   b.PythonTag,
-				PlatformTag: b.PlatformTag,
-				Status:      "retry",
-				Detail:      detail,
-				Timestamp:   time.Now().Unix(),
-				Metadata: map[string]any{
-					"previous_status": b.PreviousStatus,
-					"stale_age_sec":   b.StaleAgeSec,
-				},
-			})
-		}
-	}
+	_, _ = h.requeueStaleBuilds(r.Context())
 	builds, err := h.Store.LeaseBuilds(r.Context(), max)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1288,6 +1264,57 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"builds": out})
+}
+
+func (h *Handler) buildQueueRequeueStale(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	stale, err := h.requeueStaleBuilds(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"detail": "requeued stale builds", "count": len(stale)})
+}
+
+func (h *Handler) requeueStaleBuilds(ctx context.Context) ([]store.BuildStatus, error) {
+	if h.Store == nil || (h.Config.BuildLeaseTimeout <= 0 && h.Config.BuildStallTimeout <= 0) {
+		return nil, nil
+	}
+	stale, err := h.Store.RequeueStaleBuilds(ctx, h.Config.BuildLeaseTimeout, h.Config.BuildStallTimeout)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range stale {
+		detail := "requeued stale lease"
+		if b.PreviousStatus == "building" {
+			detail = "requeued stalled build"
+		}
+		if b.StaleAgeSec > 0 {
+			detail = fmt.Sprintf("%s (age %ds)", detail, b.StaleAgeSec)
+		}
+		_ = h.Store.RecordEvent(ctx, store.Event{
+			RunID:       b.RunID,
+			Name:        b.Package,
+			Version:     b.Version,
+			PythonTag:   b.PythonTag,
+			PlatformTag: b.PlatformTag,
+			Status:      "retry",
+			Detail:      detail,
+			Timestamp:   time.Now().Unix(),
+			Metadata: map[string]any{
+				"previous_status": b.PreviousStatus,
+				"stale_age_sec":   b.StaleAgeSec,
+			},
+		})
+	}
+	return stale, nil
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {

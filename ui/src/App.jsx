@@ -4,6 +4,7 @@ import {
   getApiBase,
   clearQueue,
   clearBuilds,
+  requeueStaleBuilds,
   clearPendingInputs,
   clearPlanQueue,
   enqueueRetry,
@@ -1615,6 +1616,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [buildsLoading, setBuildsLoading] = useState(false);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
   const [clearingBuilds, setClearingBuilds] = useState(false);
+  const [requeueingStaleBuilds, setRequeueingStaleBuilds] = useState(false);
   const [clearingPendingInputs, setClearingPendingInputs] = useState(false);
   const [clearingPlanQueue, setClearingPlanQueue] = useState(false);
   const [pendingActions, setPendingActions] = useState({});
@@ -2383,6 +2385,20 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       pushToast?.({ type: "error", title: "Clear builds failed", message: e.message });
     } finally {
       setClearingBuilds(false);
+    }
+  };
+
+  const handleRequeueStaleBuilds = async () => {
+    if (!window.confirm("Requeue stale leased/building items? This resets them to pending.")) return;
+    setRequeueingStaleBuilds(true);
+    try {
+      const resp = await requeueStaleBuilds(authToken);
+      pushToast?.({ type: "success", title: "Stale builds requeued", message: `${resp.count ?? 0} item(s) reset` });
+      await load({ packageFilter: pkgFilter, statusFilter, buildStatusFilter });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Requeue stale failed", message: e.message });
+    } finally {
+      setRequeueingStaleBuilds(false);
     }
   };
 
@@ -4025,6 +4041,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               </div>
               <div className="flex items-center gap-2 text-xs text-slate-400">
                 {buildsLoading && <span className="animate-pulse">Refreshing…</span>}
+                <button
+                  className="btn btn-secondary px-2 py-1 text-xs"
+                  onClick={handleRequeueStaleBuilds}
+                  disabled={requeueingStaleBuilds}
+                >
+                  {requeueingStaleBuilds ? "Requeueing..." : "Requeue stale"}
+                </button>
                 <button
                   className="btn btn-secondary px-2 py-1 text-xs"
                   onClick={handleClearBuilds}

@@ -335,3 +335,7 @@ export function clearBuilds(status, token) {
   const qs = params.toString();
   return request(qs ? `/api/builds?${qs}` : "/api/builds", { method: "DELETE" }, token);
 }
+
+export function requeueStaleBuilds(token) {
+  return request("/api/build-queue/requeue-stale", { method: "POST" }, token);
+}
