@@ -725,7 +725,7 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 		SET status = EXCLUDED.status,
 		    last_error = EXCLUDED.last_error,
 		    failure_summary = CASE
-		        WHEN EXCLUDED.status IN ('failed','retry') THEN NULLIF(EXCLUDED.failure_summary, '')
+		        WHEN EXCLUDED.status IN ('failed','retry','quarantined') THEN NULLIF(EXCLUDED.failure_summary, '')
 		        WHEN EXCLUDED.status IN ('pending','leased','building','built') THEN NULL
 		        ELSE build_status.failure_summary
 		    END,
@@ -756,7 +756,7 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 		    END,
 		    finished_at = CASE
 		        WHEN EXCLUDED.status IN ('pending','retry','leased','building') THEN NULL
-		        WHEN EXCLUDED.status IN ('built','failed') THEN NOW()
+		        WHEN EXCLUDED.status IN ('built','failed','quarantined') THEN NOW()
 		        ELSE build_status.finished_at
 		    END,
 		    updated_at = NOW()

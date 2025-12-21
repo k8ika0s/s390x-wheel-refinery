@@ -46,6 +46,7 @@ type Config struct {
 	RunnerTimeoutSec     int
 	RequeueOnFailure     bool
 	MaxRequeueAttempts   int
+	QuarantineAfterAttempts int
 	BackoffBaseSec       int
 	BackoffMaxSec        int
 	BackoffTransientMult int
@@ -126,6 +127,7 @@ func fromEnv() Config {
 		RunnerTimeoutSec:     getenvInt("RUNNER_TIMEOUT_SEC", 900),
 		RequeueOnFailure:     getenvBool("REQUEUE_ON_FAILURE", false),
 		MaxRequeueAttempts:   getenvInt("MAX_REQUEUE_ATTEMPTS", 3),
+		QuarantineAfterAttempts: getenvInt("QUARANTINE_AFTER_ATTEMPTS", 5),
 		BackoffBaseSec:       getenvInt("BACKOFF_BASE_SEC", 5),
 		BackoffMaxSec:        getenvInt("BACKOFF_MAX_SEC", 600),
 		BackoffTransientMult: getenvInt("BACKOFF_TRANSIENT_MULTIPLIER", 6),

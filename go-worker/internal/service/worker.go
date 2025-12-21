@@ -221,6 +221,8 @@ func (w *Worker) Drain(ctx context.Context) error {
 		recipesForStatus := res.job.Recipes
 		autoFix := autoFixResult{}
 		summary := ""
+		quarantined := false
+		quarantineAfter := w.Cfg.QuarantineAfterAttempts
 		if res.err != nil {
 			status = "failed"
 			meta["error"] = res.err.Error()
@@ -248,6 +250,16 @@ func (w *Worker) Drain(ctx context.Context) error {
 			if autoFix.Applied && status != "retry" {
 				autoFix.BlockedReason = "max attempts reached"
 			}
+			if quarantineAfter > 0 && res.attempt >= quarantineAfter {
+				status = "quarantined"
+				quarantined = true
+				meta["quarantine_after"] = quarantineAfter
+				meta["quarantine_attempt"] = res.attempt
+				meta["quarantine_reason"] = "max attempts reached"
+				if autoFix.Applied {
+					autoFix.BlockedReason = fmt.Sprintf("quarantined after %d attempts", quarantineAfter)
+				}
+			}
 		}
 		// report build status to control-plane
 		var backoff backoffMeta
@@ -264,6 +276,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 		if status == "retry" && backoff.Until > 0 {
 			meta["backoff_reason"] = backoff.Reason
 			meta["backoff_seconds"] = backoff.Seconds
+		}
+		if quarantined {
+			meta["quarantined"] = true
 		}
 		if autoFix.Applied || len(autoFix.HintIDs) > 0 || len(autoFix.SavedHintIDs) > 0 {
 			meta["automation"] = map[string]any{
@@ -366,6 +381,11 @@ func (w *Worker) Drain(ctx context.Context) error {
 				logPayload["failure_summary"] = summary
 			}
 		}
+		if quarantined {
+			logPayload["quarantine_after"] = quarantineAfter
+			logPayload["quarantine_attempt"] = res.attempt
+			logPayload["quarantine_reason"] = "max attempts reached"
+		}
 		if status == "retry" && backoff.Until > 0 {
 			logPayload["backoff_reason"] = backoff.Reason
 			logPayload["backoff_seconds"] = backoff.Seconds
@@ -432,6 +452,13 @@ func (w *Worker) Drain(ctx context.Context) error {
 			}
 			if autoFix.Applied {
 				detail = fmt.Sprintf("auto-fix applied: %s", autoFix.Reason)
+			}
+			if quarantined {
+				if detail != "" {
+					detail = fmt.Sprintf("%s | quarantined after %d attempts", detail, quarantineAfter)
+				} else {
+					detail = fmt.Sprintf("quarantined after %d attempts", quarantineAfter)
+				}
 			}
 			if res.err != nil {
 				if detail != "" {

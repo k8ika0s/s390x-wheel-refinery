@@ -78,6 +78,7 @@ const buildStatusChipClass = (status) => {
   if (value === "leased") return "bg-indigo-500/20 text-indigo-200 border-indigo-500/40";
   if (value === "retry") return "bg-amber-500/20 text-amber-200 border-amber-500/40";
   if (value === "failed") return "bg-red-500/20 text-red-200 border-red-500/40";
+  if (value === "quarantined") return "bg-fuchsia-500/20 text-fuchsia-200 border-fuchsia-500/40";
   if (value === "pending") return "bg-slate-700/30 text-slate-200 border-slate-600/50";
   return "";
 };
@@ -119,7 +120,7 @@ const pickStatusSince = (build) => {
   if (status === "building") {
     return build.started_at || build.leased_at || build.updated_at || build.created_at || 0;
   }
-  if (status === "built" || status === "failed") {
+  if (status === "built" || status === "failed" || status === "quarantined") {
     return build.finished_at || build.updated_at || build.created_at || 0;
   }
   return build.updated_at || build.created_at || 0;
@@ -2710,10 +2711,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       if (status === "building" || status === "leased") acc.active += 1;
       if (status === "pending" || status === "retry") acc.queued += 1;
       if (status === "failed") acc.failed += 1;
+      if (status === "quarantined") acc.quarantined += 1;
       if (status === "built") acc.built += 1;
       return acc;
     },
-    { active: 0, queued: 0, failed: 0, built: 0 },
+    { active: 0, queued: 0, failed: 0, built: 0, quarantined: 0 },
   );
   const pollState = !pollMs
     ? "off"
@@ -4074,7 +4076,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               </div>
             </div>
             <div className="flex flex-wrap gap-2 text-sm">
-              {["", "pending", "leased", "retry", "building", "failed", "built"].map((s) => (
+              {["", "pending", "leased", "retry", "building", "failed", "quarantined", "built"].map((s) => (
                 <button
                   key={s || "all"}
                   className={`chip ${buildStatusFilter === s ? "chip-active" : "hover:bg-slate-800"} ${buildsLoading ? "opacity-60 cursor-wait" : ""}`}
@@ -4093,6 +4095,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <span>Active: {buildStatusCounts.active}</span>
               <span>Queued: {buildStatusCounts.queued}</span>
               <span>Failed: {buildStatusCounts.failed}</span>
+              <span>Quarantined: {buildStatusCounts.quarantined}</span>
               <span>Built: {buildStatusCounts.built}</span>
             </div>
             {renderPollingMeta(updatedBuildsLabel)}
