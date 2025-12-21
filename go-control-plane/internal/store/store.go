@@ -196,6 +196,8 @@ type BuildAttempt struct {
 	BackoffReason  string `json:"backoff_reason,omitempty"`
 	BackoffSeconds int    `json:"backoff_seconds,omitempty"`
 	DurationMS     int64  `json:"duration_ms,omitempty"`
+	Recipes        []string `json:"recipes,omitempty"`
+	HintIDs        []string `json:"hint_ids,omitempty"`
 	StartedAt      int64  `json:"started_at,omitempty"`
 	FinishedAt     int64  `json:"finished_at,omitempty"`
 	RunID          string `json:"run_id,omitempty"`

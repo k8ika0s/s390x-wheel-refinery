@@ -124,6 +124,8 @@ CREATE TABLE IF NOT EXISTS build_attempts (
     backoff_reason TEXT,
     backoff_seconds INT,
     duration_ms   BIGINT,
+    recipes       JSONB,
+    hint_ids      TEXT[],
     run_id        TEXT,
     plan_id       BIGINT,
     started_at    TIMESTAMPTZ,

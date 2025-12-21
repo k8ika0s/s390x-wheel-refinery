@@ -1219,6 +1219,8 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 			BackoffReason:  body.BackoffReason,
 			BackoffSeconds: body.BackoffSeconds,
 			DurationMS:     body.DurationMS,
+			Recipes:        body.Recipes,
+			HintIDs:        body.HintIDs,
 		})
 	}
 	if body.Status == "building" || body.Status == "pending" || body.Status == "retry" {

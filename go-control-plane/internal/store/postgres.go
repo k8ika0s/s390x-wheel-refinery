@@ -185,6 +185,8 @@ CREATE TABLE IF NOT EXISTS build_attempts (
     backoff_reason TEXT,
     backoff_seconds INT,
     duration_ms   BIGINT,
+    recipes       JSONB,
+    hint_ids      TEXT[],
     run_id        TEXT,
     plan_id       BIGINT,
     started_at    TIMESTAMPTZ,
@@ -196,6 +198,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_build_attempts_pkg_version_attempt ON buil
 CREATE INDEX IF NOT EXISTS idx_build_attempts_status ON build_attempts(status);
 CREATE INDEX IF NOT EXISTS idx_build_attempts_pkg_version ON build_attempts(package, version);
 CREATE INDEX IF NOT EXISTS idx_build_attempts_created_at ON build_attempts(created_at DESC);
+
+ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS recipes JSONB;
+ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS hint_ids TEXT[];
 
 CREATE TABLE IF NOT EXISTS worker_status (
     worker_id    TEXT PRIMARY KEY,
@@ -833,13 +838,23 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 	if attempt.DurationMS > 0 {
 		durationVal = attempt.DurationMS
 	}
+	var recipesRaw any
+	if attempt.Recipes != nil {
+		if data, err := json.Marshal(attempt.Recipes); err == nil {
+			recipesRaw = data
+		}
+	}
+	var hints any
+	if attempt.HintIDs != nil {
+		hints = pqStringArrayParam(attempt.HintIDs)
+	}
 	_, err := p.db.ExecContext(ctx, `
 		INSERT INTO build_attempts (
 			package, version, attempt, status, last_error, failure_summary,
 			backoff_until, backoff_reason, backoff_seconds, duration_ms,
-			run_id, plan_id, started_at, finished_at
+			recipes, hint_ids, run_id, plan_id, started_at, finished_at
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		ON CONFLICT (package, version, attempt) DO UPDATE
 		SET status = EXCLUDED.status,
 		    last_error = EXCLUDED.last_error,
@@ -861,6 +876,8 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 		        ELSE NULL
 		    END,
 		    duration_ms = COALESCE(EXCLUDED.duration_ms, build_attempts.duration_ms),
+		    recipes = COALESCE(EXCLUDED.recipes, build_attempts.recipes),
+		    hint_ids = COALESCE(EXCLUDED.hint_ids, build_attempts.hint_ids),
 		    run_id = COALESCE(EXCLUDED.run_id, build_attempts.run_id),
 		    plan_id = COALESCE(EXCLUDED.plan_id, build_attempts.plan_id),
 		    started_at = CASE
@@ -872,7 +889,7 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 		        ELSE build_attempts.finished_at
 		    END,
 		    updated_at = NOW()
-	`, attempt.Package, attempt.Version, attempt.Attempt, statusLower, attempt.LastError, attempt.FailureSummary, backoff, backoffReasonVal, backoffSecondsVal, durationVal, nullableString(attempt.RunID), nullableInt64(attempt.PlanID), startedAt, finishedAt)
+	`, attempt.Package, attempt.Version, attempt.Attempt, statusLower, attempt.LastError, attempt.FailureSummary, backoff, backoffReasonVal, backoffSecondsVal, durationVal, recipesRaw, hints, nullableString(attempt.RunID), nullableInt64(attempt.PlanID), startedAt, finishedAt)
 	return err
 }
 
@@ -890,7 +907,8 @@ func (p *PostgresStore) ListBuildAttempts(ctx context.Context, pkg, version stri
 	rows, err := p.db.QueryContext(ctx, `
 		SELECT id, package, version, attempt, status, COALESCE(last_error,''), COALESCE(failure_summary,''),
 		       COALESCE(extract(epoch from backoff_until),0)::bigint, COALESCE(backoff_reason,''), COALESCE(backoff_seconds,0),
-		       COALESCE(duration_ms,0), COALESCE(extract(epoch from started_at),0)::bigint, COALESCE(extract(epoch from finished_at),0)::bigint,
+		       COALESCE(duration_ms,0), COALESCE(recipes, '[]'::jsonb), COALESCE(hint_ids, '{}'::text[]),
+		       COALESCE(extract(epoch from started_at),0)::bigint, COALESCE(extract(epoch from finished_at),0)::bigint,
 		       COALESCE(run_id,''), COALESCE(plan_id,0), extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint
 		FROM build_attempts
 		WHERE package = $1 AND version = $2
@@ -904,10 +922,18 @@ func (p *PostgresStore) ListBuildAttempts(ctx context.Context, pkg, version stri
 	var out []BuildAttempt
 	for rows.Next() {
 		var entry BuildAttempt
+		var recipes json.RawMessage
+		var hints pq.StringArray
 		if err := rows.Scan(&entry.ID, &entry.Package, &entry.Version, &entry.Attempt, &entry.Status, &entry.LastError, &entry.FailureSummary,
-			&entry.BackoffUntil, &entry.BackoffReason, &entry.BackoffSeconds, &entry.DurationMS, &entry.StartedAt, &entry.FinishedAt,
-			&entry.RunID, &entry.PlanID, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
+			&entry.BackoffUntil, &entry.BackoffReason, &entry.BackoffSeconds, &entry.DurationMS, &recipes, &hints,
+			&entry.StartedAt, &entry.FinishedAt, &entry.RunID, &entry.PlanID, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if len(recipes) > 0 {
+			_ = json.Unmarshal(recipes, &entry.Recipes)
+		}
+		if len(hints) > 0 {
+			entry.HintIDs = hints
 		}
 		out = append(out, entry)
 	}
