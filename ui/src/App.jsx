@@ -26,10 +26,13 @@ import {
   fetchRecent,
   fetchBuilds,
   fetchSettings,
+  fetchPythonVersions,
+  fetchPythonRecipe,
   fetchHints,
   setCookieToken,
   triggerWorker,
   updateSettings,
+  savePythonRecipe,
   uploadRequirements,
   uploadWheel,
   deletePendingInput,
@@ -59,6 +62,12 @@ const formatBytes = (value) => {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 };
+const readFileAsText = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result || ""));
+  reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
+  reader.readAsText(file);
+});
 const formatDuration = (seconds) => {
   const total = Math.floor(Number(seconds));
   if (!Number.isFinite(total) || total <= 0) return "—";
@@ -70,6 +79,92 @@ const formatDuration = (seconds) => {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m ${secs}s`;
   return `${secs}s`;
+};
+const pythonVersionRe = /^3\.[0-9]{1,2}$/;
+const pythonRecipeFilenameRe = /^cpython(\d{2,3})\.sh$/;
+const pythonTagFromVersion = (version) => {
+  if (!pythonVersionRe.test(version || "")) return "";
+  const [, minorRaw] = String(version).split(".");
+  const minor = Number(minorRaw);
+  if (!Number.isFinite(minor)) return "";
+  return `3${minor}`;
+};
+const pythonVersionFromTag = (tag) => {
+  if (!tag || !tag.startsWith("3")) return "";
+  const minor = Number(tag.slice(1));
+  if (!Number.isFinite(minor)) return "";
+  return `3.${minor}`;
+};
+const pythonVersionFromFilename = (filename) => {
+  const match = pythonRecipeFilenameRe.exec(filename || "");
+  if (!match) return "";
+  return pythonVersionFromTag(match[1]);
+};
+const pythonRecipeTemplate = (version) => {
+  const tag = pythonTagFromVersion(version);
+  if (!tag) return "";
+  return `#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/_common.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/versions.sh"
+
+PY_VERSION="\${PY${tag}_VERSION}"
+PY_SOURCE_URL="\${PY${tag}_SOURCE_URL}"
+PY_SOURCE_SHA256="\${PY${tag}_SOURCE_SHA256}"
+
+export PACK_NAME="cpython${tag}"
+export PACK_VERSION="$PY_VERSION"
+export PACK_SOURCE_URL="$PY_SOURCE_URL"
+export PACK_SOURCE_SHA256="$PY_SOURCE_SHA256"
+export PACK_DEPS="\${PACK_DEPS:-openssl zlib libffi bzip2 xz sqlite}"
+export RECIPE_DIGEST="$(compute_recipe_digest "$0" "$SCRIPT_DIR/_common.sh" "$SCRIPT_DIR/versions.sh")"
+
+pack_start
+require_tool make
+require_tool gcc
+require_tool g++
+require_tool pkg-config || true
+
+WORKDIR="$(mktemp -d)"
+trap 'rm -rf "$WORKDIR"' EXIT
+setup_repro_flags_for_workdir "$WORKDIR"
+
+OPENSSL_PREFIX="\${OPENSSL_PREFIX:-}"
+if [[ -z "$OPENSSL_PREFIX" ]]; then
+  OPENSSL_PREFIX="$(find_dep_prefix_with_file "include/openssl/ssl.h" || true)"
+fi
+[[ -n "$OPENSSL_PREFIX" ]] || die "OpenSSL headers not found. Provide openssl via DEPS_PREFIXES or set OPENSSL_PREFIX."
+
+src_dir="$(pack_fetch_and_extract "$WORKDIR" "$(basename "$PACK_SOURCE_URL")")"
+cd "$src_dir/Python-$PACK_VERSION"
+
+export CFLAGS="\${CFLAGS:-} -O2 -fPIC"
+export LDFLAGS="\${LDFLAGS:-} -Wl,-rpath,'\\\\$ORIGIN/../lib'"
+
+./configure \\
+  --prefix="$PREFIX" \\
+  --libdir="$LIBDIR" \\
+  --enable-shared \\
+  --with-ensurepip=install \\
+  --with-system-ffi \\
+  --with-openssl="$OPENSSL_PREFIX"
+
+make -j"$JOBS"
+make install
+
+if [[ "\${KEEP_PYTHON_TESTS:-0}" != "1" ]]; then
+  rm -rf "$PREFIX/lib/python"*/test || true
+fi
+find "$PREFIX" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+find "$PREFIX" -type f -name '*.pyc' -delete 2>/dev/null || true
+
+postprocess_prefix "$PREFIX"
+emit_manifest_json "$PACK_OUTPUT"
+log "done: $PACK_NAME"
+`;
 };
 const buildStatusChipClass = (status) => {
   const value = (status || "").toLowerCase();
@@ -1705,6 +1800,16 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [settingsData, setSettingsData] = useState(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [pythonVersions, setPythonVersions] = useState([]);
+  const [pythonVersionsLoading, setPythonVersionsLoading] = useState(false);
+  const [pythonVersionsError, setPythonVersionsError] = useState("");
+  const [selectedPythonVersion, setSelectedPythonVersion] = useState("");
+  const [pythonRecipeDraft, setPythonRecipeDraft] = useState("");
+  const [pythonRecipeInfo, setPythonRecipeInfo] = useState(null);
+  const [pythonRecipeDirty, setPythonRecipeDirty] = useState(false);
+  const [pythonRecipeSaving, setPythonRecipeSaving] = useState(false);
+  const [pythonRecipeLoading, setPythonRecipeLoading] = useState(false);
+  const [newPythonVersion, setNewPythonVersion] = useState("");
   const [apiBaseInput, setApiBaseInput] = useState(apiBase || "");
   const [apiBlocked, setApiBlocked] = useState(false);
   const [pendingInputs, setPendingInputs] = useState([]);
@@ -1758,6 +1863,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [hintQuery, setHintQuery] = useState("");
   const [selectedHintId, setSelectedHintId] = useState("");
   const [hintForm, setHintForm] = useState(null);
+  const selectedPythonMeta = useMemo(() => {
+    if (!selectedPythonVersion) return null;
+    return pythonVersions.find((item) => item.version === selectedPythonVersion) || pythonRecipeInfo;
+  }, [pythonVersions, pythonRecipeInfo, selectedPythonVersion]);
   const [hintFormError, setHintFormError] = useState("");
   const [hintSaving, setHintSaving] = useState(false);
   const [hintsState, setHintsState] = useState([]);
@@ -3135,6 +3244,132 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       setSettingsSaving(false);
     }
   };
+
+  const loadPythonVersions = async () => {
+    setPythonVersionsLoading(true);
+    setPythonVersionsError("");
+    try {
+      const list = await fetchPythonVersions(authToken);
+      const items = Array.isArray(list) ? list : [];
+      setPythonVersions(items);
+    } catch (e) {
+      const message = e.message || "Failed to load python versions.";
+      setPythonVersionsError(message);
+      pushToast?.({ type: "error", title: "Python versions load failed", message });
+    } finally {
+      setPythonVersionsLoading(false);
+    }
+  };
+
+  const loadPythonRecipe = async (version) => {
+    if (!version) {
+      setPythonRecipeInfo(null);
+      setPythonRecipeDraft("");
+      setPythonRecipeDirty(false);
+      return;
+    }
+    setPythonRecipeLoading(true);
+    try {
+      const detail = await fetchPythonRecipe(version, authToken);
+      setPythonRecipeInfo(detail);
+      setPythonRecipeDraft(detail?.recipe || "");
+      setPythonRecipeDirty(false);
+    } catch (e) {
+      if (e.status === 404) {
+        const template = pythonRecipeTemplate(version);
+        setPythonRecipeInfo(null);
+        setPythonRecipeDraft(template);
+        setPythonRecipeDirty(Boolean(template));
+        return;
+      }
+      const message = e.message || "Failed to load recipe.";
+      setPythonRecipeInfo(null);
+      setPythonRecipeDraft("");
+      setPythonRecipeDirty(false);
+      pushToast?.({ type: "error", title: "Recipe load failed", message });
+    } finally {
+      setPythonRecipeLoading(false);
+    }
+  };
+
+  const handleSavePythonRecipe = async () => {
+    const version = selectedPythonVersion.trim();
+    if (!version) {
+      pushToast?.({ type: "error", title: "Missing version", message: "Choose a python version to save." });
+      return;
+    }
+    if (!pythonVersionRe.test(version)) {
+      pushToast?.({ type: "error", title: "Invalid version", message: "Use a version like 3.11." });
+      return;
+    }
+    setPythonRecipeSaving(true);
+    try {
+      const detail = await savePythonRecipe(version, pythonRecipeDraft, authToken);
+      setPythonRecipeInfo(detail);
+      setPythonRecipeDirty(false);
+      await loadPythonVersions();
+      pushToast?.({ type: "success", title: "Recipe saved", message: `${version} updated.` });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Recipe save failed", message: e.message });
+    } finally {
+      setPythonRecipeSaving(false);
+    }
+  };
+
+  const handleRecipeFileSelect = async (file) => {
+    if (!file) return;
+    try {
+      const text = await readFileAsText(file);
+      setPythonRecipeDraft(text);
+      setPythonRecipeDirty(true);
+      if (!selectedPythonVersion) {
+        const inferred = pythonVersionFromFilename(file.name);
+        if (inferred) {
+          setSelectedPythonVersion(inferred);
+        }
+      }
+    } catch (e) {
+      pushToast?.({ type: "error", title: "File read failed", message: e.message });
+    }
+  };
+
+  const handleStartNewVersion = () => {
+    const version = newPythonVersion.trim();
+    if (!version) {
+      pushToast?.({ type: "error", title: "Missing version", message: "Enter a python version first." });
+      return;
+    }
+    if (!pythonVersionRe.test(version)) {
+      pushToast?.({ type: "error", title: "Invalid version", message: "Use a version like 3.11." });
+      return;
+    }
+    setSelectedPythonVersion(version);
+    const template = pythonRecipeTemplate(version);
+    if (template) {
+      setPythonRecipeDraft(template);
+      setPythonRecipeDirty(true);
+    } else {
+      setPythonRecipeDraft("");
+      setPythonRecipeDirty(false);
+    }
+  };
+
+  useEffect(() => {
+    if (viewKey !== "settings") return;
+    loadPythonVersions();
+  }, [viewKey, authToken]);
+
+  useEffect(() => {
+    if (!pythonVersions.length) return;
+    if (selectedPythonVersion) return;
+    const preferred = settingsData?.python_version;
+    const found = preferred ? pythonVersions.find((item) => item.version === preferred) : null;
+    setSelectedPythonVersion(found?.version || pythonVersions[0].version);
+  }, [pythonVersions, selectedPythonVersion, settingsData]);
+
+  useEffect(() => {
+    loadPythonRecipe(selectedPythonVersion);
+  }, [selectedPythonVersion, authToken]);
 
   const handleHintSave = async () => {
     if (!hintForm) return;
@@ -4527,12 +4762,18 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <input
                 className="input"
                 placeholder="e.g. 3.11"
+                list="python-version-list"
                 value={settingsData?.python_version || ""}
                 onChange={(e) => {
                   setSettingsData((s) => ({ ...(s || {}), python_version: e.target.value }));
                   setSettingsDirty(true);
                 }}
               />
+              <datalist id="python-version-list">
+                {pythonVersions.map((item) => (
+                  <option key={item.version} value={item.version}>{item.filename}</option>
+                ))}
+              </datalist>
             </div>
             <div className="space-y-1">
               <div className="text-xs text-slate-400">Platform tag</div>
@@ -4624,6 +4865,120 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           <div className="text-xs text-slate-500">
             Defaults inform queue enqueues and UI polling limits. Worker runtime Python still follows the configured worker image/env.
           </div>
+        </div>
+      </div>
+      <div className="glass p-4 space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Python versions</span>
+            <span className="chip text-xs">🐍</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="btn btn-secondary px-2 py-1 text-xs" onClick={loadPythonVersions} disabled={pythonVersionsLoading}>
+              {pythonVersionsLoading ? "Refreshing..." : "Refresh list"}
+            </button>
+            <button
+              className="btn btn-primary px-2 py-1 text-xs"
+              onClick={handleSavePythonRecipe}
+              disabled={!selectedPythonVersion || pythonRecipeSaving || !pythonRecipeDirty}
+            >
+              {pythonRecipeSaving ? "Saving..." : "Save recipe"}
+            </button>
+          </div>
+        </div>
+        <div className="grid lg:grid-cols-[minmax(220px,1fr)_minmax(0,2fr)] gap-4">
+          <div className="space-y-2">
+            <div className="text-xs text-slate-400">Managed versions</div>
+            {pythonVersionsError && <div className="text-xs text-rose-400">{pythonVersionsError}</div>}
+            {!pythonVersionsLoading && !pythonVersions.length && (
+              <div className="text-xs text-slate-500">No recipes found yet.</div>
+            )}
+            <div className="space-y-2">
+              {pythonVersions.map((item) => (
+                <button
+                  key={item.version}
+                  className={`w-full text-left rounded-lg border px-3 py-2 transition ${item.version === selectedPythonVersion ? "border-sky-500/70 bg-sky-500/10" : "border-slate-700/60 hover:border-slate-600/80"}`}
+                  onClick={() => setSelectedPythonVersion(item.version)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-100">{item.version}</div>
+                      <div className="text-xs text-slate-400">{item.filename}</div>
+                    </div>
+                    <div className="text-[11px] text-slate-500">{item.updated_at ? new Date(item.updated_at).toLocaleString() : "—"}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="pt-2 space-y-1">
+              <div className="text-xs text-slate-400">Add version</div>
+              <div className="flex items-center gap-2">
+                <input
+                  className="input"
+                  placeholder="3.13"
+                  value={newPythonVersion}
+                  onChange={(e) => setNewPythonVersion(e.target.value)}
+                />
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleStartNewVersion}>
+                  Start
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-xs text-slate-400">Recipe editor</div>
+                <div className="text-sm text-slate-200">
+                  {selectedPythonVersion ? `Editing ${selectedPythonVersion}` : "Select a version to edit"}
+                </div>
+                {selectedPythonMeta?.filename && (
+                  <div className="text-xs text-slate-500">{selectedPythonMeta.filename}</div>
+                )}
+              </div>
+              <div className="text-xs text-slate-400">{pythonRecipeDirty ? "Unsaved changes" : "Saved"}</div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <input
+                className="input text-xs"
+                type="file"
+                accept=".sh,.txt"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  handleRecipeFileSelect(file);
+                  e.target.value = "";
+                }}
+                disabled={!selectedPythonVersion && !newPythonVersion}
+              />
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                disabled={!selectedPythonVersion}
+                onClick={() => {
+                  const template = pythonRecipeTemplate(selectedPythonVersion);
+                  if (template) {
+                    setPythonRecipeDraft(template);
+                    setPythonRecipeDirty(true);
+                  }
+                }}
+              >
+                Use template
+              </button>
+            </div>
+            <textarea
+              className="input font-mono text-xs h-64"
+              placeholder="Recipe script content..."
+              value={pythonRecipeDraft}
+              onChange={(e) => {
+                setPythonRecipeDraft(e.target.value);
+                setPythonRecipeDirty(true);
+              }}
+              disabled={!selectedPythonVersion}
+            />
+            {pythonRecipeLoading && <div className="text-xs text-slate-500">Loading recipe...</div>}
+          </div>
+        </div>
+        <div className="text-xs text-slate-500">
+          Recipes are loaded from the control-plane recipes directory and used to validate the default python version.
         </div>
       </div>
       <div className="glass p-4 space-y-3">

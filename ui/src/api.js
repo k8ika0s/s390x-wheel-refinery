@@ -205,6 +205,19 @@ export function fetchSettings(token) {
   return request("/api/settings", {}, token);
 }
 
+export function fetchPythonVersions(token) {
+  return request("/api/python-versions", {}, token);
+}
+
+export function fetchPythonRecipe(version, token) {
+  return request(`/api/python-versions/${encodeURIComponent(version)}`, {}, token);
+}
+
+export function savePythonRecipe(version, recipe, token) {
+  const body = JSON.stringify({ recipe });
+  return request(`/api/python-versions/${encodeURIComponent(version)}`, { method: "PUT", body }, token);
+}
+
 export function fetchHints({ limit = 10, offset = 0, query = "" } = {}, token) {
   const params = new URLSearchParams();
   if (limit) params.set("limit", limit);
