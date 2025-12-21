@@ -187,6 +187,9 @@ CREATE INDEX IF NOT EXISTS idx_build_status_updated_at ON build_status(updated_a
 CREATE INDEX IF NOT EXISTS idx_build_status_pkg ON build_status(package, version);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_build_status_pkg_version_unique ON build_status(package, version);
 CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
+CREATE INDEX IF NOT EXISTS idx_build_status_ready ON build_status(status, backoff_until, created_at) WHERE status IN ('pending','retry');
+CREATE INDEX IF NOT EXISTS idx_build_status_leased_at ON build_status(leased_at) WHERE status = 'leased';
+CREATE INDEX IF NOT EXISTS idx_build_status_started_at ON build_status(started_at) WHERE status = 'building';
 
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS backoff_reason TEXT;
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS backoff_seconds INT;

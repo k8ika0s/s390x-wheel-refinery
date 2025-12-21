@@ -125,6 +125,9 @@ CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
 CREATE INDEX IF NOT EXISTS idx_build_status_plan_id ON build_status(plan_id);
 CREATE INDEX IF NOT EXISTS idx_build_status_updated_at ON build_status(updated_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_build_status_pkg_version ON build_status(package, version);
+CREATE INDEX IF NOT EXISTS idx_build_status_ready ON build_status(status, backoff_until, created_at) WHERE status IN ('pending','retry');
+CREATE INDEX IF NOT EXISTS idx_build_status_leased_at ON build_status(leased_at) WHERE status = 'leased';
+CREATE INDEX IF NOT EXISTS idx_build_status_started_at ON build_status(started_at) WHERE status = 'building';
 
 CREATE TABLE IF NOT EXISTS pending_inputs (
     id          BIGSERIAL PRIMARY KEY,
