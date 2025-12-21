@@ -4604,59 +4604,44 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             </div>
           </div>
           <div className="glass p-4 space-y-3">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-lg font-semibold flex items-center gap-2">
                 <span>Retry queue</span>
                 <span className="chip text-xs">🧰</span>
               </div>
-              <div className="flex items-center gap-2 text-xs text-slate-400">
-                <span className="chip">{queueLength}</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>
+                  Refresh list
+                </button>
                 <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleTriggerWorker}>
                   Run worker now
                 </button>
               </div>
             </div>
-            <div className="grid md:grid-cols-[280px,1fr] gap-4 items-start">
-              <div className="space-y-2 text-sm text-slate-200">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Worker mode</span>
-                  <span className="chip">{workerMode}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Plan queue</span>
-                  <div className="flex items-center gap-2">
-                    <span className="chip">{metrics?.pending?.plan_queue ?? 0}</span>
-                    <button
-                      className="btn btn-secondary px-2 py-1 text-xs"
-                      onClick={handleClearPlanQueue}
-                      disabled={clearingPlanQueue || !planQueueLength}
-                    >
-                      {clearingPlanQueue ? "Clearing..." : "Clear plan queue"}
-                    </button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
-                    Retry selected
-                  </button>
-                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
-                    Clear retry queue
-                  </button>
-                </div>
-                <div className="glass subtle p-3 space-y-2">
-                  <div className="text-xs text-slate-400">Enqueue retry</div>
-                  <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
-                  <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
-                  <button className="btn btn-primary w-full" onClick={handleRetry}>Enqueue</button>
-                  <div className="text-slate-500 text-xs">Uses API: POST /package/&lt;name&gt;/retry</div>
-                </div>
-              </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <span className="chip">Retry items: {queueLength}</span>
+              <span className="chip">Plan queue: {planQueueLength}</span>
+              <span className="chip">Worker mode: {workerMode}</span>
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                onClick={handleClearPlanQueue}
+                disabled={clearingPlanQueue || !planQueueLength}
+              >
+                {clearingPlanQueue ? "Clearing..." : "Clear plan queue"}
+              </button>
+            </div>
+            <div className="grid lg:grid-cols-[1fr,320px] gap-4 items-start">
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-sm text-slate-400">
                   <span>Retry queue items</span>
-                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>
-                    Refresh
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
+                      Retry selected
+                    </button>
+                    <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
+                      Clear retry queue
+                    </button>
+                  </div>
                 </div>
                 {queueItemsSorted.length > 0 ? (
                   <div className="overflow-x-auto">
@@ -4696,6 +4681,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                 ) : (
                   <EmptyState title="Retry queue is empty" detail="No retry requests pending." icon="✅" />
                 )}
+              </div>
+              <div className="space-y-3">
+                <div className="glass subtle p-3 space-y-2">
+                  <div className="text-xs text-slate-400">Enqueue retry</div>
+                  <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
+                  <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
+                  <button className="btn btn-primary w-full" onClick={handleRetry}>Enqueue</button>
+                  <div className="text-slate-500 text-xs">Uses API: POST /package/&lt;name&gt;/retry</div>
+                </div>
               </div>
             </div>
           </div>
