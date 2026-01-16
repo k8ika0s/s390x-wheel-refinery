@@ -87,7 +87,7 @@ Legend:
    - Provide runbooks for recovery steps.
    - Success: on-call can resolve issues quickly.
 
-10) Backup/restore
+10) Backup/restore (done)
     - Postgres, MinIO, and Zot backup strategy + restore verification.
     - Success: disaster recovery is documented and tested.
 
