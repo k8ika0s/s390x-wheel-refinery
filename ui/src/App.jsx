@@ -1663,6 +1663,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                       <div className="mt-2 text-slate-400">Recipes: <span className="text-slate-200">{recipesLabel}</span></div>
                       {(attempt.added.length > 0 || attempt.removed.length > 0) && (
                         <div className="mt-1 flex flex-wrap gap-3 text-slate-400">
+                          <span className="text-slate-500">Recipe changes:</span>
                           {attempt.added.length > 0 && <span className="text-emerald-300">+ {attempt.added.join(", ")}</span>}
                           {attempt.removed.length > 0 && <span className="text-amber-200">- {attempt.removed.join(", ")}</span>}
                         </div>
