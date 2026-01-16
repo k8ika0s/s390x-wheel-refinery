@@ -128,7 +128,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 
 	reqAttempts := make(map[string]int)
 	for _, r := range reqs {
-		key := queueKey(r.Package, r.Version)
+		key := queueKey(r.Package, r.Version, r.NodeID)
 		if r.Attempts > reqAttempts[key] {
 			reqAttempts[key] = r.Attempts
 		}
@@ -160,7 +160,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 		g.Go(func() error {
 			w.activeBuilds.Add(1)
 			defer w.activeBuilds.Add(-1)
-			attempt := reqAttempts[queueKey(job.Name, job.Version)]
+			attempt := reqAttempts[queueKey(job.Name, job.Version, job.NodeID)]
 			if job.WheelAction == "reuse" && job.WheelDigest != "" {
 				if err := w.fetchWheel(ctx, job); err != nil {
 					return fmt.Errorf("fetch wheel %s: %w", job.WheelDigest, err)
@@ -171,7 +171,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				defer logStream.Close()
 				job.LogWriter = logStream
 			}
-			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, "", attempt, 0, failureReason{}, backoffMeta{}, job.Recipes, nil)
+			w.reportBuildStatus(ctx, job, "building", nil, "", attempt, 0, failureReason{}, backoffMeta{}, job.Recipes, nil)
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			if err != nil && strings.TrimSpace(logContent) == "" {
 				logContent = fmt.Sprintf("error: %s", err.Error())
@@ -216,6 +216,12 @@ func (w *Worker) Drain(ctx context.Context) error {
 		meta := map[string]any{
 			"duration_ms": res.duration.Milliseconds(),
 			"attempt":     res.attempt,
+		}
+		if res.job.PlanID > 0 {
+			meta["plan_id"] = res.job.PlanID
+		}
+		if res.job.NodeID != "" {
+			meta["node_id"] = res.job.NodeID
 		}
 		detail := ""
 		recipesForStatus := res.job.Recipes
@@ -302,7 +308,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"decision_trace": autoFix.DecisionTrace,
 			}
 		}
-		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, res.duration.Milliseconds(), reason, backoff, recipesForStatus, autoFix.HintIDs)
+		w.reportBuildStatus(ctx, res.job, status, res.err, summary, res.attempt, res.duration.Milliseconds(), reason, backoff, recipesForStatus, autoFix.HintIDs)
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
@@ -508,16 +514,22 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, summary string, attempts int, durationMs int64, reason failureReason, backoff backoffMeta, recipes []string, hintIDs []string) {
+func (w *Worker) reportBuildStatus(ctx context.Context, job runner.Job, status string, err error, summary string, attempts int, durationMs int64, reason failureReason, backoff backoffMeta, recipes []string, hintIDs []string) {
 	if w.Cfg.ControlPlaneURL == "" {
 		return
 	}
 	url := strings.TrimRight(w.Cfg.ControlPlaneURL, "/") + "/api/builds/status"
 	body := map[string]any{
-		"package":  pkg,
-		"version":  version,
+		"package":  job.Name,
+		"version":  job.Version,
 		"status":   status,
 		"attempts": attempts,
+	}
+	if job.PlanID > 0 {
+		body["plan_id"] = job.PlanID
+	}
+	if job.NodeID != "" {
+		body["node_id"] = job.NodeID
 	}
 	if err != nil {
 		body["error"] = err.Error()
@@ -592,6 +604,9 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 			if node.Name == "" || node.Version == "" {
 				continue
 			}
+			if req.NodeID != "" && node.NodeID != "" && req.NodeID != node.NodeID {
+				continue
+			}
 			if !equalsIgnoreCase(node.Name, req.Package) {
 				continue
 			}
@@ -599,11 +614,16 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 				continue
 			}
 			wheelDigest, wheelAction, packIDs, runtimeID := findWheelArtifact(snap.DAG, node, req)
+			if req.NodeID != "" && node.NodeID == "" && wheelDigest != "" && req.NodeID != wheelDigest {
+				continue
+			}
 			orderedPacks := topoSortFromDag(packIDs, snap.DAG)
 			recipes := mergeRecipes(req.Recipes, recipeNames(node.Recipes))
 			jobs = append(jobs, runner.Job{
 				Name:              node.Name,
 				Version:           node.Version,
+				PlanID:            req.PlanID,
+				NodeID:            firstNonEmpty(req.NodeID, node.NodeID, wheelDigest),
 				PythonVersion:     firstNonEmpty(req.PythonVersion, node.PythonVersion),
 				PythonTag:         firstNonEmpty(node.PythonTag, pyTagFromVersion(firstNonEmpty(req.PythonVersion, node.PythonVersion))),
 				PlatformTag:       node.PlatformTag,
@@ -811,6 +831,7 @@ func (w *Worker) requestsFromPlan() []queue.Request {
 			continue
 		}
 		reqs = append(reqs, queue.Request{
+			NodeID:        node.NodeID,
 			Package:       node.Name,
 			Version:       node.Version,
 			PythonVersion: node.PythonVersion,
@@ -911,7 +932,10 @@ func BuildWorker(cfg Config) (*Worker, error) {
 	}, nil
 }
 
-func queueKey(name, version string) string {
+func queueKey(name, version, nodeID string) string {
+	if nodeID != "" {
+		return "node:" + strings.ToLower(nodeID)
+	}
 	return strings.ToLower(name) + "::" + strings.ToLower(version)
 }
 
@@ -919,7 +943,7 @@ func (w *Worker) shouldRequeue(reqAttempts map[string]int, job runner.Job) bool 
 	if !w.Cfg.RequeueOnFailure {
 		return false
 	}
-	key := queueKey(job.Name, job.Version)
+	key := queueKey(job.Name, job.Version, job.NodeID)
 	attempt := reqAttempts[key]
 	if attempt >= w.Cfg.MaxRequeueAttempts {
 		return false
@@ -968,6 +992,7 @@ func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
 	}
 	var payload struct {
 		Builds []struct {
+			NodeID      string   `json:"node_id,omitempty"`
 			Package     string   `json:"package"`
 			Version     string   `json:"version"`
 			PythonTag   string   `json:"python_tag"`
@@ -985,6 +1010,7 @@ func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
 	var out []queue.Request
 	for _, b := range payload.Builds {
 		out = append(out, queue.Request{
+			NodeID:        b.NodeID,
 			Package:       b.Package,
 			Version:       b.Version,
 			PythonTag:     b.PythonTag,

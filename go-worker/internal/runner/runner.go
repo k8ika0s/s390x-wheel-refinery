@@ -17,6 +17,8 @@ import (
 type Job struct {
 	Name              string
 	Version           string
+	PlanID            int64
+	NodeID            string
 	PythonVersion     string
 	PythonTag         string
 	PlatformTag       string

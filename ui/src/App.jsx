@@ -306,6 +306,12 @@ const renderHighlightedText = (line, regex) => {
 };
 
 const buildKey = (name, version) => `${(name || "").toLowerCase()}::${(version || "").toLowerCase()}`;
+const buildIdentityKey = (nodeId, name, version) => {
+  if (nodeId) return `node:${String(nodeId).toLowerCase()}`;
+  return buildKey(name, version);
+};
+const buildStatusKey = (build) => buildIdentityKey(build?.node_id, build?.package, build?.version);
+const planNodeKey = (node) => buildIdentityKey(node?.node_id, node?.name, node?.version);
 
 const DAG_LAYOUT = {
   nodeWidth: 210,
@@ -1302,6 +1308,18 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   <span className="text-slate-400">Status</span>
                   <span className={`status ${buildStatus.status}`}>{buildStatus.status}</span>
                 </div>
+                {buildStatus.node_id && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Node ID</span>
+                    <span className="truncate max-w-[180px]" title={buildStatus.node_id}>{buildStatus.node_id}</span>
+                  </div>
+                )}
+                {buildStatus.plan_id ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Plan ID</span>
+                    <span>{buildStatus.plan_id}</span>
+                  </div>
+                ) : null}
                 <div className="flex items-center justify-between">
                   <span className="text-slate-400">Attempts</span>
                   <span>{buildStatus.attempts ?? 0}</span>
@@ -2047,7 +2065,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           const pulseKeys = collectPulseKeys(
             prev,
             buildsList,
-            (b) => (b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version)),
+            (b) => (b?.id ? `id:${b.id}` : buildStatusKey(b)),
             (b) => `${b?.status || ""}|${b?.attempts || 0}|${b?.updated_at || 0}|${b?.failure_summary || ""}|${b?.last_error || ""}`,
           );
           if (prev.length) {
@@ -2990,7 +3008,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
-  const planBuildStatusByKey = new Map(planBuilds.map((b) => [buildKey(b.package, b.version), b]));
+  const planBuildStatusByKey = new Map(planBuilds.map((b) => [buildStatusKey(b), b]));
   const planDagRaw = normalizeDag(selectedPlan?.dag);
   const planGraphFocusSet = collectDagFocusSet(planDagRaw, planGraphFocus);
   const planDagNodes = planGraphFocusSet
@@ -3121,7 +3139,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const pendingSelectable = visiblePendingInputs.filter((pi) => ["pending", "failed"].includes(pi.status));
   const pendingSelectedList = pendingSelectable.filter((pi) => selectedPending[pi.id]);
   const pendingAllSelected = pendingSelectable.length > 0 && pendingSelectedList.length === pendingSelectable.length;
-  const buildRowKey = (b) => (b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version));
+  const buildRowKey = (b) => (b?.id ? `id:${b.id}` : buildStatusKey(b));
   const selectedBuildList = builds.filter((b) => selectedBuilds[buildRowKey(b)]);
   const buildsAllSelected = builds.length > 0 && selectedBuildList.length === builds.length;
   const filteredRecent = recent.filter((e) => {
@@ -3496,15 +3514,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   };
 
   const handleEnqueuePlanBuild = async (node) => {
-    if (!selectedPlanId || !node?.name || !node?.version) {
+    if (!selectedPlanId || (!node?.node_id && (!node?.name || !node?.version))) {
       pushToast?.({ type: "error", title: "Enqueue failed", message: "Missing build node details." });
       return;
     }
-    const key = buildKey(node.name, node.version);
+    const key = planNodeKey(node);
     if (planBuildActions[key]) return;
     setPlanBuildActions((prev) => ({ ...prev, [key]: "enqueue" }));
     try {
-      await enqueueBuildFromPlan(selectedPlanId, node.name, node.version, authToken);
+      await enqueueBuildFromPlan(selectedPlanId, node.name, node.version, node.node_id, authToken);
       pushToast?.({ type: "success", title: "Build enqueued", message: `${node.name} ${node.version}` });
       setSelectedPlan((prev) => (prev ? { ...prev, queued: true } : prev));
       setPlanList((prev) => prev.map((p) => (p.id === selectedPlanId ? { ...p, queued: true } : p)));
@@ -4163,12 +4181,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                   <div className={`scroll-panel ${planPanelHeightClass} overflow-auto rounded-lg border border-slate-800/60 p-2 space-y-2`}>
                     {planTab === "builds" && (
                       selectedPlanBuilds.length ? selectedPlanBuilds.map((node, idx) => {
-                        const key = buildKey(node.name, node.version);
+                        const key = planNodeKey(node);
                         const buildStatus = planBuildStatusByKey.get(key);
                         const isEnqueueing = Boolean(planBuildActions[key]);
                         return (
                           <div
-                            key={`${node.name}-${node.version}-${idx}`}
+                            key={node.node_id ? `node:${node.node_id}` : `${node.name}-${node.version}-${idx}`}
                             className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between"
                           >
                             <div className="flex flex-col min-w-0">
@@ -4496,7 +4514,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                         const reasonLabel = b.reason_code || "";
                         const reasonDetail = b.reason_detail || "";
                         const rowKey = buildRowKey(b) || `${b.package}-${b.version}-${idx}`;
-                        const pulseKey = b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version);
+                        const pulseKey = buildRowKey(b);
                         const isExpanded = Boolean(expandedBuilds[rowKey]);
                         const isSelected = Boolean(selectedBuilds[rowKey]);
                         const recipesLabel = (b.recipes || []).join(", ") || "-";
@@ -4552,6 +4570,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                                 <td className="px-3 py-3" colSpan="10">
                                   <div className="grid gap-3 text-xs text-slate-300 md:grid-cols-3">
                                     <div><span className="text-slate-500">Plan ID:</span> {b.plan_id || "-"}</div>
+                                    <div><span className="text-slate-500">Node ID:</span> {b.node_id || "-"}</div>
                                     <div><span className="text-slate-500">Run ID:</span> {b.run_id || "-"}</div>
                                     <div><span className="text-slate-500">Status since:</span> {statusSince ? formatTimestamp(statusSince) : "-"}</div>
                                     <div><span className="text-slate-500">Created:</span> {formatTimestamp(b.created_at) || "-"}</div>

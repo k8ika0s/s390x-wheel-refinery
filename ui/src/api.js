@@ -235,8 +235,8 @@ export function enqueueBuildsFromPlan(planId, token) {
   return request(`/api/plan/${planId}/enqueue-builds`, { method: "POST" }, token);
 }
 
-export function enqueueBuildFromPlan(planId, pkg, version, token) {
-  const body = JSON.stringify({ package: pkg, version });
+export function enqueueBuildFromPlan(planId, pkg, version, nodeId, token) {
+  const body = JSON.stringify({ package: pkg, version, node_id: nodeId });
   return request(`/api/plan/${planId}/enqueue-build`, { method: "POST", body }, token);
 }
 

@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS plans (
 
 CREATE TABLE IF NOT EXISTS build_status (
     id            BIGSERIAL PRIMARY KEY,
+    node_id       TEXT,
     package       TEXT NOT NULL,
     version       TEXT NOT NULL,
     python_tag    TEXT,
@@ -116,6 +117,7 @@ CREATE TABLE IF NOT EXISTS build_status (
 
 CREATE TABLE IF NOT EXISTS build_attempts (
     id            BIGSERIAL PRIMARY KEY,
+    node_id       TEXT,
     package       TEXT NOT NULL,
     version       TEXT NOT NULL,
     attempt       INT NOT NULL,
@@ -140,6 +142,7 @@ CREATE TABLE IF NOT EXISTS build_attempts (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_build_attempts_pkg_version_attempt ON build_attempts(package, version, attempt);
 CREATE INDEX IF NOT EXISTS idx_build_attempts_status ON build_attempts(status);
 CREATE INDEX IF NOT EXISTS idx_build_attempts_pkg_version ON build_attempts(package, version);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_node_id ON build_attempts(node_id);
 CREATE INDEX IF NOT EXISTS idx_build_attempts_created_at ON build_attempts(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS worker_status (
@@ -157,6 +160,7 @@ CREATE INDEX IF NOT EXISTS idx_worker_status_last_seen ON worker_status(last_see
 CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
 CREATE INDEX IF NOT EXISTS idx_build_status_plan_id ON build_status(plan_id);
 CREATE INDEX IF NOT EXISTS idx_build_status_updated_at ON build_status(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_build_status_node_id ON build_status(node_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_build_status_pkg_version ON build_status(package, version);
 CREATE INDEX IF NOT EXISTS idx_build_status_ready ON build_status(status, backoff_until, created_at) WHERE status IN ('pending','retry');
 CREATE INDEX IF NOT EXISTS idx_build_status_leased_at ON build_status(leased_at) WHERE status = 'leased';

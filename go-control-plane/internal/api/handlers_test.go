@@ -36,6 +36,8 @@ type fakeStore struct {
 	requeueLeaseAge   int
 	requeueBuildAge   int
 	requeueResp       []store.BuildStatus
+	lastBuildUpdatePlanID int64
+	lastBuildUpdateNodeID string
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -182,7 +184,9 @@ func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int, pl
 func (f *fakeStore) BuildQueueStats(ctx context.Context) (store.BuildQueueStats, error) {
 	return store.BuildQueueStats{}, nil
 }
-func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string) error {
+func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string) error {
+	f.lastBuildUpdatePlanID = planID
+	f.lastBuildUpdateNodeID = nodeID
 	return nil
 }
 func (f *fakeStore) UpsertBuildAttempt(ctx context.Context, attempt store.BuildAttempt) error {
@@ -558,7 +562,7 @@ func TestRequirementsUploadAutoEnqueue(t *testing.T) {
 func TestBuildQueuePopRequeuesStale(t *testing.T) {
 	fs := &fakeStore{
 		leaseBuilds: []store.BuildStatus{
-			{Package: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Attempts: 2},
+			{Package: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Attempts: 2, NodeID: "node-1"},
 		},
 	}
 	h := &Handler{
@@ -595,5 +599,53 @@ func TestBuildQueuePopRequeuesStale(t *testing.T) {
 	}
 	if len(payload.Builds) != 1 {
 		t.Fatalf("expected 1 build, got %d", len(payload.Builds))
+	}
+	if payload.Builds[0]["node_id"] != "node-1" {
+		t.Fatalf("expected node_id node-1, got %v", payload.Builds[0]["node_id"])
+	}
+}
+
+func TestBuildStatusUpdateCapturesNodeID(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{
+		Store: fs,
+		Config: config.Config{
+			WorkerToken: "token",
+		},
+	}
+	body := map[string]any{
+		"package":  "demo",
+		"version":  "1.0.0",
+		"status":   "building",
+		"attempts": 1,
+		"plan_id":  12,
+		"node_id":  "node-abc",
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/builds/status", bytes.NewReader(payload))
+	req.Header.Set("X-Worker-Token", "token")
+	rec := httptest.NewRecorder()
+	h.buildStatusUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if fs.lastBuildUpdatePlanID != 12 {
+		t.Fatalf("expected plan_id 12, got %d", fs.lastBuildUpdatePlanID)
+	}
+	if fs.lastBuildUpdateNodeID != "node-abc" {
+		t.Fatalf("expected node_id node-abc, got %q", fs.lastBuildUpdateNodeID)
+	}
+	if fs.lastEvent.Metadata == nil {
+		t.Fatalf("expected event metadata")
+	}
+	if fs.lastEvent.Metadata["node_id"] != "node-abc" {
+		t.Fatalf("expected event node_id node-abc, got %v", fs.lastEvent.Metadata["node_id"])
+	}
+	if got := fs.lastEvent.Metadata["plan_id"]; got != int64(12) && got != float64(12) && got != int(12) {
+		t.Fatalf("expected event plan_id 12, got %v", got)
 	}
 }

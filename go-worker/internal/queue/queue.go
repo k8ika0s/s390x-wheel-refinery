@@ -4,6 +4,7 @@ import "context"
 
 // Request is a retry/build request stored in the queue.
 type Request struct {
+	NodeID        string   `json:"node_id,omitempty"`
 	Package       string   `json:"package"`
 	Version       string   `json:"version"`
 	PythonVersion string   `json:"python_version,omitempty"`

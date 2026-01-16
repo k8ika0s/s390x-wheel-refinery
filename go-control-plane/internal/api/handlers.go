@@ -1201,6 +1201,8 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		Error          string   `json:"error,omitempty"`
 		FailureSummary string   `json:"failure_summary,omitempty"`
 		Attempts       int      `json:"attempts,omitempty"`
+		PlanID         int64    `json:"plan_id,omitempty"`
+		NodeID         string   `json:"node_id,omitempty"`
 		BackoffUntil   int64    `json:"backoff_until,omitempty"`
 		BackoffReason  string   `json:"backoff_reason,omitempty"`
 		BackoffSeconds int      `json:"backoff_seconds,omitempty"`
@@ -1218,7 +1220,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package, version, and status required"})
 		return
 	}
-	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.BackoffReason, body.BackoffSeconds, body.ReasonCode, body.ReasonDetail, body.Recipes, body.HintIDs); err != nil {
+	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.BackoffReason, body.BackoffSeconds, body.ReasonCode, body.ReasonDetail, body.Recipes, body.HintIDs, body.PlanID, body.NodeID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1238,6 +1240,8 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 			ReasonDetail:   body.ReasonDetail,
 			Recipes:        body.Recipes,
 			HintIDs:        body.HintIDs,
+			NodeID:         body.NodeID,
+			PlanID:         body.PlanID,
 		})
 	}
 	if body.Status == "building" || body.Status == "pending" || body.Status == "retry" {
@@ -1259,6 +1263,12 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.BackoffSeconds > 0 {
 			meta["backoff_seconds"] = body.BackoffSeconds
+		}
+		if body.PlanID > 0 {
+			meta["plan_id"] = body.PlanID
+		}
+		if body.NodeID != "" {
+			meta["node_id"] = body.NodeID
 		}
 		if len(body.Recipes) > 0 {
 			meta["recipes"] = body.Recipes
@@ -1313,6 +1323,7 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type job struct {
+		NodeID      string   `json:"node_id,omitempty"`
 		Package     string   `json:"package"`
 		Version     string   `json:"version"`
 		PythonTag   string   `json:"python_tag"`
@@ -1326,6 +1337,7 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 	var out []job
 	for _, b := range builds {
 		out = append(out, job{
+			NodeID:      b.NodeID,
 			Package:     b.Package,
 			Version:     b.Version,
 			PythonTag:   b.PythonTag,
@@ -1767,21 +1779,30 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Package string `json:"package"`
 			Version string `json:"version"`
+			NodeID  string `json:"node_id,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 			return
 		}
+		nodeID := strings.TrimSpace(body.NodeID)
 		pkg := strings.TrimSpace(body.Package)
 		ver := strings.TrimSpace(body.Version)
-		if pkg == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package required"})
+		if nodeID == "" && pkg == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package or node_id required"})
 			return
 		}
 		var target *store.PlanNode
 		ambiguous := false
 		for i, node := range snap.Plan {
 			if !strings.EqualFold(node.Action, "build") {
+				continue
+			}
+			if nodeID != "" {
+				if node.NodeID == nodeID {
+					target = &snap.Plan[i]
+					break
+				}
 				continue
 			}
 			if !strings.EqualFold(node.Name, pkg) {

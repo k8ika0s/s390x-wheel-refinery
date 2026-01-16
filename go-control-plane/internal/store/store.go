@@ -126,6 +126,7 @@ type PlanRecipe struct {
 
 // PlanNode describes a unit in the build plan/graph.
 type PlanNode struct {
+	NodeID        string       `json:"node_id,omitempty"`
 	Name          string       `json:"name"`
 	Version       string       `json:"version"`
 	PythonVersion string       `json:"python_version,omitempty"`
@@ -158,6 +159,7 @@ type PlanSummary struct {
 // BuildStatus tracks a build job derived from a plan.
 type BuildStatus struct {
 	ID             int64    `json:"id"`
+	NodeID         string   `json:"node_id,omitempty"`
 	Package        string   `json:"package"`
 	Version        string   `json:"version"`
 	PythonTag      string   `json:"python_tag"`
@@ -188,6 +190,7 @@ type BuildStatus struct {
 // BuildAttempt captures per-attempt build history.
 type BuildAttempt struct {
 	ID             int64  `json:"id"`
+	NodeID         string `json:"node_id,omitempty"`
 	Package        string `json:"package"`
 	Version        string `json:"version"`
 	Attempt        int    `json:"attempt"`
@@ -308,7 +311,7 @@ type Store interface {
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error)
 	BuildQueueStats(ctx context.Context) (BuildQueueStats, error)
-	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string) error
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string) error
 	UpsertBuildAttempt(ctx context.Context, attempt BuildAttempt) error
 	ListBuildAttempts(ctx context.Context, pkg, version string, limit int) ([]BuildAttempt, error)
 	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
