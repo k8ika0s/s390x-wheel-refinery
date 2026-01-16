@@ -96,7 +96,7 @@ Legend:
     - Separate tokens for worker actions vs UI actions; rotate regularly.
     - Success: least-privilege tokens with documented rotation steps.
 
-12) Resource isolation
+12) Resource isolation (done)
     - Enforce worker CPU/memory limits, disk quota for cache.
     - Success: builds cannot starve the host or fill disks.
 

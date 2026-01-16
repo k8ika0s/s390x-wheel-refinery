@@ -2,7 +2,7 @@ Containers and compose files are the refinery’s “packaging and wiring.” Th
 
 **Purpose / Responsibilities**
 - Build/run the Go control-plane + Go worker containers and the UI container (static SPA served on 3000).
-- Wire volumes `/output`, `/cache`, and pass UI/worker tokens and webhook/env via compose (inputs are stored in MinIO/Zot instead of a shared `/input` volume).
+- Wire volumes `/output`, `/cache`, and pass UI/worker tokens plus resource limits (CPU/mem via `WORKER_CPU_LIMIT`/`WORKER_MEM_LIMIT`, cache cap via `CACHE_MAX_BYTES`) via compose (inputs are stored in MinIO/Zot instead of a shared `/input` volume).
 - Allow local development (`npm run dev` for UI, Go binaries for control-plane/worker), and production builds via Containerfiles.
 
 **Why it matters**

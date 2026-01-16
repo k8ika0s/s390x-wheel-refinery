@@ -12,164 +12,168 @@ import (
 
 // Config holds worker settings.
 type Config struct {
-	HTTPAddr             string
-	QueueBackend         string
-	QueueFile            string
-	RedisURL             string
-	RedisKey             string
-	PlanPopURL           string
-	PlanStatusURL        string
-	PlanListURL          string
-	PlanPollEnabled      bool
-	PlanPollIntervalSec  int
-	PlanPopBatch         int
-	AutoBuild            bool
-	BuildPollIntervalSec int
-	BuildPopURL          string
-	BuildStatusURL       string
-	KafkaBrokers         string
-	KafkaTopic           string
-	InputDir             string
-	OutputDir            string
-	CacheDir             string
-	PythonVersion        string
-	PlatformTag          string
-	ContainerImage       string
-	ContainerPreset      string
-	WorkerToken          string
-	ControlPlaneURL      string
-	ControlPlaneToken    string
-	WorkerID             string
-	WorkerRunID          string
-	HeartbeatIntervalSec int
-	PodmanBin            string
-	RunnerTimeoutSec     int
-	RequeueOnFailure     bool
-	MaxRequeueAttempts   int
+	HTTPAddr                string
+	QueueBackend            string
+	QueueFile               string
+	RedisURL                string
+	RedisKey                string
+	PlanPopURL              string
+	PlanStatusURL           string
+	PlanListURL             string
+	PlanPollEnabled         bool
+	PlanPollIntervalSec     int
+	PlanPopBatch            int
+	AutoBuild               bool
+	BuildPollIntervalSec    int
+	BuildPopURL             string
+	BuildStatusURL          string
+	KafkaBrokers            string
+	KafkaTopic              string
+	InputDir                string
+	OutputDir               string
+	CacheDir                string
+	CacheMaxBytes           int64
+	CachePruneIntervalSec   int
+	PythonVersion           string
+	PlatformTag             string
+	ContainerImage          string
+	ContainerPreset         string
+	WorkerToken             string
+	ControlPlaneURL         string
+	ControlPlaneToken       string
+	WorkerID                string
+	WorkerRunID             string
+	HeartbeatIntervalSec    int
+	PodmanBin               string
+	RunnerTimeoutSec        int
+	RequeueOnFailure        bool
+	MaxRequeueAttempts      int
 	QuarantineAfterAttempts int
-	BackoffBaseSec       int
-	BackoffMaxSec        int
-	BackoffTransientMult int
-	BackoffResourceMult  int
-	AutoFixEnabled       bool
-	AutoSaveHints        bool
-	AutoFixMinConfidence string
-	AutoFixRateLimitMin  int
-	AutoHintRateLimitMin int
-	AutorunInterval      int
-	BatchSize            int
-	RunCmd               []string
-	IndexURL             string
-	ExtraIndexURL        string
-	UpgradeStrategy      string
-	RequirementsPath     string
-	ConstraintsPath      string
-	CASRegistryURL       string
-	CASRegistryRepo      string
-	CASRegistryUser      string
-	CASRegistryPass      string
-	PackCatalog          *pack.Catalog
-	ObjectStoreEndpoint  string
-	ObjectStoreBucket    string
-	ObjectStoreAccess    string
-	ObjectStoreSecret    string
-	ObjectStoreUseSSL    bool
-	LocalCASDir          string
-	CASPushEnabled       bool
-	RepairPushEnabled    bool
-	RepairToolVersion    string
-	RepairPolicyHash     string
-	RepairCmd            string
-	PackPushEnabled      bool
-	RuntimePushEnabled   bool
-	PackBuilderCmd       string
-	RuntimeBuilderCmd    string
-	DefaultPackCmd       string
-	DefaultRuntimeCmd    string
-	DefaultRepairCmd     string
-	PackRecipesDir       string
-	BuildPoolSize        int
-	PlanPoolSize         int
+	BackoffBaseSec          int
+	BackoffMaxSec           int
+	BackoffTransientMult    int
+	BackoffResourceMult     int
+	AutoFixEnabled          bool
+	AutoSaveHints           bool
+	AutoFixMinConfidence    string
+	AutoFixRateLimitMin     int
+	AutoHintRateLimitMin    int
+	AutorunInterval         int
+	BatchSize               int
+	RunCmd                  []string
+	IndexURL                string
+	ExtraIndexURL           string
+	UpgradeStrategy         string
+	RequirementsPath        string
+	ConstraintsPath         string
+	CASRegistryURL          string
+	CASRegistryRepo         string
+	CASRegistryUser         string
+	CASRegistryPass         string
+	PackCatalog             *pack.Catalog
+	ObjectStoreEndpoint     string
+	ObjectStoreBucket       string
+	ObjectStoreAccess       string
+	ObjectStoreSecret       string
+	ObjectStoreUseSSL       bool
+	LocalCASDir             string
+	CASPushEnabled          bool
+	RepairPushEnabled       bool
+	RepairToolVersion       string
+	RepairPolicyHash        string
+	RepairCmd               string
+	PackPushEnabled         bool
+	RuntimePushEnabled      bool
+	PackBuilderCmd          string
+	RuntimeBuilderCmd       string
+	DefaultPackCmd          string
+	DefaultRuntimeCmd       string
+	DefaultRepairCmd        string
+	PackRecipesDir          string
+	BuildPoolSize           int
+	PlanPoolSize            int
 }
 
 func fromEnv() Config {
 	cfg := Config{
-		HTTPAddr:             getenv("WORKER_HTTP_ADDR", ":9000"),
-		QueueBackend:         getenv("QUEUE_BACKEND", "file"),
-		QueueFile:            getenv("QUEUE_FILE", "/tmp/refinery/retry_queue.json"),
-		RedisURL:             getenv("REDIS_URL", ""),
-		RedisKey:             getenv("REDIS_KEY", "refinery:queue"),
-		PlanPopURL:           getenv("PLAN_POP_URL", ""),
-		PlanStatusURL:        getenv("PLAN_STATUS_URL", ""),
-		PlanListURL:          getenv("PLAN_LIST_URL", ""),
-		PlanPollEnabled:      getenvBool("PLAN_POLL_ENABLED", false),
-		PlanPollIntervalSec:  getenvInt("PLAN_POLL_INTERVAL_SEC", 15),
-		PlanPopBatch:         getenvInt("PLAN_POP_BATCH", 5),
-		AutoBuild:            getenvBool("AUTO_BUILD", true),
-		BuildPollIntervalSec: getenvInt("BUILD_POLL_INTERVAL_SEC", 5),
-		BuildPopURL:          getenv("BUILD_POP_URL", ""),
-		BuildStatusURL:       getenv("BUILD_STATUS_URL", ""),
-		KafkaBrokers:         getenv("KAFKA_BROKERS", ""),
-		KafkaTopic:           getenv("KAFKA_TOPIC", "refinery.queue"),
-		InputDir:             getenv("INPUT_DIR", ""),
-		OutputDir:            getenv("OUTPUT_DIR", "/output"),
-		CacheDir:             getenv("CACHE_DIR", "/cache"),
-		PythonVersion:        getenv("PYTHON_VERSION", "3.11"),
-		PlatformTag:          getenv("PLATFORM_TAG", "manylinux2014_s390x"),
-		ContainerImage:       getenv("CONTAINER_IMAGE", "refinery-builder:latest"),
-		ContainerPreset:      getenv("CONTAINER_PRESET", "rocky"),
-		WorkerToken:          getenv("WORKER_TOKEN", ""),
-		ControlPlaneURL:      getenv("CONTROL_PLANE_URL", ""),
-		ControlPlaneToken:    getenv("CONTROL_PLANE_TOKEN", ""),
-		WorkerID:             getenv("WORKER_ID", ""),
-		WorkerRunID:          getenv("WORKER_RUN_ID", ""),
-		HeartbeatIntervalSec: getenvInt("WORKER_HEARTBEAT_INTERVAL_SEC", 15),
-		PodmanBin:            getenv("PODMAN_BIN", ""), // empty = stub podman; set to podman binary to execute
-		RunnerTimeoutSec:     getenvInt("RUNNER_TIMEOUT_SEC", 900),
-		RequeueOnFailure:     getenvBool("REQUEUE_ON_FAILURE", false),
-		MaxRequeueAttempts:   getenvInt("MAX_REQUEUE_ATTEMPTS", 3),
+		HTTPAddr:                getenv("WORKER_HTTP_ADDR", ":9000"),
+		QueueBackend:            getenv("QUEUE_BACKEND", "file"),
+		QueueFile:               getenv("QUEUE_FILE", "/tmp/refinery/retry_queue.json"),
+		RedisURL:                getenv("REDIS_URL", ""),
+		RedisKey:                getenv("REDIS_KEY", "refinery:queue"),
+		PlanPopURL:              getenv("PLAN_POP_URL", ""),
+		PlanStatusURL:           getenv("PLAN_STATUS_URL", ""),
+		PlanListURL:             getenv("PLAN_LIST_URL", ""),
+		PlanPollEnabled:         getenvBool("PLAN_POLL_ENABLED", false),
+		PlanPollIntervalSec:     getenvInt("PLAN_POLL_INTERVAL_SEC", 15),
+		PlanPopBatch:            getenvInt("PLAN_POP_BATCH", 5),
+		AutoBuild:               getenvBool("AUTO_BUILD", true),
+		BuildPollIntervalSec:    getenvInt("BUILD_POLL_INTERVAL_SEC", 5),
+		BuildPopURL:             getenv("BUILD_POP_URL", ""),
+		BuildStatusURL:          getenv("BUILD_STATUS_URL", ""),
+		KafkaBrokers:            getenv("KAFKA_BROKERS", ""),
+		KafkaTopic:              getenv("KAFKA_TOPIC", "refinery.queue"),
+		InputDir:                getenv("INPUT_DIR", ""),
+		OutputDir:               getenv("OUTPUT_DIR", "/output"),
+		CacheDir:                getenv("CACHE_DIR", "/cache"),
+		CacheMaxBytes:           getenvInt64("CACHE_MAX_BYTES", 0),
+		CachePruneIntervalSec:   getenvInt("CACHE_PRUNE_INTERVAL_SEC", 300),
+		PythonVersion:           getenv("PYTHON_VERSION", "3.11"),
+		PlatformTag:             getenv("PLATFORM_TAG", "manylinux2014_s390x"),
+		ContainerImage:          getenv("CONTAINER_IMAGE", "refinery-builder:latest"),
+		ContainerPreset:         getenv("CONTAINER_PRESET", "rocky"),
+		WorkerToken:             getenv("WORKER_TOKEN", ""),
+		ControlPlaneURL:         getenv("CONTROL_PLANE_URL", ""),
+		ControlPlaneToken:       getenv("CONTROL_PLANE_TOKEN", ""),
+		WorkerID:                getenv("WORKER_ID", ""),
+		WorkerRunID:             getenv("WORKER_RUN_ID", ""),
+		HeartbeatIntervalSec:    getenvInt("WORKER_HEARTBEAT_INTERVAL_SEC", 15),
+		PodmanBin:               getenv("PODMAN_BIN", ""), // empty = stub podman; set to podman binary to execute
+		RunnerTimeoutSec:        getenvInt("RUNNER_TIMEOUT_SEC", 900),
+		RequeueOnFailure:        getenvBool("REQUEUE_ON_FAILURE", false),
+		MaxRequeueAttempts:      getenvInt("MAX_REQUEUE_ATTEMPTS", 3),
 		QuarantineAfterAttempts: getenvInt("QUARANTINE_AFTER_ATTEMPTS", 5),
-		BackoffBaseSec:       getenvInt("BACKOFF_BASE_SEC", 5),
-		BackoffMaxSec:        getenvInt("BACKOFF_MAX_SEC", 600),
-		BackoffTransientMult: getenvInt("BACKOFF_TRANSIENT_MULTIPLIER", 6),
-		BackoffResourceMult:  getenvInt("BACKOFF_RESOURCE_MULTIPLIER", 12),
-		AutoFixEnabled:       getenvBool("AUTO_FIX_ENABLED", true),
-		AutoSaveHints:        getenvBool("AUTO_SAVE_HINTS", true),
-		AutoFixMinConfidence: getenv("AUTO_FIX_MIN_CONFIDENCE", "low"),
-		AutoFixRateLimitMin:  getenvInt("AUTO_FIX_RATE_LIMIT_MINUTES", 15),
-		AutoHintRateLimitMin: getenvInt("AUTO_HINT_RATE_LIMIT_MINUTES", 60),
-		BatchSize:            getenvInt("BATCH_SIZE", 50),
-		RunCmd:               parseCmd(getenv("WORKER_RUN_CMD", "")),
-		IndexURL:             getenv("INDEX_URL", ""),
-		ExtraIndexURL:        getenv("EXTRA_INDEX_URL", ""),
-		UpgradeStrategy:      getenv("UPGRADE_STRATEGY", "pinned"),
-		RequirementsPath:     getenv("REQUIREMENTS_PATH", ""),
-		ConstraintsPath:      getenv("CONSTRAINTS_PATH", ""),
-		CASRegistryURL:       getenv("CAS_REGISTRY_URL", ""),
-		CASRegistryRepo:      getenv("CAS_REGISTRY_REPO", "artifacts"),
-		CASRegistryUser:      getenv("CAS_REGISTRY_USER", ""),
-		CASRegistryPass:      getenv("CAS_REGISTRY_PASSWORD", ""),
-		ObjectStoreEndpoint:  getenv("OBJECT_STORE_ENDPOINT", ""),
-		ObjectStoreBucket:    getenv("OBJECT_STORE_BUCKET", ""),
-		ObjectStoreAccess:    getenv("OBJECT_STORE_ACCESS_KEY", ""),
-		ObjectStoreSecret:    getenv("OBJECT_STORE_SECRET_KEY", ""),
-		ObjectStoreUseSSL:    getenvBool("OBJECT_STORE_USE_SSL", false),
-		LocalCASDir:          getenv("LOCAL_CAS_DIR", "/cache/cas"),
-		CASPushEnabled:       getenvBool("CAS_PUSH_ENABLED", false),
-		RepairPushEnabled:    getenvBool("REPAIR_PUSH_ENABLED", false),
-		RepairToolVersion:    getenv("REPAIR_TOOL_VERSION", ""),
-		RepairPolicyHash:     getenv("REPAIR_POLICY_HASH", ""),
-		RepairCmd:            getenv("REPAIR_CMD", ""),
-		PackPushEnabled:      getenvBool("PACK_PUSH_ENABLED", false),
-		RuntimePushEnabled:   getenvBool("RUNTIME_PUSH_ENABLED", false),
-		PackBuilderCmd:       getenv("PACK_BUILDER_CMD", ""),
-		RuntimeBuilderCmd:    getenv("RUNTIME_BUILDER_CMD", ""),
-		DefaultPackCmd:       getenv("DEFAULT_PACK_CMD", "/app/recipes/pkgconf.sh"),
-		DefaultRuntimeCmd:    getenv("DEFAULT_RUNTIME_CMD", "/app/recipes/cpython311.sh"),
-		DefaultRepairCmd:     getenv("DEFAULT_REPAIR_CMD", "/app/recipes/repair.sh"),
-		PackRecipesDir:       getenv("PACK_RECIPES_DIR", "/app/recipes"),
-		BuildPoolSize:        getenvInt("BUILD_POOL_SIZE", 2),
-		PlanPoolSize:         getenvInt("PLAN_POOL_SIZE", 2),
+		BackoffBaseSec:          getenvInt("BACKOFF_BASE_SEC", 5),
+		BackoffMaxSec:           getenvInt("BACKOFF_MAX_SEC", 600),
+		BackoffTransientMult:    getenvInt("BACKOFF_TRANSIENT_MULTIPLIER", 6),
+		BackoffResourceMult:     getenvInt("BACKOFF_RESOURCE_MULTIPLIER", 12),
+		AutoFixEnabled:          getenvBool("AUTO_FIX_ENABLED", true),
+		AutoSaveHints:           getenvBool("AUTO_SAVE_HINTS", true),
+		AutoFixMinConfidence:    getenv("AUTO_FIX_MIN_CONFIDENCE", "low"),
+		AutoFixRateLimitMin:     getenvInt("AUTO_FIX_RATE_LIMIT_MINUTES", 15),
+		AutoHintRateLimitMin:    getenvInt("AUTO_HINT_RATE_LIMIT_MINUTES", 60),
+		BatchSize:               getenvInt("BATCH_SIZE", 50),
+		RunCmd:                  parseCmd(getenv("WORKER_RUN_CMD", "")),
+		IndexURL:                getenv("INDEX_URL", ""),
+		ExtraIndexURL:           getenv("EXTRA_INDEX_URL", ""),
+		UpgradeStrategy:         getenv("UPGRADE_STRATEGY", "pinned"),
+		RequirementsPath:        getenv("REQUIREMENTS_PATH", ""),
+		ConstraintsPath:         getenv("CONSTRAINTS_PATH", ""),
+		CASRegistryURL:          getenv("CAS_REGISTRY_URL", ""),
+		CASRegistryRepo:         getenv("CAS_REGISTRY_REPO", "artifacts"),
+		CASRegistryUser:         getenv("CAS_REGISTRY_USER", ""),
+		CASRegistryPass:         getenv("CAS_REGISTRY_PASSWORD", ""),
+		ObjectStoreEndpoint:     getenv("OBJECT_STORE_ENDPOINT", ""),
+		ObjectStoreBucket:       getenv("OBJECT_STORE_BUCKET", ""),
+		ObjectStoreAccess:       getenv("OBJECT_STORE_ACCESS_KEY", ""),
+		ObjectStoreSecret:       getenv("OBJECT_STORE_SECRET_KEY", ""),
+		ObjectStoreUseSSL:       getenvBool("OBJECT_STORE_USE_SSL", false),
+		LocalCASDir:             getenv("LOCAL_CAS_DIR", "/cache/cas"),
+		CASPushEnabled:          getenvBool("CAS_PUSH_ENABLED", false),
+		RepairPushEnabled:       getenvBool("REPAIR_PUSH_ENABLED", false),
+		RepairToolVersion:       getenv("REPAIR_TOOL_VERSION", ""),
+		RepairPolicyHash:        getenv("REPAIR_POLICY_HASH", ""),
+		RepairCmd:               getenv("REPAIR_CMD", ""),
+		PackPushEnabled:         getenvBool("PACK_PUSH_ENABLED", false),
+		RuntimePushEnabled:      getenvBool("RUNTIME_PUSH_ENABLED", false),
+		PackBuilderCmd:          getenv("PACK_BUILDER_CMD", ""),
+		RuntimeBuilderCmd:       getenv("RUNTIME_BUILDER_CMD", ""),
+		DefaultPackCmd:          getenv("DEFAULT_PACK_CMD", "/app/recipes/pkgconf.sh"),
+		DefaultRuntimeCmd:       getenv("DEFAULT_RUNTIME_CMD", "/app/recipes/cpython311.sh"),
+		DefaultRepairCmd:        getenv("DEFAULT_REPAIR_CMD", "/app/recipes/repair.sh"),
+		PackRecipesDir:          getenv("PACK_RECIPES_DIR", "/app/recipes"),
+		BuildPoolSize:           getenvInt("BUILD_POOL_SIZE", 2),
+		PlanPoolSize:            getenvInt("PLAN_POOL_SIZE", 2),
 	}
 	return cfg
 }
@@ -184,6 +188,15 @@ func getenv(k, def string) string {
 func getenvInt(k string, def int) int {
 	if v := os.Getenv(k); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
+func getenvInt64(k string, def int64) int64 {
+	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			return n
 		}
 	}

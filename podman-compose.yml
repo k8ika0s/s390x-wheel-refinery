@@ -116,9 +116,13 @@ services:
       context: .
       dockerfile: containers/go-worker/Containerfile
     privileged: true
+    mem_limit: ${WORKER_MEM_LIMIT:-8g}
+    cpus: ${WORKER_CPU_LIMIT:-2}
     environment:
       OUTPUT_DIR: /output
       CACHE_DIR: /cache
+      CACHE_MAX_BYTES: ${CACHE_MAX_BYTES:-10737418240}
+      CACHE_PRUNE_INTERVAL_SEC: ${CACHE_PRUNE_INTERVAL_SEC:-300}
       PYTHON_VERSION: "3.11"
       PLATFORM_TAG: "manylinux2014_s390x"
       WORKER_TOKEN: ${WORKER_TOKEN:-}

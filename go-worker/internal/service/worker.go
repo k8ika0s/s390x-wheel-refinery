@@ -50,6 +50,8 @@ type Worker struct {
 	autoHintLast map[string]time.Time
 	autoFixMu    sync.Mutex
 	autoFixState map[string]autoFixState
+	cachePruneMu sync.Mutex
+	cachePruneAt atomic.Int64
 	// buildPoolSize allows dynamic overrides from control-plane settings.
 	buildPoolSize *atomic.Int32
 	activeBuilds  atomic.Int32
@@ -129,6 +131,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	if len(reqs) == 0 {
 		return nil
 	}
+	w.maybePruneCache()
 
 	reqAttempts := make(map[string]int)
 	for _, r := range reqs {
