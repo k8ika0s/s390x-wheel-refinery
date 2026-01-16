@@ -9,70 +9,70 @@ Legend:
 - P2 = polish / scale-up / above-and-beyond
 
 ## P0: End-to-end correctness (must work every time)
-1) Build status semantics
+1) Build status semantics (done)
    - Add explicit leased state handling in the UI (do not show as building
      until the worker posts building).
    - Ensure control-plane updates building only after runner start.
    - Success: a full queue shows pending/leased/building accurately.
 
-2) Queue pop sizing
+2) Queue pop sizing (done)
    - Cap build queue pop to build pool size (or introduce a separate leased
      state that is not rendered as running).
    - Success: no more than BUILD_POOL_SIZE jobs show as building.
 
-3) Lease timeout + requeue safety
+3) Lease timeout + requeue safety (done)
    - Add lease expiration and auto-requeue on worker crash.
    - Success: stalled builds return to pending after timeout.
 
-4) Plan -> build linkage integrity
+4) Plan -> build linkage integrity (done)
    - Ensure plan_id and node_id always flow into build_status and events.
    - Success: every build row links back to its plan node and UI shows it.
 
-5) Log streaming correctness
+5) Log streaming correctness (done)
    - Guarantee seq ordering, per-build chunk replay, and no gaps on reconnect.
    - Add UI indicator for live vs replay.
    - Success: a running build shows live logs; reconnect resumes cleanly.
 
-6) End-to-end test script
+6) End-to-end test script (done)
    - Add a script that uploads a simple requirements.txt, plans, builds,
      validates success, and verifies artifacts in CAS/object storage.
    - Success: a single command verifies the entire pipeline end-to-end.
 
 ## P1: Production readiness (durability, safety, operability)
 ### Reliability and resilience
-1) Failure reason codes
+1) Failure reason codes (done)
    - Standardize reason codes (missing header, missing module, linker error,
      toolchain missing, pkg-config missing, CMake failure, etc.).
    - Store in event metadata and show as chips in UI.
    - Success: every failed attempt has a structured reason code.
 
-2) Auto-fix guardrails
+2) Auto-fix guardrails (done)
    - Add confidence thresholds, dedupe, and rate limits per package/version.
    - Flag high-impact recipes (e.g., build-essential) in UI.
    - Success: auto-fixes are safe, explainable, and not noisy.
 
-3) Decision trace
+3) Decision trace (done)
    - Emit a decision trace for why hints were applied/blocked.
    - Render a compact decision log in the package view.
    - Success: every retry has a visible, human-readable decision trail.
 
-4) Build attempt timeline
+4) Build attempt timeline (done)
    - Compact timeline showing attempt -> recipes -> outcome.
    - Add before/after diff of recipes between attempts.
    - Success: a user can understand the build history at a glance.
 
 ### Artifact lifecycle + pip repo readiness
-5) Wheelhouse index (PEP 503)
+5) Wheelhouse index (PEP 503) (done)
    - Generate a simple index from object storage (MinIO).
    - Expose a read-only pip-compatible endpoint.
    - Success: pip can install from the wheelhouse without custom tooling.
 
-6) Artifact manifests + immutability
+6) Artifact manifests + immutability (done)
    - Ensure every artifact has a signed/immutable manifest (digest, policy,
      runtime/pack versions, toolchain hash).
    - Success: artifacts are auditable and reproducible.
 
-7) Retention and cleanup
+7) Retention and cleanup (done)
    - Add retention rules for log chunks, build artifacts, and retry history.
    - Success: storage growth is bounded and predictable.
 
