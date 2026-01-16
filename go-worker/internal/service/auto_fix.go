@@ -169,6 +169,13 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		w.markAutoFixApplied(job, signature)
 	}
 	impact, impactReason := recipeImpact(merged)
+	if impact == "high" {
+		if impactReason != "" {
+			addTrace("high impact: %s", impactReason)
+		} else {
+			addTrace("high impact recipes detected")
+		}
+	}
 	return autoFixResult{
 		Applied:      applied,
 		Recipes:      merged,
@@ -179,8 +186,28 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		BlockedHints: dedupeStrings(blocked),
 		Impact:       impact,
 		ImpactReason: impactReason,
-		DecisionTrace: dedupeStrings(trace),
+		DecisionTrace: compactTrace(trace),
 	}
+}
+
+func compactTrace(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func autoFixKey(job runner.Job) string {

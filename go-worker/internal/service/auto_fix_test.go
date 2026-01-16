@@ -38,3 +38,14 @@ func TestAutoFixRateLimitAndDedupe(t *testing.T) {
 		t.Fatalf("expected allow after cooldown, got ok=%v reason=%q", ok, reason)
 	}
 }
+
+func TestCompactTracePreservesOrder(t *testing.T) {
+	in := []string{"matched hint A", "", "blocked hint B", "matched hint A", "applied recipes"}
+	out := compactTrace(in)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(out))
+	}
+	if out[0] != "matched hint A" || out[1] != "blocked hint B" || out[2] != "applied recipes" {
+		t.Fatalf("unexpected trace order: %v", out)
+	}
+}
