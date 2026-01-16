@@ -8,6 +8,8 @@ VERSION="${VERSION:-1.16.0}"
 REQ_LINE="${REQ_LINE:-}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-180}"
 POLL_INTERVAL="${POLL_INTERVAL:-2}"
+VERIFY_ARTIFACTS="${VERIFY_ARTIFACTS:-1}"
+MANIFEST_LIMIT="${MANIFEST_LIMIT:-200}"
 
 if [[ -z "$REQ_LINE" ]]; then
   if [[ -n "$VERSION" ]]; then
@@ -24,9 +26,17 @@ fi
 
 tmp_req="$(mktemp)"
 cleanup() {
-  rm -f "$tmp_req" "${after_file:-}"
+  rm -f "$tmp_req" "${after_file:-}" "${after_seq_file:-}"
 }
 trap cleanup EXIT
+
+check_url() {
+  local url="$1"
+  if curl -sSfI "$url" >/dev/null 2>&1; then
+    return 0
+  fi
+  curl -sSf -r 0-0 "$url" >/dev/null
+}
 
 printf "%s\n" "$REQ_LINE" > "$tmp_req"
 
@@ -78,6 +88,65 @@ PY
   sleep "$POLL_INTERVAL"
 done
 
+case "${status:-}" in
+  built|cached|reused)
+    ;;
+  *)
+    echo "Build did not succeed (status: ${status:-unknown})." >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$VERIFY_ARTIFACTS" == "1" ]]; then
+  echo "Verifying manifest and artifact URLs..."
+  manifest_info="$(curl -sS "${API_BASE}/api/manifest?limit=${MANIFEST_LIMIT}" | python3 - "$PACKAGE" "$VERSION" <<'PY'
+import json,sys
+pkg=sys.argv[1].lower()
+ver=sys.argv[2]
+data=json.load(sys.stdin)
+match=None
+for item in data:
+    if str(item.get("name","")).lower() == pkg and str(item.get("version","")) == ver:
+        match=item
+        break
+if not match:
+    print("")
+    raise SystemExit
+status=match.get("status") or ""
+wheel=match.get("wheel_url") or match.get("wheel") or ""
+repair=match.get("repair_url") or ""
+print(f"{status}|{wheel}|{repair}")
+PY
+)"
+  if [[ -z "$manifest_info" ]]; then
+    echo "No manifest entry found for ${PACKAGE} ${VERSION}." >&2
+    exit 1
+  fi
+  manifest_status="${manifest_info%%|*}"
+  rest="${manifest_info#*|}"
+  wheel_url="${rest%%|*}"
+  repair_url="${rest#*|}"
+  if [[ -n "$manifest_status" && "$manifest_status" != "built" && "$manifest_status" != "cached" && "$manifest_status" != "reused" ]]; then
+    echo "Manifest status not successful: ${manifest_status}" >&2
+    exit 1
+  fi
+  if [[ -z "$wheel_url" ]]; then
+    echo "Manifest entry missing wheel URL." >&2
+    exit 1
+  fi
+  if ! check_url "$wheel_url"; then
+    echo "Wheel URL not reachable: ${wheel_url}" >&2
+    exit 1
+  fi
+  if [[ -n "$repair_url" ]]; then
+    if ! check_url "$repair_url"; then
+      echo "Repair URL not reachable: ${repair_url}" >&2
+      exit 1
+    fi
+  fi
+  echo "Artifact verification complete."
+fi
+
 if [[ -z "$plan_id" ]]; then
   echo "Plan id not linked to pending input. Falling back to latest plan." >&2
   start_ts=$(( $(date +%s) - TIMEOUT_SECONDS ))
@@ -110,35 +179,11 @@ if [[ -n "${WORKER_TOKEN:-}" ]]; then
 fi
 
 after_file="$(mktemp)"
+after_seq_file="$(mktemp)"
 echo "Tailing logs for ${PACKAGE} ${VERSION}..."
 prev_status=""
 
 while true; do
-  curl -sS "${API_BASE}/api/logs/chunks/${PACKAGE}/${VERSION}?after=$(cat "$after_file" 2>/dev/null || echo 0)&limit=200" \
-    | python3 - "$after_file" <<'PY'
-import json,sys
-after_file=sys.argv[1]
-data=json.load(sys.stdin)
-last=0
-out=[]
-for chunk in data:
-    if not chunk:
-        continue
-    content=chunk.get("content") or ""
-    if content:
-        out.append(content)
-    cid=chunk.get("id")
-    if cid:
-        last=cid
-if out:
-    for entry in out:
-        sys.stdout.write(entry)
-        if not entry.endswith("\n"):
-            sys.stdout.write("\n")
-with open(after_file,"w") as f:
-    f.write(str(last))
-PY
-
   build_info="$(curl -sS "${API_BASE}/api/builds?package=${PACKAGE}&version=${VERSION}&limit=5" | python3 - <<'PY'
 import json,sys
 items=json.load(sys.stdin)
@@ -162,14 +207,64 @@ PY
       echo "Status: ${status} (attempts: ${attempts})"
       prev_status="$status"
     fi
+  else
+    echo "Waiting for build record..."
+  fi
+
+  after_id="$(cat "$after_file" 2>/dev/null || echo 0)"
+  after_seq="$(cat "$after_seq_file" 2>/dev/null || echo 0)"
+  log_attempt="${attempts:-0}"
+  query_parts=()
+  if [[ "$after_seq" != "0" ]]; then
+    query_parts+=("after_seq=${after_seq}")
+  elif [[ "$after_id" != "0" ]]; then
+    query_parts+=("after=${after_id}")
+  fi
+  if [[ -n "$log_attempt" && "$log_attempt" != "0" ]]; then
+    query_parts+=("attempt=${log_attempt}")
+  fi
+  query_parts+=("limit=200")
+  log_query="$(IFS='&'; echo "${query_parts[*]}")"
+
+  curl -sS "${API_BASE}/api/logs/chunks/${PACKAGE}/${VERSION}?${log_query}" \
+    | python3 - "$after_file" "$after_seq_file" <<'PY'
+import json,sys
+after_file=sys.argv[1]
+after_seq_file=sys.argv[2]
+data=json.load(sys.stdin)
+last_id=0
+last_seq=0
+out=[]
+for chunk in data:
+    if not chunk:
+        continue
+    content=chunk.get("content") or ""
+    if content:
+        out.append(content)
+    cid=chunk.get("id")
+    if cid:
+        last_id=cid
+    seq=chunk.get("seq") or 0
+    if seq:
+        last_seq=seq
+if out:
+    for entry in out:
+        sys.stdout.write(entry)
+        if not entry.endswith("\n"):
+            sys.stdout.write("\n")
+with open(after_file,"w") as f:
+    f.write(str(last_id))
+with open(after_seq_file,"w") as f:
+    f.write(str(last_seq))
+PY
+
+  if [[ -n "$build_info" ]]; then
     case "$status" in
-      built|failed|cached|reused|missing|skipped_known_failure|system_recipe_failed)
+      built|failed|cached|reused|missing|skipped_known_failure|system_recipe_failed|quarantined|retry)
         echo "Build finished with status: ${status}"
         break
         ;;
     esac
-  else
-    echo "Waiting for build record..."
   fi
   sleep "$POLL_INTERVAL"
 done
