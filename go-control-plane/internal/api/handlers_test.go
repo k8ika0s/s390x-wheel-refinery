@@ -30,6 +30,12 @@ type fakeStore struct {
 	}
 	restoredPendingID int64
 	queuedBuilds      []store.PlanNode
+	leaseBuildsMax    int
+	leaseBuilds       []store.BuildStatus
+	requeueCalls      int
+	requeueLeaseAge   int
+	requeueBuildAge   int
+	requeueResp       []store.BuildStatus
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -186,10 +192,14 @@ func (f *fakeStore) ListBuildAttempts(ctx context.Context, pkg, version string, 
 	return nil, nil
 }
 func (f *fakeStore) LeaseBuilds(ctx context.Context, max int) ([]store.BuildStatus, error) {
-	return nil, nil
+	f.leaseBuildsMax = max
+	return f.leaseBuilds, nil
 }
 func (f *fakeStore) RequeueStaleBuilds(ctx context.Context, leaseAgeSec int, buildAgeSec int) ([]store.BuildStatus, error) {
-	return nil, nil
+	f.requeueCalls++
+	f.requeueLeaseAge = leaseAgeSec
+	f.requeueBuildAge = buildAgeSec
+	return f.requeueResp, nil
 }
 func (f *fakeStore) DeleteBuilds(ctx context.Context, status string) (int64, error) {
 	return 0, nil
@@ -542,5 +552,48 @@ func TestRequirementsUploadAutoEnqueue(t *testing.T) {
 	}
 	if fs.lastPending.SourceType != "requirements" {
 		t.Fatalf("expected requirements source_type, got %q", fs.lastPending.SourceType)
+	}
+}
+
+func TestBuildQueuePopRequeuesStale(t *testing.T) {
+	fs := &fakeStore{
+		leaseBuilds: []store.BuildStatus{
+			{Package: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Attempts: 2},
+		},
+	}
+	h := &Handler{
+		Store: fs,
+		Config: config.Config{
+			WorkerToken:       "token",
+			BuildLeaseTimeout: 120,
+			BuildStallTimeout: 300,
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/build-queue/pop?max=7", nil)
+	req.Header.Set("X-Worker-Token", "token")
+	rec := httptest.NewRecorder()
+	h.buildQueuePop(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if fs.requeueCalls != 1 {
+		t.Fatalf("expected requeue call, got %d", fs.requeueCalls)
+	}
+	if fs.requeueLeaseAge != 120 || fs.requeueBuildAge != 300 {
+		t.Fatalf("unexpected requeue args: lease=%d build=%d", fs.requeueLeaseAge, fs.requeueBuildAge)
+	}
+	if fs.leaseBuildsMax != 7 {
+		t.Fatalf("expected lease max 7, got %d", fs.leaseBuildsMax)
+	}
+
+	var payload struct {
+		Builds []map[string]any `json:"builds"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Builds) != 1 {
+		t.Fatalf("expected 1 build, got %d", len(payload.Builds))
 	}
 }
