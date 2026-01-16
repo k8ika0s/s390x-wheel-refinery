@@ -133,11 +133,11 @@ Legend:
    - Success: horizontal scale without double builds.
 
 ### Docs + onboarding
-8) Production deployment guide
+8) Production deployment guide (done)
    - A single definitive doc for production: infra, env vars, secrets,
      backup/restore, and SLOs.
    - Success: a new operator can deploy in one pass.
 
-9) Architecture + data flow diagrams
+9) Architecture + data flow diagrams (done)
    - Keep diagrams current with log streaming and auto-fix flows.
    - Success: diagrams align with actual system behavior.
