@@ -110,7 +110,7 @@ Legend:
    - More informative empty states with recommended actions and links.
    - Success: user always knows the next action.
 
-3) Live status clarity
+3) Live status clarity (done)
    - Add a build-progress banner ("queued", "leased", "building", "repairing").
    - Success: users can understand current state instantly.
 
