@@ -75,10 +75,14 @@ CREATE TABLE IF NOT EXISTS manifests (
     python_tag   TEXT,
     platform_tag TEXT,
     status       TEXT,
+    manifest_digest TEXT,
+    metadata     JSONB,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_manifests_name ON manifests(name);
 CREATE INDEX IF NOT EXISTS idx_manifests_version ON manifests(version);
+CREATE INDEX IF NOT EXISTS idx_manifests_digest ON manifests(manifest_digest);
+CREATE INDEX IF NOT EXISTS idx_manifests_name_version_tag ON manifests(name, version, python_tag, platform_tag);
 
 -- Build plan snapshots (latest fetched for UI)
 CREATE TABLE IF NOT EXISTS plans (

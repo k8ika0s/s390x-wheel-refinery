@@ -782,9 +782,19 @@ components:
         name: { type: string }
         version: { type: string }
         wheel: { type: string }
+        wheel_url: { type: string }
+        repair_url: { type: string }
+        repair_digest: { type: string }
+        runtime_url: { type: string }
+        pack_urls:
+          type: array
+          items: { type: string }
         python_tag: { type: string }
         platform_tag: { type: string }
         status: { type: string }
+        manifest_digest: { type: string }
+        metadata: { type: object }
+        created_at: { type: integer, format: int64 }
     Artifact:
       type: object
       properties:

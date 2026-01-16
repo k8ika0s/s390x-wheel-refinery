@@ -37,8 +37,8 @@ This draft captures the intended endpoints for the Go control plane, matching th
 **Plan/Manifest/Artifacts**
 - `GET /plan` → current build plan/graph (no “why” reasons).
 - `POST /plan` → save plan snapshot (worker writes run_id + plan array to Postgres).
-- `GET /manifest?limit=` → manifest JSON for last run (default 200, max 1000).
-- `POST /manifest` → save manifest entries (worker writes after build); artifacts are derived from manifest paths/urls.
+- `GET /manifest?limit=` → manifest JSON for last run (default 200, max 1000), including manifest_digest and metadata.
+- `POST /manifest` → save manifest entries (worker writes after build); artifacts are derived from manifest paths/urls and immutability is enforced by manifest_digest.
 - `GET /artifacts?limit=` → list of built wheel paths/URLs (default 200, max 1000).
 
 **Config/Backends**

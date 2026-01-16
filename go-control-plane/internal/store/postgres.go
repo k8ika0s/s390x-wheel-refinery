@@ -123,16 +123,22 @@ CREATE TABLE IF NOT EXISTS manifests (
     python_tag   TEXT,
     platform_tag TEXT,
     status       TEXT,
+    manifest_digest TEXT,
+    metadata     JSONB,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_manifests_name ON manifests(name);
 CREATE INDEX IF NOT EXISTS idx_manifests_version ON manifests(version);
+CREATE INDEX IF NOT EXISTS idx_manifests_digest ON manifests(manifest_digest);
+CREATE INDEX IF NOT EXISTS idx_manifests_name_version_tag ON manifests(name, version, python_tag, platform_tag);
 
 ALTER TABLE manifests ADD COLUMN IF NOT EXISTS wheel_url TEXT;
 ALTER TABLE manifests ADD COLUMN IF NOT EXISTS runtime_url TEXT;
 ALTER TABLE manifests ADD COLUMN IF NOT EXISTS pack_urls TEXT[];
 ALTER TABLE manifests ADD COLUMN IF NOT EXISTS repair_url TEXT;
 ALTER TABLE manifests ADD COLUMN IF NOT EXISTS repair_digest TEXT;
+ALTER TABLE manifests ADD COLUMN IF NOT EXISTS manifest_digest TEXT;
+ALTER TABLE manifests ADD COLUMN IF NOT EXISTS metadata JSONB;
 
 CREATE TABLE IF NOT EXISTS app_settings (
     id         INT PRIMARY KEY DEFAULT 1,
@@ -1767,7 +1773,7 @@ func (p *PostgresStore) Manifest(ctx context.Context, limit int) ([]ManifestEntr
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT name,version,wheel,wheel_url,repair_url,repair_digest,runtime_url,pack_urls,python_tag,platform_tag,status,extract(epoch from created_at)::bigint FROM manifests ORDER BY created_at DESC LIMIT $1`, limit)
+	rows, err := p.db.QueryContext(ctx, `SELECT name,version,wheel,wheel_url,repair_url,repair_digest,runtime_url,pack_urls,python_tag,platform_tag,status,manifest_digest,metadata,extract(epoch from created_at)::bigint FROM manifests ORDER BY created_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1776,10 +1782,14 @@ func (p *PostgresStore) Manifest(ctx context.Context, limit int) ([]ManifestEntr
 	for rows.Next() {
 		var m ManifestEntry
 		var packs pq.StringArray
-		if err := rows.Scan(&m.Name, &m.Version, &m.Wheel, &m.WheelURL, &m.RepairURL, &m.RepairDigest, &m.RuntimeURL, &packs, &m.PythonTag, &m.PlatformTag, &m.Status, &m.CreatedAt); err != nil {
+		var metadata json.RawMessage
+		if err := rows.Scan(&m.Name, &m.Version, &m.Wheel, &m.WheelURL, &m.RepairURL, &m.RepairDigest, &m.RuntimeURL, &packs, &m.PythonTag, &m.PlatformTag, &m.Status, &m.ManifestDigest, &metadata, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		m.PackURLs = []string(packs)
+		if len(metadata) > 0 {
+			m.Metadata = metadata
+		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -1822,7 +1832,7 @@ func (p *PostgresStore) ManifestByNormalizedName(ctx context.Context, normalized
 		limit = 10000
 	}
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT name,version,wheel,wheel_url,repair_url,repair_digest,runtime_url,pack_urls,python_tag,platform_tag,status,extract(epoch from created_at)::bigint
+		SELECT name,version,wheel,wheel_url,repair_url,repair_digest,runtime_url,pack_urls,python_tag,platform_tag,status,manifest_digest,metadata,extract(epoch from created_at)::bigint
 		FROM manifests
 		WHERE lower(regexp_replace(name, '[-_.]+', '-', 'g')) = $1
 		ORDER BY created_at DESC
@@ -1835,10 +1845,14 @@ func (p *PostgresStore) ManifestByNormalizedName(ctx context.Context, normalized
 	for rows.Next() {
 		var m ManifestEntry
 		var packs pq.StringArray
-		if err := rows.Scan(&m.Name, &m.Version, &m.Wheel, &m.WheelURL, &m.RepairURL, &m.RepairDigest, &m.RuntimeURL, &packs, &m.PythonTag, &m.PlatformTag, &m.Status, &m.CreatedAt); err != nil {
+		var metadata json.RawMessage
+		if err := rows.Scan(&m.Name, &m.Version, &m.Wheel, &m.WheelURL, &m.RepairURL, &m.RepairDigest, &m.RuntimeURL, &packs, &m.PythonTag, &m.PlatformTag, &m.Status, &m.ManifestDigest, &metadata, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		m.PackURLs = []string(packs)
+		if len(metadata) > 0 {
+			m.Metadata = metadata
+		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -1855,9 +1869,63 @@ func (p *PostgresStore) SaveManifest(ctx context.Context, entries []ManifestEntr
 		if m.CreatedAt == 0 {
 			m.CreatedAt = time.Now().Unix()
 		}
-		_, err := p.db.ExecContext(ctx, `INSERT INTO manifests (name,version,wheel,wheel_url,repair_url,repair_digest,runtime_url,pack_urls,python_tag,platform_tag,status,created_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TO_TIMESTAMP($12))`,
-			m.Name, m.Version, m.Wheel, m.WheelURL, m.RepairURL, m.RepairDigest, m.RuntimeURL, pq.StringArray(m.PackURLs), m.PythonTag, m.PlatformTag, m.Status, m.CreatedAt)
+		digest := strings.TrimSpace(m.ManifestDigest)
+		if digest == "" {
+			var err error
+			digest, err = ManifestDigest(m)
+			if err != nil {
+				return err
+			}
+		}
+		var existingID int64
+		var existingDigest string
+		err := p.db.QueryRowContext(ctx, `
+			SELECT id, COALESCE(manifest_digest,'')
+			FROM manifests
+			WHERE name=$1 AND version=$2 AND COALESCE(python_tag,'')=$3 AND COALESCE(platform_tag,'')=$4
+			ORDER BY created_at DESC
+			LIMIT 1`,
+			m.Name, m.Version, m.PythonTag, m.PlatformTag,
+		).Scan(&existingID, &existingDigest)
+		if err == nil {
+			if existingDigest != "" && existingDigest != digest {
+				return fmt.Errorf("manifest immutability violation for %s %s", m.Name, m.Version)
+			}
+			_, err = p.db.ExecContext(ctx, `
+				UPDATE manifests
+				SET manifest_digest = COALESCE(manifest_digest, $2),
+				    wheel = CASE WHEN COALESCE(wheel,'') = '' THEN $3 ELSE wheel END,
+				    wheel_url = CASE WHEN COALESCE(wheel_url,'') = '' THEN $4 ELSE wheel_url END,
+				    repair_url = CASE WHEN COALESCE(repair_url,'') = '' THEN $5 ELSE repair_url END,
+				    repair_digest = CASE WHEN COALESCE(repair_digest,'') = '' THEN $6 ELSE repair_digest END,
+				    runtime_url = CASE WHEN COALESCE(runtime_url,'') = '' THEN $7 ELSE runtime_url END,
+				    pack_urls = CASE WHEN pack_urls IS NULL OR array_length(pack_urls, 1) = 0 THEN $8 ELSE pack_urls END,
+				    status = CASE WHEN COALESCE(status,'') = '' THEN $9 ELSE status END,
+				    metadata = COALESCE(metadata, $10)
+				WHERE id=$1`,
+				existingID,
+				digest,
+				m.Wheel,
+				m.WheelURL,
+				m.RepairURL,
+				m.RepairDigest,
+				m.RuntimeURL,
+				pq.StringArray(m.PackURLs),
+				m.Status,
+				m.Metadata,
+			)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		_, err = p.db.ExecContext(ctx, `
+			INSERT INTO manifests (name,version,wheel,wheel_url,repair_url,repair_digest,runtime_url,pack_urls,python_tag,platform_tag,status,manifest_digest,metadata,created_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,TO_TIMESTAMP($14))`,
+			m.Name, m.Version, m.Wheel, m.WheelURL, m.RepairURL, m.RepairDigest, m.RuntimeURL, pq.StringArray(m.PackURLs), m.PythonTag, m.PlatformTag, m.Status, digest, m.Metadata, m.CreatedAt)
 		if err != nil {
 			return err
 		}

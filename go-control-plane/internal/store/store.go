@@ -85,18 +85,20 @@ type PendingInput struct {
 
 // ManifestEntry tracks output wheel metadata.
 type ManifestEntry struct {
-	Name         string
-	Version      string
-	Wheel        string
-	WheelURL     string
-	RepairURL    string
-	RepairDigest string
-	RuntimeURL   string
-	PackURLs     []string
-	PythonTag    string
-	PlatformTag  string
-	Status       string
-	CreatedAt    int64
+	Name           string          `json:"name"`
+	Version        string          `json:"version"`
+	Wheel          string          `json:"wheel"`
+	WheelURL       string          `json:"wheel_url,omitempty"`
+	RepairURL      string          `json:"repair_url,omitempty"`
+	RepairDigest   string          `json:"repair_digest,omitempty"`
+	RuntimeURL     string          `json:"runtime_url,omitempty"`
+	PackURLs       []string        `json:"pack_urls,omitempty"`
+	PythonTag      string          `json:"python_tag,omitempty"`
+	PlatformTag    string          `json:"platform_tag,omitempty"`
+	Status         string          `json:"status,omitempty"`
+	ManifestDigest string          `json:"manifest_digest,omitempty"`
+	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt      int64           `json:"created_at,omitempty"`
 }
 
 // Artifact represents a downloadable/browsable build artifact.
