@@ -158,10 +158,13 @@ CREATE TABLE IF NOT EXISTS worker_status (
     build_pool_size INT NOT NULL DEFAULT 0,
     plan_pool_size INT NOT NULL DEFAULT 0,
     heartbeat_interval_sec INT NOT NULL DEFAULT 0,
+    cas_hits BIGINT NOT NULL DEFAULT 0,
+    cas_misses BIGINT NOT NULL DEFAULT 0,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_worker_status_last_seen ON worker_status(last_seen);
+CREATE INDEX IF NOT EXISTS idx_worker_status_cas ON worker_status(cas_hits, cas_misses);
 CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
 CREATE INDEX IF NOT EXISTS idx_build_status_plan_id ON build_status(plan_id);
 CREATE INDEX IF NOT EXISTS idx_build_status_updated_at ON build_status(updated_at DESC);

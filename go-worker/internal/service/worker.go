@@ -53,6 +53,8 @@ type Worker struct {
 	// buildPoolSize allows dynamic overrides from control-plane settings.
 	buildPoolSize *atomic.Int32
 	activeBuilds  atomic.Int32
+	casHits       atomic.Int64
+	casMisses     atomic.Int64
 }
 
 type result struct {
@@ -942,6 +944,14 @@ func queueKey(name, version, nodeID string) string {
 	return strings.ToLower(name) + "::" + strings.ToLower(version)
 }
 
+func (w *Worker) recordCASHit() {
+	w.casHits.Add(1)
+}
+
+func (w *Worker) recordCASMiss() {
+	w.casMisses.Add(1)
+}
+
 func (w *Worker) shouldRequeue(reqAttempts map[string]int, job runner.Job) bool {
 	if !w.Cfg.RequeueOnFailure {
 		return false
@@ -1492,17 +1502,21 @@ func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
 	}
 	destPath := filepath.Join(destDir, strings.ReplaceAll(job.WheelDigest, ":", "_")+".bin")
 	if err := w.Fetcher.Fetch(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, destPath); err != nil {
+		w.recordCASMiss()
 		return err
 	}
 	if _, err := os.Stat(destPath); err != nil {
+		w.recordCASMiss()
 		return err
 	}
 	if ok, err := verifyFileDigest(destPath, job.WheelDigest); err != nil || !ok {
+		w.recordCASMiss()
 		if err != nil {
 			return err
 		}
 		return fmt.Errorf("wheel digest mismatch: expected %s", job.WheelDigest)
 	}
+	w.recordCASHit()
 	return nil
 }
 
@@ -1538,6 +1552,11 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 						fetched = true
 					}
 				}
+			}
+			if fetched {
+				w.recordCASHit()
+			} else {
+				w.recordCASMiss()
 			}
 		}
 		if !fetched && actions[id.Digest] == "build" {
@@ -1595,11 +1614,13 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 			if _, err := os.Stat(destPath); err == nil {
 				if ok, err := verifyFileDigest(destPath, rtID.Digest); err == nil && ok {
 					if err := extractTar(destPath, extractDir); err == nil && !isManifestOnly(extractDir) {
+						w.recordCASHit()
 						return extractDir
 					}
 				}
 			}
 		}
+		w.recordCASMiss()
 	}
 	if action == "build" {
 		cmd := w.Cfg.RuntimeBuilderCmd

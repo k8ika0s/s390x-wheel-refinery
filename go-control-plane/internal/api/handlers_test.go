@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -29,14 +30,14 @@ type fakeStore struct {
 		status string
 		errMsg string
 	}
-	restoredPendingID int64
-	queuedBuilds      []store.PlanNode
-	leaseBuildsMax    int
-	leaseBuilds       []store.BuildStatus
-	requeueCalls      int
-	requeueLeaseAge   int
-	requeueBuildAge   int
-	requeueResp       []store.BuildStatus
+	restoredPendingID     int64
+	queuedBuilds          []store.PlanNode
+	leaseBuildsMax        int
+	leaseBuilds           []store.BuildStatus
+	requeueCalls          int
+	requeueLeaseAge       int
+	requeueBuildAge       int
+	requeueResp           []store.BuildStatus
 	lastBuildUpdatePlanID int64
 	lastBuildUpdateNodeID string
 	lastLogChunksAfterID  int64
@@ -48,6 +49,9 @@ type fakeStore struct {
 	trimEventsCalls       int
 	trimAttemptsCalls     int
 	trimManifestsCalls    int
+	workers               []store.WorkerStatus
+	buildAttemptStats     store.BuildAttemptStats
+	logChunkStats         store.LogChunkStats
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -176,6 +180,12 @@ func (f *fakeStore) ManifestByNormalizedName(ctx context.Context, normalized str
 func (f *fakeStore) SaveManifest(ctx context.Context, entries []store.ManifestEntry) error {
 	return nil
 }
+func (f *fakeStore) BuildAttemptStats(ctx context.Context, since time.Time) (store.BuildAttemptStats, error) {
+	return f.buildAttemptStats, nil
+}
+func (f *fakeStore) LogChunkStats(ctx context.Context, since time.Time) (store.LogChunkStats, error) {
+	return f.logChunkStats, nil
+}
 func (f *fakeStore) Artifacts(ctx context.Context, limit int) ([]store.Artifact, error) {
 	return nil, nil
 }
@@ -249,7 +259,7 @@ func (f *fakeStore) UpsertWorkerStatus(ctx context.Context, status store.WorkerS
 	return nil
 }
 func (f *fakeStore) ListWorkers(ctx context.Context) ([]store.WorkerStatus, error) {
-	return nil, nil
+	return f.workers, nil
 }
 func (f *fakeStore) GetSettings(ctx context.Context) (settings.Settings, error) {
 	return settings.ApplyDefaults(settings.Settings{}), nil
@@ -768,5 +778,77 @@ func TestMaybeSweepRetention(t *testing.T) {
 	}
 	if fs.trimManifestsCalls != 1 {
 		t.Fatalf("expected manifests trim call, got %d", fs.trimManifestsCalls)
+	}
+}
+
+func TestMetricsIncludesAttemptsAndLogs(t *testing.T) {
+	fs := &fakeStore{
+		buildAttemptStats: store.BuildAttemptStats{
+			Total:         4,
+			Built:         2,
+			Failed:        1,
+			Retry:         1,
+			Quarantined:   0,
+			AvgDurationMs: 2500,
+		},
+		logChunkStats: store.LogChunkStats{Total: 120},
+		workers: []store.WorkerStatus{
+			{
+				WorkerID:             "w1",
+				LastSeen:             time.Now().Unix(),
+				HeartbeatIntervalSec: 15,
+				CASHits:              5,
+				CASMisses:            15,
+			},
+		},
+	}
+	h := &Handler{
+		Store:  fs,
+		Queue:  &fakeQueue{},
+		Config: config.Config{MetricsWindowMin: 60},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics", nil)
+	rec := httptest.NewRecorder()
+	h.metrics(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	attempts, ok := payload["attempts"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attempts object")
+	}
+	if attempts["total"] != float64(4) {
+		t.Fatalf("expected attempts total 4, got %v", attempts["total"])
+	}
+	if attempts["retry"] != float64(1) {
+		t.Fatalf("expected attempts retry 1, got %v", attempts["retry"])
+	}
+	if rc, ok := attempts["retry_churn"].(float64); !ok || math.Abs(rc-0.25) > 0.001 {
+		t.Fatalf("expected retry_churn 0.25, got %v", attempts["retry_churn"])
+	}
+	logs, ok := payload["logs"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected logs object")
+	}
+	if logs["recent_chunks"] != float64(120) {
+		t.Fatalf("expected recent_chunks 120, got %v", logs["recent_chunks"])
+	}
+	if cpm, ok := logs["chunks_per_min"].(float64); !ok || math.Abs(cpm-2.0) > 0.001 {
+		t.Fatalf("expected chunks_per_min 2.0, got %v", logs["chunks_per_min"])
+	}
+	workers, ok := payload["workers"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected workers object")
+	}
+	if workers["cas_hits"] != float64(5) {
+		t.Fatalf("expected cas_hits 5, got %v", workers["cas_hits"])
+	}
+	if workers["cas_misses"] != float64(15) {
+		t.Fatalf("expected cas_misses 15, got %v", workers["cas_misses"])
 	}
 }

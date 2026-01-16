@@ -227,10 +227,13 @@ CREATE TABLE IF NOT EXISTS worker_status (
     build_pool_size INT NOT NULL DEFAULT 0,
     plan_pool_size INT NOT NULL DEFAULT 0,
     heartbeat_interval_sec INT NOT NULL DEFAULT 0,
+    cas_hits BIGINT NOT NULL DEFAULT 0,
+    cas_misses BIGINT NOT NULL DEFAULT 0,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_worker_status_last_seen ON worker_status(last_seen);
+CREATE INDEX IF NOT EXISTS idx_worker_status_cas ON worker_status(cas_hits, cas_misses);
 CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
 CREATE INDEX IF NOT EXISTS idx_build_status_plan_id ON build_status(plan_id);
 CREATE INDEX IF NOT EXISTS idx_build_status_updated_at ON build_status(updated_at DESC);
@@ -280,6 +283,9 @@ ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS loaded_at TIMESTAMPTZ;
 ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS planned_at TIMESTAMPTZ;
 ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ;
 ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE worker_status ADD COLUMN IF NOT EXISTS cas_hits BIGINT;
+ALTER TABLE worker_status ADD COLUMN IF NOT EXISTS cas_misses BIGINT;
 
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS recipes JSONB;
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS hint_ids TEXT[];
@@ -1993,6 +1999,44 @@ func (p *PostgresStore) Artifacts(ctx context.Context, limit int) ([]Artifact, e
 	return out, nil
 }
 
+func (p *PostgresStore) BuildAttemptStats(ctx context.Context, since time.Time) (BuildAttemptStats, error) {
+	if err := p.ensureDB(); err != nil {
+		return BuildAttemptStats{}, err
+	}
+	var stats BuildAttemptStats
+	err := p.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*)::int,
+			COUNT(*) FILTER (WHERE status = 'built')::int,
+			COUNT(*) FILTER (WHERE status = 'failed')::int,
+			COUNT(*) FILTER (WHERE status = 'retry')::int,
+			COUNT(*) FILTER (WHERE status = 'quarantined')::int,
+			COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0)
+		FROM build_attempts
+		WHERE created_at >= $1
+	`, since).Scan(&stats.Total, &stats.Built, &stats.Failed, &stats.Retry, &stats.Quarantined, &stats.AvgDurationMs)
+	if err != nil {
+		return BuildAttemptStats{}, err
+	}
+	return stats, nil
+}
+
+func (p *PostgresStore) LogChunkStats(ctx context.Context, since time.Time) (LogChunkStats, error) {
+	if err := p.ensureDB(); err != nil {
+		return LogChunkStats{}, err
+	}
+	var stats LogChunkStats
+	err := p.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)::int
+		FROM log_chunks
+		WHERE timestamp >= $1
+	`, since).Scan(&stats.Total)
+	if err != nil {
+		return LogChunkStats{}, err
+	}
+	return stats, nil
+}
+
 func (p *PostgresStore) Plan(ctx context.Context) ([]PlanNode, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err
@@ -2436,9 +2480,9 @@ func (p *PostgresStore) UpsertWorkerStatus(ctx context.Context, status WorkerSta
 	}
 	_, err := p.db.ExecContext(ctx, `
 		INSERT INTO worker_status (
-			worker_id, run_id, last_seen, active_builds, build_pool_size, plan_pool_size, heartbeat_interval_sec, updated_at
+			worker_id, run_id, last_seen, active_builds, build_pool_size, plan_pool_size, heartbeat_interval_sec, cas_hits, cas_misses, updated_at
 		)
-		VALUES ($1,$2,NOW(),$3,$4,$5,$6,NOW())
+		VALUES ($1,$2,NOW(),$3,$4,$5,$6,$7,$8,NOW())
 		ON CONFLICT (worker_id) DO UPDATE
 		SET run_id = EXCLUDED.run_id,
 		    last_seen = NOW(),
@@ -2446,8 +2490,10 @@ func (p *PostgresStore) UpsertWorkerStatus(ctx context.Context, status WorkerSta
 		    build_pool_size = EXCLUDED.build_pool_size,
 		    plan_pool_size = EXCLUDED.plan_pool_size,
 		    heartbeat_interval_sec = EXCLUDED.heartbeat_interval_sec,
+		    cas_hits = EXCLUDED.cas_hits,
+		    cas_misses = EXCLUDED.cas_misses,
 		    updated_at = NOW()
-	`, status.WorkerID, nullableString(status.RunID), status.ActiveBuilds, status.BuildPoolSize, status.PlanPoolSize, status.HeartbeatIntervalSec)
+	`, status.WorkerID, nullableString(status.RunID), status.ActiveBuilds, status.BuildPoolSize, status.PlanPoolSize, status.HeartbeatIntervalSec, status.CASHits, status.CASMisses)
 	return err
 }
 
@@ -2463,6 +2509,8 @@ func (p *PostgresStore) ListWorkers(ctx context.Context) ([]WorkerStatus, error)
 		       build_pool_size,
 		       plan_pool_size,
 		       heartbeat_interval_sec,
+		       cas_hits,
+		       cas_misses,
 		       EXTRACT(EPOCH FROM last_seen)::bigint AS last_seen,
 		       EXTRACT(EPOCH FROM created_at)::bigint AS created_at,
 		       EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at
@@ -2477,7 +2525,7 @@ func (p *PostgresStore) ListWorkers(ctx context.Context) ([]WorkerStatus, error)
 	for rows.Next() {
 		var ws WorkerStatus
 		var runID sql.NullString
-		if err := rows.Scan(&ws.WorkerID, &runID, &ws.ActiveBuilds, &ws.BuildPoolSize, &ws.PlanPoolSize, &ws.HeartbeatIntervalSec, &ws.LastSeen, &ws.CreatedAt, &ws.UpdatedAt); err != nil {
+		if err := rows.Scan(&ws.WorkerID, &runID, &ws.ActiveBuilds, &ws.BuildPoolSize, &ws.PlanPoolSize, &ws.HeartbeatIntervalSec, &ws.CASHits, &ws.CASMisses, &ws.LastSeen, &ws.CreatedAt, &ws.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if runID.Valid {

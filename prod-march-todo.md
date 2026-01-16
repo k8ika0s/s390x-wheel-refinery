@@ -77,7 +77,7 @@ Legend:
    - Success: storage growth is bounded and predictable.
 
 ### Observability + operations
-8) Metrics coverage
+8) Metrics coverage (done)
    - Queue depth, build durations, failure rate, retry churn, worker heartbeat,
      log stream throughput, CAS hit rate.
    - Success: Prometheus dashboard shows live system health.

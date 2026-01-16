@@ -191,28 +191,28 @@ type BuildStatus struct {
 
 // BuildAttempt captures per-attempt build history.
 type BuildAttempt struct {
-	ID             int64  `json:"id"`
-	NodeID         string `json:"node_id,omitempty"`
-	Package        string `json:"package"`
-	Version        string `json:"version"`
-	Attempt        int    `json:"attempt"`
-	Status         string `json:"status"`
-	LastError      string `json:"last_error,omitempty"`
-	FailureSummary string `json:"failure_summary,omitempty"`
-	BackoffUntil   int64  `json:"backoff_until,omitempty"`
-	BackoffReason  string `json:"backoff_reason,omitempty"`
-	BackoffSeconds int    `json:"backoff_seconds,omitempty"`
-	DurationMS     int64  `json:"duration_ms,omitempty"`
+	ID             int64    `json:"id"`
+	NodeID         string   `json:"node_id,omitempty"`
+	Package        string   `json:"package"`
+	Version        string   `json:"version"`
+	Attempt        int      `json:"attempt"`
+	Status         string   `json:"status"`
+	LastError      string   `json:"last_error,omitempty"`
+	FailureSummary string   `json:"failure_summary,omitempty"`
+	BackoffUntil   int64    `json:"backoff_until,omitempty"`
+	BackoffReason  string   `json:"backoff_reason,omitempty"`
+	BackoffSeconds int      `json:"backoff_seconds,omitempty"`
+	DurationMS     int64    `json:"duration_ms,omitempty"`
 	Recipes        []string `json:"recipes,omitempty"`
 	HintIDs        []string `json:"hint_ids,omitempty"`
-	ReasonCode     string `json:"reason_code,omitempty"`
-	ReasonDetail   string `json:"reason_detail,omitempty"`
-	StartedAt      int64  `json:"started_at,omitempty"`
-	FinishedAt     int64  `json:"finished_at,omitempty"`
-	RunID          string `json:"run_id,omitempty"`
-	PlanID         int64  `json:"plan_id,omitempty"`
-	CreatedAt      int64  `json:"created_at,omitempty"`
-	UpdatedAt      int64  `json:"updated_at,omitempty"`
+	ReasonCode     string   `json:"reason_code,omitempty"`
+	ReasonDetail   string   `json:"reason_detail,omitempty"`
+	StartedAt      int64    `json:"started_at,omitempty"`
+	FinishedAt     int64    `json:"finished_at,omitempty"`
+	RunID          string   `json:"run_id,omitempty"`
+	PlanID         int64    `json:"plan_id,omitempty"`
+	CreatedAt      int64    `json:"created_at,omitempty"`
+	UpdatedAt      int64    `json:"updated_at,omitempty"`
 }
 
 // BuildQueueStats captures aggregate queue counts.
@@ -234,6 +234,8 @@ type WorkerStatus struct {
 	BuildPoolSize        int    `json:"build_pool_size"`
 	PlanPoolSize         int    `json:"plan_pool_size"`
 	HeartbeatIntervalSec int    `json:"heartbeat_interval_sec,omitempty"`
+	CASHits              int64  `json:"cas_hits,omitempty"`
+	CASMisses            int64  `json:"cas_misses,omitempty"`
 	CreatedAt            int64  `json:"created_at,omitempty"`
 	UpdatedAt            int64  `json:"updated_at,omitempty"`
 }
@@ -255,6 +257,21 @@ type Summary struct {
 type Stat struct {
 	Name  string  `json:"name"`
 	Value float64 `json:"value"`
+}
+
+// BuildAttemptStats summarizes attempts in a recent window.
+type BuildAttemptStats struct {
+	Total         int     `json:"total"`
+	Built         int     `json:"built"`
+	Failed        int     `json:"failed"`
+	Retry         int     `json:"retry"`
+	Quarantined   int     `json:"quarantined"`
+	AvgDurationMs float64 `json:"avg_duration_ms"`
+}
+
+// LogChunkStats summarizes streaming throughput.
+type LogChunkStats struct {
+	Total int `json:"total"`
 }
 
 // Store abstracts history, hints, logs, manifests.
@@ -303,6 +320,8 @@ type Store interface {
 	ManifestPackages(ctx context.Context, limit int) ([]string, error)
 	ManifestByNormalizedName(ctx context.Context, normalized string, limit int) ([]ManifestEntry, error)
 	SaveManifest(ctx context.Context, entries []ManifestEntry) error
+	BuildAttemptStats(ctx context.Context, since time.Time) (BuildAttemptStats, error)
+	LogChunkStats(ctx context.Context, since time.Time) (LogChunkStats, error)
 	Artifacts(ctx context.Context, limit int) ([]Artifact, error)
 
 	// Pending inputs & planning

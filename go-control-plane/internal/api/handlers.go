@@ -17,9 +17,9 @@ import (
 	"os/exec"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
-	"sort"
 	"sync"
 	"time"
 
@@ -158,6 +158,23 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		Online        int   `json:"online"`
 		Stale         int   `json:"stale"`
 		LatestSeenSec int64 `json:"latest_seen_seconds,omitempty"`
+		CASHits       int64 `json:"cas_hits,omitempty"`
+		CASMisses     int64 `json:"cas_misses,omitempty"`
+	}
+	type attemptMetrics struct {
+		Total         int     `json:"total"`
+		Built         int     `json:"built"`
+		Failed        int     `json:"failed"`
+		Retry         int     `json:"retry"`
+		Quarantined   int     `json:"quarantined"`
+		AvgDurationMs float64 `json:"avg_duration_ms"`
+		FailureRate   float64 `json:"failure_rate"`
+		RetryChurn    float64 `json:"retry_churn"`
+	}
+	type logMetrics struct {
+		RecentChunks int     `json:"recent_chunks"`
+		WindowMin    int     `json:"window_minutes"`
+		ChunksPerMin float64 `json:"chunks_per_min"`
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
@@ -248,6 +265,8 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 				} else {
 					wm.Stale++
 				}
+				wm.CASHits += ws.CASHits
+				wm.CASMisses += ws.CASMisses
 			}
 		}
 	}
@@ -263,6 +282,38 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		poolPlan = s.PlanPoolSize
 		poolBuild = s.BuildPoolSize
 	}
+	windowMin := h.Config.MetricsWindowMin
+	if windowMin <= 0 {
+		windowMin = 60
+	}
+	since := time.Now().Add(-time.Duration(windowMin) * time.Minute)
+	am := attemptMetrics{}
+	if h.Store != nil {
+		if stats, err := h.Store.BuildAttemptStats(ctx, since); err == nil {
+			am.Total = stats.Total
+			am.Built = stats.Built
+			am.Failed = stats.Failed
+			am.Retry = stats.Retry
+			am.Quarantined = stats.Quarantined
+			am.AvgDurationMs = stats.AvgDurationMs
+			denom := stats.Built + stats.Failed + stats.Quarantined
+			if denom > 0 {
+				am.FailureRate = float64(stats.Failed+stats.Quarantined) / float64(denom)
+			}
+			if stats.Total > 0 {
+				am.RetryChurn = float64(stats.Retry) / float64(stats.Total)
+			}
+		}
+	}
+	lm := logMetrics{WindowMin: windowMin}
+	if h.Store != nil {
+		if stats, err := h.Store.LogChunkStats(ctx, since); err == nil {
+			lm.RecentChunks = stats.Total
+			if windowMin > 0 {
+				lm.ChunksPerMin = float64(stats.Total) / float64(windowMin)
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary": map[string]any{
 			"title":       "Control-plane metrics",
@@ -274,6 +325,8 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		"build":           buildStats,
 		"hints":           hm,
 		"workers":         wm,
+		"attempts":        am,
+		"logs":            lm,
 		"db":              dbm,
 		"status_counts":   sum.StatusCounts,
 		"recent_failures": sum.Failures,
@@ -349,6 +402,8 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 	if list, err := h.Store.ListWorkers(ctx); err == nil {
 		total := 0
 		online := 0
+		var casHits int64
+		var casMisses int64
 		now := time.Now().Unix()
 		for _, ws := range list {
 			total++
@@ -363,6 +418,8 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 			if now-ws.LastSeen <= threshold {
 				online++
 			}
+			casHits += ws.CASHits
+			casMisses += ws.CASMisses
 		}
 		fmt.Fprintf(&buf, "# HELP refinery_workers_total Total workers reporting heartbeats.\n")
 		fmt.Fprintf(&buf, "# TYPE refinery_workers_total gauge\n")
@@ -370,6 +427,18 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&buf, "# HELP refinery_workers_online Workers seen within heartbeat window.\n")
 		fmt.Fprintf(&buf, "# TYPE refinery_workers_online gauge\n")
 		fmt.Fprintf(&buf, "refinery_workers_online %d\n", online)
+		fmt.Fprintf(&buf, "# HELP refinery_cas_hits Total CAS fetch hits reported by workers.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_cas_hits gauge\n")
+		fmt.Fprintf(&buf, "refinery_cas_hits %d\n", casHits)
+		fmt.Fprintf(&buf, "# HELP refinery_cas_misses Total CAS fetch misses reported by workers.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_cas_misses gauge\n")
+		fmt.Fprintf(&buf, "refinery_cas_misses %d\n", casMisses)
+		totalCAS := casHits + casMisses
+		if totalCAS > 0 {
+			fmt.Fprintf(&buf, "# HELP refinery_cas_hit_rate CAS hit ratio over reported lifetime.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_cas_hit_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_cas_hit_rate %.4f\n", float64(casHits)/float64(totalCAS))
+		}
 	}
 	fmt.Fprintf(&buf, "# HELP refinery_db_up Database connectivity (1=up,0=down).\n")
 	fmt.Fprintf(&buf, "# TYPE refinery_db_up gauge\n")
@@ -378,6 +447,52 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&buf, "# TYPE refinery_status_count gauge\n")
 	for k, v := range sum.StatusCounts {
 		fmt.Fprintf(&buf, "refinery_status_count{status=%q} %d\n", k, v)
+	}
+	windowMin := h.Config.MetricsWindowMin
+	if windowMin <= 0 {
+		windowMin = 60
+	}
+	since := time.Now().Add(-time.Duration(windowMin) * time.Minute)
+	if stats, err := h.Store.BuildAttemptStats(ctx, since); err == nil {
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_total Build attempts in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_total %d\n", stats.Total)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_failed Build attempts failed in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_failed gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_failed %d\n", stats.Failed)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_retry Build attempts scheduled for retry in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_retry gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_retry %d\n", stats.Retry)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_quarantined Build attempts quarantined in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_quarantined gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_quarantined %d\n", stats.Quarantined)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_built Build attempts completed successfully in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_built gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_built %d\n", stats.Built)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_avg_duration_ms Average build duration in ms.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_avg_duration_ms gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_avg_duration_ms %.2f\n", stats.AvgDurationMs)
+		denom := stats.Built + stats.Failed + stats.Quarantined
+		if denom > 0 {
+			fmt.Fprintf(&buf, "# HELP refinery_build_failure_rate Failure rate in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_build_failure_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_build_failure_rate %.4f\n", float64(stats.Failed+stats.Quarantined)/float64(denom))
+		}
+		if stats.Total > 0 {
+			fmt.Fprintf(&buf, "# HELP refinery_build_retry_churn Retry ratio in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_build_retry_churn gauge\n")
+			fmt.Fprintf(&buf, "refinery_build_retry_churn %.4f\n", float64(stats.Retry)/float64(stats.Total))
+		}
+	}
+	if stats, err := h.Store.LogChunkStats(ctx, since); err == nil {
+		fmt.Fprintf(&buf, "# HELP refinery_log_chunks_recent_total Log chunks ingested in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_log_chunks_recent_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_log_chunks_recent_total{window_min=%d} %d\n", windowMin, stats.Total)
+		if windowMin > 0 {
+			fmt.Fprintf(&buf, "# HELP refinery_log_chunks_per_min Log chunk throughput per minute.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_log_chunks_per_min gauge\n")
+			fmt.Fprintf(&buf, "refinery_log_chunks_per_min %0.2f\n", float64(stats.Total)/float64(windowMin))
+		}
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.WriteHeader(http.StatusOK)
@@ -2167,6 +2282,8 @@ func (h *Handler) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		BuildPoolSize        int    `json:"build_pool_size,omitempty"`
 		PlanPoolSize         int    `json:"plan_pool_size,omitempty"`
 		HeartbeatIntervalSec int    `json:"heartbeat_interval_sec,omitempty"`
+		CASHits              int64  `json:"cas_hits,omitempty"`
+		CASMisses            int64  `json:"cas_misses,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
@@ -2187,6 +2304,8 @@ func (h *Handler) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		BuildPoolSize:        body.BuildPoolSize,
 		PlanPoolSize:         body.PlanPoolSize,
 		HeartbeatIntervalSec: body.HeartbeatIntervalSec,
+		CASHits:              body.CASHits,
+		CASMisses:            body.CASMisses,
 	}
 	if err := h.Store.UpsertWorkerStatus(r.Context(), status); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
