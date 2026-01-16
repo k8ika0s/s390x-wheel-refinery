@@ -82,7 +82,7 @@ Legend:
      log stream throughput, CAS hit rate.
    - Success: Prometheus dashboard shows live system health.
 
-9) Alerts + runbooks
+9) Alerts + runbooks (done)
    - Alert on queue backlog, build failure spikes, worker silence, DB errors.
    - Provide runbooks for recovery steps.
    - Success: on-call can resolve issues quickly.
