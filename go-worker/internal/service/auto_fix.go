@@ -29,6 +29,11 @@ type autoFixResult struct {
 	DecisionTrace []string
 }
 
+type autoFixState struct {
+	lastApplied   time.Time
+	lastSignature string
+}
+
 func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string, hints []plan.Hint, knownHints map[string]bool) autoFixResult {
 	if !w.Cfg.AutoFixEnabled {
 		return autoFixResult{DecisionTrace: []string{"auto-fix disabled"}}
@@ -139,11 +144,21 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 
 	merged := mergeRecipes(job.Recipes, recipes)
 	applied := len(merged) > len(job.Recipes)
+	signature := recipeSignature(merged)
+	blockedReason := ""
 	if applied && reason == "" {
 		reason = "applied hint recipes"
 	}
 	if applied {
+		if ok, guardReason := w.canApplyAutoFix(job, signature); !ok {
+			applied = false
+			blockedReason = guardReason
+		}
+	}
+	if applied {
 		addTrace("applied recipes: %s", strings.Join(merged, ", "))
+	} else if blockedReason != "" {
+		addTrace("auto-fix blocked: %s", blockedReason)
 	} else if len(recipes) == 0 {
 		addTrace("no hint recipes matched")
 	} else {
@@ -151,6 +166,7 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 	}
 	if applied {
 		log.Printf("auto-fix: %s@%s applied recipes=%v hints=%v", job.Name, job.Version, merged, dedupeStrings(matchedIDs))
+		w.markAutoFixApplied(job, signature)
 	}
 	impact, impactReason := recipeImpact(merged)
 	return autoFixResult{
@@ -159,11 +175,71 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		HintIDs:      dedupeStrings(matchedIDs),
 		SavedHintIDs: dedupeStrings(saved),
 		Reason:       reason,
+		BlockedReason: blockedReason,
 		BlockedHints: dedupeStrings(blocked),
 		Impact:       impact,
 		ImpactReason: impactReason,
 		DecisionTrace: dedupeStrings(trace),
 	}
+}
+
+func autoFixKey(job runner.Job) string {
+	name := strings.TrimSpace(job.Name)
+	version := strings.TrimSpace(job.Version)
+	if name == "" || version == "" {
+		return ""
+	}
+	return strings.ToLower(name) + "@" + strings.ToLower(version)
+}
+
+func recipeSignature(recipes []string) string {
+	if len(recipes) == 0 {
+		return ""
+	}
+	deduped := dedupeStrings(recipes)
+	if len(deduped) == 0 {
+		return ""
+	}
+	return strings.ToLower(strings.Join(deduped, "|"))
+}
+
+func (w *Worker) canApplyAutoFix(job runner.Job, signature string) (bool, string) {
+	if signature == "" {
+		return true, ""
+	}
+	key := autoFixKey(job)
+	if key == "" {
+		return true, ""
+	}
+	w.autoFixMu.Lock()
+	defer w.autoFixMu.Unlock()
+	state, ok := w.autoFixState[key]
+	if ok {
+		if state.lastSignature != "" && state.lastSignature == signature {
+			return false, "duplicate auto-fix already applied"
+		}
+		window := time.Duration(w.Cfg.AutoFixRateLimitMin) * time.Minute
+		if window > 0 && !state.lastApplied.IsZero() && time.Since(state.lastApplied) < window {
+			return false, "rate limit: auto-fix cooldown active"
+		}
+	}
+	return true, ""
+}
+
+func (w *Worker) markAutoFixApplied(job runner.Job, signature string) {
+	if signature == "" {
+		return
+	}
+	key := autoFixKey(job)
+	if key == "" {
+		return
+	}
+	w.autoFixMu.Lock()
+	w.autoFixState[key] = autoFixState{
+		lastApplied:   time.Now(),
+		lastSignature: signature,
+	}
+	w.autoFixMu.Unlock()
 }
 
 func (w *Worker) canSaveAutoHint(pkg string) bool {

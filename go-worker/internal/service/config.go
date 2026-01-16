@@ -54,6 +54,7 @@ type Config struct {
 	AutoFixEnabled       bool
 	AutoSaveHints        bool
 	AutoFixMinConfidence string
+	AutoFixRateLimitMin  int
 	AutoHintRateLimitMin int
 	AutorunInterval      int
 	BatchSize            int
@@ -135,6 +136,7 @@ func fromEnv() Config {
 		AutoFixEnabled:       getenvBool("AUTO_FIX_ENABLED", true),
 		AutoSaveHints:        getenvBool("AUTO_SAVE_HINTS", true),
 		AutoFixMinConfidence: getenv("AUTO_FIX_MIN_CONFIDENCE", "low"),
+		AutoFixRateLimitMin:  getenvInt("AUTO_FIX_RATE_LIMIT_MINUTES", 15),
 		AutoHintRateLimitMin: getenvInt("AUTO_HINT_RATE_LIMIT_MINUTES", 60),
 		BatchSize:            getenvInt("BATCH_SIZE", 50),
 		RunCmd:               parseCmd(getenv("WORKER_RUN_CMD", "")),

@@ -48,6 +48,8 @@ type Worker struct {
 	planSnap     plan.Snapshot
 	autoHintMu   sync.Mutex
 	autoHintLast map[string]time.Time
+	autoFixMu    sync.Mutex
+	autoFixState map[string]autoFixState
 	// buildPoolSize allows dynamic overrides from control-plane settings.
 	buildPoolSize *atomic.Int32
 	activeBuilds  atomic.Int32
@@ -922,6 +924,7 @@ func BuildWorker(cfg Config) (*Worker, error) {
 		},
 		packPath:     make(map[string]string),
 		autoHintLast: make(map[string]time.Time),
+		autoFixState: make(map[string]autoFixState),
 		buildPoolSize: func() *atomic.Int32 {
 			var v atomic.Int32
 			if cfg.BuildPoolSize > 0 {

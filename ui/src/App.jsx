@@ -334,6 +334,41 @@ const formatReasonCode = (code) => {
   const clean = key.replace(/_/g, " ");
   return clean.charAt(0).toUpperCase() + clean.slice(1);
 };
+const recipeImpact = (recipes = []) => {
+  if (!Array.isArray(recipes) || recipes.length === 0) {
+    return { impact: "", reason: "" };
+  }
+  if (recipes.length >= 6) {
+    return { impact: "high", reason: "bulk dependency install" };
+  }
+  const high = new Set([
+    "build-essential",
+    "gcc",
+    "g++",
+    "clang",
+    "llvm",
+    "rust",
+    "rustc",
+    "cargo",
+    "gcc-c++",
+  ]);
+  for (const recipe of recipes) {
+    const [mgrRaw = "", argRaw = ""] = String(recipe).split(":", 2);
+    const mgr = mgrRaw.trim().toLowerCase();
+    const arg = argRaw.trim();
+    if (mgr === "env") {
+      return { impact: "high", reason: "environment override" };
+    }
+    if (mgr === "apt" || mgr === "dnf" || mgr === "pip") {
+      for (const tok of arg.split(/\s+/)) {
+        if (high.has(tok.toLowerCase())) {
+          return { impact: "high", reason: `installs ${tok}` };
+        }
+      }
+    }
+  }
+  return { impact: "normal", reason: "" };
+};
 const buildIdentityKey = (nodeId, name, version) => {
   if (nodeId) return `node:${String(nodeId).toLowerCase()}`;
   return buildKey(name, version);
@@ -4580,6 +4615,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                         const isExpanded = Boolean(expandedBuilds[rowKey]);
                         const isSelected = Boolean(selectedBuilds[rowKey]);
                         const recipesLabel = (b.recipes || []).join(", ") || "-";
+                        const impact = recipeImpact(b.recipes || []);
+                        const impactLabel = impact.impact === "high" ? "High impact" : "";
                         const hintsLabel = (b.hint_ids || []).join(", ") || "-";
                         const logHref = b.package && b.version
                           ? `${apiBase || getApiBase()}/api/logs/${encodeURIComponent(b.package)}/${encodeURIComponent(b.version)}`
@@ -4616,7 +4653,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                               <td className="px-2 py-2">{b.attempts ?? 0}</td>
                               <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
                               <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
-                              <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{recipesLabel}</td>
+                              <td className="px-2 py-2 text-slate-400">
+                                <div className="truncate max-w-[220px]">{recipesLabel}</div>
+                                {impactLabel && (
+                                  <span className="chip text-[10px] text-amber-200 border-amber-400/30" title={impact.reason}>
+                                    {impactLabel}
+                                  </span>
+                                )}
+                              </td>
                               <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">
                                 {reasonLabel ? (
                                   <span className="chip text-[10px]" title={reasonDetail || errorLabel}>
@@ -4643,6 +4687,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                                     <div><span className="text-slate-500">Backoff:</span> {formatTimestamp(b.backoff_until) || "-"}</div>
                                     <div><span className="text-slate-500">Backoff reason:</span> {b.backoff_reason || "-"}</div>
                                     <div><span className="text-slate-500">Backoff delay:</span> {b.backoff_seconds ? formatDuration(b.backoff_seconds) : "-"}</div>
+                                    <div><span className="text-slate-500">Impact:</span> {impact.impact || "-"}</div>
                                     <div><span className="text-slate-500">Reason:</span> {formatReasonCode(b.reason_code) || "-"}</div>
                                     <div><span className="text-slate-500">Reason detail:</span> {b.reason_detail || "-"}</div>
                                     <div className="md:col-span-2"><span className="text-slate-500">Hints:</span> {hintsLabel}</div>
