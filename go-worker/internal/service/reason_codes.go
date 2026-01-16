@@ -16,6 +16,8 @@ var (
 	missingLibraryRe   = regexp.MustCompile(`(?i)cannot find -l([a-z0-9_+.\-]+)`)
 	pkgConfigMissingRe = regexp.MustCompile(`(?i)no package ['"]?([^'"]+)['"]? found`)
 	cmakeMissingRe     = regexp.MustCompile(`(?i)could not find ([a-z0-9_+.\-]+)`)
+	cmakeFailureRe     = regexp.MustCompile(`(?i)cmake error|cmake failed`)
+	linkerErrorRe      = regexp.MustCompile(`(?i)undefined reference to|ld: cannot find|linker command failed|ld returned \d+ exit status|collect2: error`)
 	cmdNotFoundRe      = regexp.MustCompile(`(?i)(?:^|\\s)([a-z0-9_+.\-]+): command not found`)
 )
 
@@ -54,6 +56,12 @@ func classifyFailureReason(err error, logText string) failureReason {
 	}
 	if match := cmakeMissingRe.FindStringSubmatch(text); len(match) > 1 {
 		return failureReason{Code: "cmake_missing", Detail: match[1]}
+	}
+	if cmakeFailureRe.MatchString(text) {
+		return failureReason{Code: "cmake_failure", Detail: ""}
+	}
+	if linkerErrorRe.MatchString(text) {
+		return failureReason{Code: "linker_error", Detail: ""}
 	}
 	if strings.Contains(strings.ToLower(text), "rust compiler not found") ||
 		strings.Contains(strings.ToLower(text), "rustc: command not found") {

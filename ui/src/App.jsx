@@ -315,6 +315,25 @@ const getEventAttempt = (event) => {
   const meta = event?.metadata || {};
   return normalizeAttemptValue(meta.attempt ?? meta.attempts ?? event?.attempt ?? event?.attempts);
 };
+const reasonLabels = {
+  missing_module: "Missing module",
+  missing_header: "Missing header",
+  missing_library: "Missing library",
+  pkg_config_missing: "pkg-config missing",
+  cmake_missing: "CMake missing",
+  cmake_failure: "CMake failure",
+  linker_error: "Linker error",
+  rust_toolchain_missing: "Rust toolchain missing",
+  compiler_missing: "Compiler missing",
+  build_tool_missing: "Build tool missing",
+};
+const formatReasonCode = (code) => {
+  if (!code) return "";
+  const key = String(code);
+  if (reasonLabels[key]) return reasonLabels[key];
+  const clean = key.replace(/_/g, " ");
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
+};
 const buildIdentityKey = (nodeId, name, version) => {
   if (nodeId) return `node:${String(nodeId).toLowerCase()}`;
   return buildKey(name, version);
@@ -1384,7 +1403,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                 {buildStatus.reason_code && (
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Reason</span>
-                    <span className="capitalize">{buildStatus.reason_code.replace(/_/g, " ")}</span>
+                    <span>{formatReasonCode(buildStatus.reason_code)}</span>
                   </div>
                 )}
                 {buildStatus.reason_detail && (
@@ -1590,7 +1609,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                     : "—";
                   const errorLabel = attempt.failure_summary || attempt.last_error || "";
                   const recipesLabel = attempt.recipes.length ? attempt.recipes.join(", ") : "none";
-                  const reasonChip = attempt.reason_code ? attempt.reason_code.replace(/_/g, " ") : "";
+                  const reasonChip = formatReasonCode(attempt.reason_code);
                   return (
                     <div key={`${attempt.package}-${attempt.version}-${attempt.attempt}`} className="border border-border rounded-lg p-3 text-xs text-slate-200">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -4554,7 +4573,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                         const statusSince = pickStatusSince(b);
                         const statusAge = statusSince ? formatDuration(Math.max(0, nowSec - statusSince)) : "—";
                         const errorLabel = b.failure_summary || b.last_error || "-";
-                        const reasonLabel = b.reason_code || "";
+                        const reasonLabel = formatReasonCode(b.reason_code);
                         const reasonDetail = b.reason_detail || "";
                         const rowKey = buildRowKey(b) || `${b.package}-${b.version}-${idx}`;
                         const pulseKey = buildRowKey(b);
@@ -4624,7 +4643,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                                     <div><span className="text-slate-500">Backoff:</span> {formatTimestamp(b.backoff_until) || "-"}</div>
                                     <div><span className="text-slate-500">Backoff reason:</span> {b.backoff_reason || "-"}</div>
                                     <div><span className="text-slate-500">Backoff delay:</span> {b.backoff_seconds ? formatDuration(b.backoff_seconds) : "-"}</div>
-                                    <div><span className="text-slate-500">Reason:</span> {b.reason_code || "-"}</div>
+                                    <div><span className="text-slate-500">Reason:</span> {formatReasonCode(b.reason_code) || "-"}</div>
                                     <div><span className="text-slate-500">Reason detail:</span> {b.reason_detail || "-"}</div>
                                     <div className="md:col-span-2"><span className="text-slate-500">Hints:</span> {hintsLabel}</div>
                                     <div className="md:col-span-3"><span className="text-slate-500">Recipes:</span> {recipesLabel}</div>
