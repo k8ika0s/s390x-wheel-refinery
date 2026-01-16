@@ -1,14 +1,16 @@
 flowchart TD
-    HISTORY[History DB] --> SUMMARY[Summary/recent/failures]
-    HISTORY --> VARIANTS[Variants, events]
-    HISTORY --> LOGS[Logs paths/stream]
-    QUEUE[Retry queue] --> QAPI[Queue APIs\nlist/clear/enqueue]
+    HISTORY[History DB] --> SUMMARY[Summary recent failures]
+    HISTORY --> VARIANTS[Variants and events]
+    HISTORY --> LOGS[Logs and log chunks]
+    QUEUE[Retry queue] --> QAPI[Queue APIs\nlist clear enqueue]
     WORKER[Worker trigger\nlocal or webhook] --> API
     MANIFEST[/manifest.json/] --> API
-    API[Go Control Plane] --> UI[SPA/UI]
+    API[Go Control Plane] --> UI[SPA UI]
     SUMMARY --> API
     VARIANTS --> API
     LOGS --> API
+    API --> HUB[Log hub]
+    HUB --> UI
     QAPI --> API
     API --> WORKER
     API --> ENQUEUE[POST /package/name/retry]

@@ -1,32 +1,42 @@
 flowchart LR
     subgraph Inputs
-        IN[Uploaded wheels / requirements.txt]
-        CFG[Config: python versions, policy, strategy]
+        IN[Uploads requirements and wheels]
+        CFG[Config python versions policy strategy]
     end
 
-    PLAN[Go planner<br/>DAG: runtime+packs+wheels+repair<br/>CAS reuse vs build]
-    Q[Queue backend<br/>file / Redis / Kafka]
-    subgraph CAS
-        ZOT["CAS registry: Zot"]
-        MINIO["Object store: MinIO inputs + wheelhouse"]
+    PLAN[Go planner<br/>DAG runtime pack wheel repair]
+    Q[Queue backend<br/>file Redis Kafka]
+    subgraph Control
+        CP[Control plane API]
+        DB[(Postgres)]
+        HUB[Log hub]
+        HINTS[Hint catalog]
+    end
+    subgraph Storage
+        ZOT[CAS registry Zot]
+        MINIO[Object store wheelhouse and inputs]
     end
     subgraph Builder
         WKR[Go worker]
-        RUN[Podman runner<br/>builder image]
-        REC[Recipes pack/runtime/repair]
+        RUN[Podman runner]
+        REC[Recipes pack runtime repair]
     end
-    CP[Go control-plane API]
     UI[React UI]
 
     IN --> CP
-    CP --> PLAN
+    CP --> DB
+    CP --> HINTS
+    HINTS --> PLAN
     CFG --> PLAN
     PLAN --> Q
     PLAN -. cache check .-> ZOT
     Q --> WKR
-    WKR -->|fetch wheels/packs/runtime| ZOT
+    WKR -->|fetch artifacts| ZOT
+    WKR -->|push artifacts| ZOT
     WKR --> RUN
-    RUN -->|build+repair| ZOT
-    RUN -->|wheel uploads| MINIO
-    RUN -->|logs/manifest/events| CP
+    RUN -->|build outputs| MINIO
+    WKR -->|status events manifest| CP
+    WKR -->|log chunks| CP
+    CP --> HUB
+    HUB -->|live logs| UI
     CP <--> UI
