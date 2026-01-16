@@ -3014,6 +3014,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const pendingInputsCount = toArray(pendingInputs).length;
   const clearBuildsLabel = buildStatusFilter ? `Clear ${buildStatusFilter} builds` : "Clear pending builds";
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
+  const queueItemKey = (q) => {
+    const pkg = q.package || "unknown";
+    const ver = q.version || "latest";
+    const py = q.python_tag || "-";
+    const plat = q.platform_tag || "-";
+    return `${pkg}::${ver}::${py}::${plat}`;
+  };
   const hints = toArray(hintsState);
   const metrics = dashboard?.metrics;
   const buildStatusCounts = builds.reduce(
@@ -4108,11 +4115,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                   </tr>
                 </thead>
                 <tbody>
-                  {queueItemsSorted.map((q, idx) => {
+                  {queueItemsSorted.map((q) => {
                     const key = `${q.package}@${q.version || "latest"}`;
                     const checked = Boolean(selectedQueue[key]);
                     return (
-                      <tr key={`${q.package}-${q.version}-${idx}`} className="border-t border-slate-800">
+                      <tr key={queueItemKey(q)} className="border-t border-slate-800">
                         <td className="px-2 py-2">
                           <input type="checkbox" checked={checked} onChange={() => toggleSelectQueue(q)} />
                         </td>
@@ -4790,11 +4797,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                         </tr>
                       </thead>
                       <tbody>
-                        {queueItemsSorted.map((q, idx) => {
+                        {queueItemsSorted.map((q) => {
                           const key = `${q.package}@${q.version || "latest"}`;
                           const checked = Boolean(selectedQueue[key]);
                           return (
-                            <tr key={`${q.package}-${q.version}-${idx}`} className="border-t border-slate-800">
+                            <tr key={queueItemKey(q)} className="border-t border-slate-800">
                               <td className="px-2 py-2">
                                 <input type="checkbox" checked={checked} onChange={() => toggleSelectQueue(q)} />
                               </td>

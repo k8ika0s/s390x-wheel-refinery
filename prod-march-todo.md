@@ -102,7 +102,7 @@ Legend:
 
 ## P2: Above-and-beyond polish + scale
 ### UX refinement
-1) Smooth UI refresh
+1) Smooth UI refresh (done)
    - Reduce flicker in queue tables; maintain stable row ordering.
    - Success: tables update without full redraws.
 
