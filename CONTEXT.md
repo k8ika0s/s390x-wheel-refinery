@@ -44,11 +44,12 @@ compose rebuilds in tmux session kd1.
 - UI loads existing chunks then tails the WebSocket for live updates.
 
 ## Configuration highlights
-- Control-plane: AUTO_PLAN, AUTO_BUILD, WORKER_TOKEN, CAS_REGISTRY_*,
-  OBJECT_STORE_*.
+- Control-plane: AUTO_PLAN, AUTO_BUILD, UI_TOKEN, WORKER_TOKEN,
+  METRICS_WINDOW_MINUTES, CAS_REGISTRY_*, OBJECT_STORE_*.
 - Worker: AUTO_BUILD, BUILD_POLL_INTERVAL_SEC, BUILD_POOL_SIZE, PLAN_POLL_*,
-  CONTAINER_IMAGE, PACK_RECIPES_DIR, DEFAULT_RUNTIME_CMD, DEFAULT_REPAIR_CMD,
-  CAS_REGISTRY_*, OBJECT_STORE_*.
+  CACHE_MAX_BYTES, CACHE_PRUNE_INTERVAL_SEC, CONTAINER_IMAGE, PACK_RECIPES_DIR,
+  DEFAULT_RUNTIME_CMD, DEFAULT_REPAIR_CMD, CAS_REGISTRY_*, OBJECT_STORE_*.
+- Compose limits: WORKER_CPU_LIMIT, WORKER_MEM_LIMIT (worker container caps).
 
 ## Remote deployment (kdz)
 - SSH alias: kdz
@@ -66,9 +67,8 @@ compose rebuilds in tmux session kd1.
 ## Known gaps / open items
 - Tighten leased vs building semantics in UI (avoid marking all leased items
   as building).
-- Production hardening: metrics, auth, backups, pip repository export, and
-  load/soak tests (see prod-march-todo.md).
-- Continue UX smoothing and clearer status/error messaging.
+- P2 polish + scale items remain (retry queue redesign, batching, dedupe,
+  sharding) — see prod-march-todo.md.
 
 ## Legacy notes
 - .codex-context and .codex-context-catchup contain historical notes; they may
