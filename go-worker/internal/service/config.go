@@ -76,7 +76,9 @@ type Config struct {
 	ObjectStoreAccess       string
 	ObjectStoreSecret       string
 	ObjectStoreUseSSL       bool
+	ObjectStoreMaxParallel  int
 	LocalCASDir             string
+	CASMaxParallel          int
 	CASPushEnabled          bool
 	RepairPushEnabled       bool
 	RepairToolVersion       string
@@ -158,7 +160,9 @@ func fromEnv() Config {
 		ObjectStoreAccess:       getenv("OBJECT_STORE_ACCESS_KEY", ""),
 		ObjectStoreSecret:       getenv("OBJECT_STORE_SECRET_KEY", ""),
 		ObjectStoreUseSSL:       getenvBool("OBJECT_STORE_USE_SSL", false),
+		ObjectStoreMaxParallel:  getenvInt("OBJECT_STORE_MAX_PARALLEL", 4),
 		LocalCASDir:             getenv("LOCAL_CAS_DIR", "/cache/cas"),
+		CASMaxParallel:          getenvInt("CAS_MAX_PARALLEL", 4),
 		CASPushEnabled:          getenvBool("CAS_PUSH_ENABLED", false),
 		RepairPushEnabled:       getenvBool("REPAIR_PUSH_ENABLED", false),
 		RepairToolVersion:       getenv("REPAIR_TOOL_VERSION", ""),
@@ -262,5 +266,5 @@ func (c Config) ObjectStore() objectstore.Store {
 	if err != nil {
 		return objectstore.NullStore{}
 	}
-	return store
+	return objectstore.NewLimitedStore(store, c.ObjectStoreMaxParallel)
 }

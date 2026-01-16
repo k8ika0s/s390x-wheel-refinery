@@ -32,6 +32,7 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/reporter"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 // Worker drains the queue and runs jobs.
@@ -52,6 +53,7 @@ type Worker struct {
 	autoFixState map[string]autoFixState
 	cachePruneMu sync.Mutex
 	cachePruneAt atomic.Int64
+	casLimiter   *semaphore.Weighted
 	// buildPoolSize allows dynamic overrides from control-plane settings.
 	buildPoolSize *atomic.Int32
 	activeBuilds  atomic.Int32
@@ -930,6 +932,12 @@ func BuildWorker(cfg Config) (*Worker, error) {
 		packPath:     make(map[string]string),
 		autoHintLast: make(map[string]time.Time),
 		autoFixState: make(map[string]autoFixState),
+		casLimiter: func() *semaphore.Weighted {
+			if cfg.CASMaxParallel <= 0 {
+				return nil
+			}
+			return semaphore.NewWeighted(int64(cfg.CASMaxParallel))
+		}(),
 		buildPoolSize: func() *atomic.Int32 {
 			var v atomic.Int32
 			if cfg.BuildPoolSize > 0 {
@@ -945,6 +953,30 @@ func queueKey(name, version, nodeID string) string {
 		return "node:" + strings.ToLower(nodeID)
 	}
 	return strings.ToLower(name) + "::" + strings.ToLower(version)
+}
+
+func (w *Worker) withCASLimit(ctx context.Context, fn func() error) error {
+	if w.casLimiter == nil {
+		return fn()
+	}
+	if err := w.casLimiter.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer w.casLimiter.Release(1)
+	return fn()
+}
+
+func (w *Worker) casFetch(ctx context.Context, id artifact.ID, destPath string) error {
+	return w.withCASLimit(ctx, func() error {
+		return w.Fetcher.Fetch(ctx, id, destPath)
+	})
+}
+
+func (w *Worker) casPush(ctx context.Context, id artifact.ID, data []byte, contentType string) error {
+	return w.withCASLimit(ctx, func() error {
+		_, err := w.Pusher.Push(ctx, id, data, contentType)
+		return err
+	})
 }
 
 func (w *Worker) recordCASHit() {
@@ -1233,6 +1265,28 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 	if err != nil {
 		return
 	}
+	var objectTasks []func(context.Context) error
+	var casTasks []func(context.Context) error
+	runTasks := func(label string, limit int, tasks []func(context.Context) error) {
+		if len(tasks) == 0 {
+			return
+		}
+		if limit <= 0 {
+			limit = 1
+		}
+		g, ctx := errgroup.WithContext(ctx)
+		g.SetLimit(limit)
+		for _, task := range tasks {
+			task := task
+			g.Go(func() error {
+				return task(ctx)
+			})
+		}
+		if err := g.Wait(); err != nil {
+			log.Printf("upload %s tasks: %v", label, err)
+		}
+	}
+
 	// Pack publish is not tied to specific files; packs are metadata-only here.
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".whl") {
@@ -1254,9 +1308,15 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 			}
 		}
 		key := fmt.Sprintf("%s/%s/%s", strings.ToLower(job.Name), job.Version, e.Name())
-		_ = store.Put(ctx, key, data, "application/octet-stream")
+		payload := data
+		objectTasks = append(objectTasks, func(ctx context.Context) error {
+			return store.Put(ctx, key, payload, "application/octet-stream")
+		})
 		if w.Cfg.CASPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
-			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, data, "application/octet-stream")
+			id := artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}
+			casTasks = append(casTasks, func(ctx context.Context) error {
+				return w.casPush(ctx, id, payload, "application/octet-stream")
+			})
 		}
 	}
 	if w.Cfg.RepairPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
@@ -1281,11 +1341,15 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 			if ok, err := verifyBytesDigest(repData, repKey.Digest()); err == nil && !ok {
 				log.Printf("skip CAS push for repair: digest mismatch %s", repKey.Digest())
 			} else {
-				_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}, repData, "application/octet-stream")
-				if store != nil {
-					repairKey := fmt.Sprintf("%s/%s/repair-%s.whl", strings.ToLower(job.Name), job.Version, job.WheelDigest)
-					_ = store.Put(ctx, repairKey, repData, "application/octet-stream")
-				}
+				id := artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}
+				payload := repData
+				casTasks = append(casTasks, func(ctx context.Context) error {
+					return w.casPush(ctx, id, payload, "application/octet-stream")
+				})
+				repairKey := fmt.Sprintf("%s/%s/repair-%s.whl", strings.ToLower(job.Name), job.Version, job.WheelDigest)
+				objectTasks = append(objectTasks, func(ctx context.Context) error {
+					return store.Put(ctx, repairKey, payload, "application/octet-stream")
+				})
 			}
 		}
 	}
@@ -1298,12 +1362,20 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 						log.Printf("skip CAS push for pack: digest mismatch %s", d)
 						continue
 					}
-					_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.PackType, Digest: d}, data, "application/octet-stream")
+					id := artifact.ID{Type: artifact.PackType, Digest: d}
+					payload := data
+					casTasks = append(casTasks, func(ctx context.Context) error {
+						return w.casPush(ctx, id, payload, "application/octet-stream")
+					})
 					continue
 				}
 			}
 			if stub, err := w.stubPayload("pack", d, nil); err == nil {
-				_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.PackType, Digest: d}, stub, "application/octet-stream")
+				id := artifact.ID{Type: artifact.PackType, Digest: d}
+				payload := stub
+				casTasks = append(casTasks, func(ctx context.Context) error {
+					return w.casPush(ctx, id, payload, "application/octet-stream")
+				})
 			}
 		}
 	}
@@ -1312,16 +1384,27 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 			if data, err := os.ReadFile(job.RuntimePath); err == nil {
 				if ok, err := verifyBytesDigest(data, job.RuntimeDigest); err == nil && !ok {
 					log.Printf("skip CAS push for runtime: digest mismatch %s", job.RuntimeDigest)
-					return
+					goto finalize
 				}
-				_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}, data, "application/octet-stream")
-				return
+				id := artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}
+				payload := data
+				casTasks = append(casTasks, func(ctx context.Context) error {
+					return w.casPush(ctx, id, payload, "application/octet-stream")
+				})
+				goto finalize
 			}
 		}
 		if stub, err := w.stubPayload("runtime", job.RuntimeDigest, nil); err == nil {
-			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}, stub, "application/octet-stream")
+			id := artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}
+			payload := stub
+			casTasks = append(casTasks, func(ctx context.Context) error {
+				return w.casPush(ctx, id, payload, "application/octet-stream")
+			})
 		}
 	}
+finalize:
+	runTasks("object store", w.Cfg.ObjectStoreMaxParallel, objectTasks)
+	runTasks("cas", w.Cfg.CASMaxParallel, casTasks)
 }
 
 func (w *Worker) stubPayload(kind, digest string, meta map[string]any) ([]byte, error) {
@@ -1504,7 +1587,7 @@ func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
 		return err
 	}
 	destPath := filepath.Join(destDir, strings.ReplaceAll(job.WheelDigest, ":", "_")+".bin")
-	if err := w.Fetcher.Fetch(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, destPath); err != nil {
+	if err := w.casFetch(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, destPath); err != nil {
 		w.recordCASMiss()
 		return err
 	}
@@ -1549,7 +1632,7 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 		extractDir := filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_"))
 		fetched := false
 		if w.Fetcher.BaseURL != "" {
-			if err := w.Fetcher.Fetch(ctx, id, destPath); err == nil {
+			if err := w.casFetch(ctx, id, destPath); err == nil {
 				if _, err := os.Stat(destPath); err == nil {
 					if ok, err := verifyFileDigest(destPath, id.Digest); err == nil && ok {
 						fetched = true
@@ -1613,7 +1696,7 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 	destPath := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_")+".tar")
 	extractDir := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_"))
 	if w.Fetcher.BaseURL != "" {
-		if err := w.Fetcher.Fetch(ctx, rtID, destPath); err == nil {
+		if err := w.casFetch(ctx, rtID, destPath); err == nil {
 			if _, err := os.Stat(destPath); err == nil {
 				if ok, err := verifyFileDigest(destPath, rtID.Digest); err == nil && ok {
 					if err := extractTar(destPath, extractDir); err == nil && !isManifestOnly(extractDir) {
