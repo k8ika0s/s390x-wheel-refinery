@@ -25,12 +25,20 @@ const mockData = {
   "/api/queue/enqueue": { detail: "enqueued" },
   "/api/worker/trigger": { detail: "ok" },
   "/api/pending-inputs": [],
+  "/api/builds?package=pkg": [{ package: "pkg", version: "1.0", status: "built" }],
+  "/api/builds": [
+    { package: "leased-pkg", version: "1.0", status: "leased" },
+    { package: "building-pkg", version: "2.0", status: "building" },
+    { package: "queued-pkg", version: "3.0", status: "pending" },
+  ],
 };
 
 beforeEach(() => {
   global.fetch = vi.fn((url, opts = {}) => {
     const path = url.replace(/^http:\/\/localhost:3000/, "");
-    const key = Object.keys(mockData).find((k) => path.startsWith(k));
+    const key = Object.keys(mockData)
+      .sort((a, b) => b.length - a.length)
+      .find((k) => path.startsWith(k));
     const body = key ? mockData[key] : mockData["/api/summary"]; // fallback to avoid hard 404 in tests
     const status = key ? 200 : 200;
     return Promise.resolve(
@@ -56,11 +64,11 @@ describe("App dashboard", () => {
 
   it("allows enqueue retry", async () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={["/builds"]}>
         <App />
       </MemoryRouter>,
     );
-    await waitFor(() => expect(screen.getAllByText(/Queue length/i).length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByText(/Build queue & events/i)).toBeInTheDocument());
     fireEvent.change(screen.getByPlaceholderText(/package name/i), { target: { value: "pkg" } });
     const enqueueBtn = screen.getAllByText(/^Enqueue$/i)[0];
     fireEvent.click(enqueueBtn);
@@ -76,9 +84,21 @@ describe("App dashboard", () => {
         <App />
       </MemoryRouter>,
     );
-    await waitFor(() => expect(screen.getByText(/pkg/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText(/pkg/i).length).toBeGreaterThan(0));
     fireEvent.click(screen.getByText(/Events & Logs/i));
     fireEvent.click(screen.getByText(/View log/i));
     await waitFor(() => expect(screen.getByText(/build log/i)).toBeInTheDocument());
+  });
+
+  it("shows leased separately from building in the build queue summary", async () => {
+    render(
+      <MemoryRouter initialEntries={["/builds"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText(/Build queue & events/i)).toBeInTheDocument());
+    expect(screen.getByText(/Building: 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/Leased: 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/Queued: 1/i)).toBeInTheDocument();
   });
 });

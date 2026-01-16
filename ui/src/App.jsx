@@ -935,6 +935,14 @@ function PackageDetail({ token, pushToast, apiBase }) {
     }
   }, []);
 
+  const appendLogContent = useCallback((chunk, ts) => {
+    if (!chunk) return;
+    const normalized = String(chunk).replace(/\n$/, "");
+    setLogContent((prev) => (prev ? `${prev}\n${normalized}` : normalized));
+    const nextTs = ts ? toTimestampMs(ts) : Date.now();
+    setLastLogTs(nextTs);
+  }, []);
+
   const pollLogChunks = useCallback(async (ev) => {
     if (!ev?.name || !ev?.version) return;
     const chunks = await fetchLogChunks(ev.name, ev.version, { after: logAfterRef.current, limit: 200 }, token).catch(() => []);
@@ -958,14 +966,6 @@ function PackageDetail({ token, pushToast, apiBase }) {
       pollLogChunks(ev);
     }, 3000);
   }, [pollLogChunks, stopLogPolling]);
-
-  const appendLogContent = useCallback((chunk, ts) => {
-    if (!chunk) return;
-    const normalized = String(chunk).replace(/\n$/, "");
-    setLogContent((prev) => (prev ? `${prev}\n${normalized}` : normalized));
-    const nextTs = ts ? toTimestampMs(ts) : Date.now();
-    setLastLogTs(nextTs);
-  }, []);
 
   const loadLog = useCallback(async (ev, opts = {}) => {
     const silent = Boolean(opts.silent);
@@ -1165,6 +1165,23 @@ function PackageDetail({ token, pushToast, apiBase }) {
     return { total, slice };
   };
 
+  const attemptsArr = useMemo(() => toArray(data?.attempts), [data]);
+  const attemptsTimeline = useMemo(() => {
+    const sorted = attemptsArr
+      .filter((a) => Number.isFinite(a.attempt))
+      .slice()
+      .sort((a, b) => a.attempt - b.attempt);
+    let prevRecipes = [];
+    return sorted.map((entry) => {
+      const recipes = toArray(entry.recipes);
+      const added = recipes.filter((r) => !prevRecipes.includes(r));
+      const removed = prevRecipes.filter((r) => !recipes.includes(r));
+      const out = { ...entry, recipes, added, removed };
+      prevRecipes = recipes;
+      return out;
+    });
+  }, [attemptsArr]);
+
   if (loading) {
     return (
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -1197,22 +1214,6 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const failuresArr = toArray(failures).map(normalizeEvent);
   const eventsArr = toArray(events).map(normalizeEvent);
   const hintsArr = toArray(hints);
-  const attemptsArr = toArray(attempts);
-  const attemptsTimeline = useMemo(() => {
-    const sorted = attemptsArr
-      .filter((a) => Number.isFinite(a.attempt))
-      .slice()
-      .sort((a, b) => a.attempt - b.attempt);
-    let prevRecipes = [];
-    return sorted.map((entry) => {
-      const recipes = toArray(entry.recipes);
-      const added = recipes.filter((r) => !prevRecipes.includes(r));
-      const removed = prevRecipes.filter((r) => !recipes.includes(r));
-      const out = { ...entry, recipes, added, removed };
-      prevRecipes = recipes;
-      return out;
-    });
-  }, [attemptsArr]);
   const logDownloadHref = selectedEvent ? `${apiBase || ""}/api/logs/${selectedEvent.name}/${selectedEvent.version}?raw=1` : null;
 
   const variantsPaged = paged(variantsArr, variantPage);
@@ -2900,14 +2901,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const buildStatusCounts = builds.reduce(
     (acc, b) => {
       const status = (b?.status || "").toLowerCase();
-      if (status === "building" || status === "leased") acc.active += 1;
+      if (status === "building") acc.building += 1;
+      if (status === "leased") acc.leased += 1;
       if (status === "pending" || status === "retry") acc.queued += 1;
       if (status === "failed") acc.failed += 1;
       if (status === "quarantined") acc.quarantined += 1;
       if (status === "built") acc.built += 1;
       return acc;
     },
-    { active: 0, queued: 0, failed: 0, built: 0, quarantined: 0 },
+    { building: 0, leased: 0, queued: 0, failed: 0, built: 0, quarantined: 0 },
   );
   const pollState = !pollMs
     ? "off"
@@ -4410,7 +4412,8 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             </div>
             <div className="text-xs text-slate-400 flex flex-wrap gap-3">
               <span>Oldest queued: {buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}</span>
-              <span>Active: {buildStatusCounts.active}</span>
+              <span>Building: {buildStatusCounts.building}</span>
+              <span>Leased: {buildStatusCounts.leased}</span>
               <span>Queued: {buildStatusCounts.queued}</span>
               <span>Failed: {buildStatusCounts.failed}</span>
               <span>Quarantined: {buildStatusCounts.quarantined}</span>
