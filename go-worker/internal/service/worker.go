@@ -940,9 +940,17 @@ func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	if w.Cfg.BatchSize > 0 {
+	max := w.Cfg.BatchSize
+	poolSize := w.Cfg.BuildPoolSize
+	if w.buildPoolSize != nil && w.buildPoolSize.Load() > 0 {
+		poolSize = int(w.buildPoolSize.Load())
+	}
+	if poolSize > 0 && (max == 0 || poolSize < max) {
+		max = poolSize
+	}
+	if max > 0 {
 		q := req.URL.Query()
-		q.Set("max", strconv.Itoa(w.Cfg.BatchSize))
+		q.Set("max", strconv.Itoa(max))
 		req.URL.RawQuery = q.Encode()
 	}
 	if w.Cfg.ControlPlaneToken != "" {
