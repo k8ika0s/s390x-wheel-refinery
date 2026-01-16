@@ -45,6 +45,9 @@ type fakeStore struct {
 	lastLogChunksLimit    int
 	manifestPackages      []string
 	manifestByNormalized  map[string][]store.ManifestEntry
+	trimEventsCalls       int
+	trimAttemptsCalls     int
+	trimManifestsCalls    int
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -121,6 +124,18 @@ func (f *fakeStore) TrimLogChunksBefore(ctx context.Context, cutoff time.Time) (
 	return 0, nil
 }
 func (f *fakeStore) TrimLogsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) TrimEventsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	f.trimEventsCalls++
+	return 0, nil
+}
+func (f *fakeStore) TrimBuildAttemptsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	f.trimAttemptsCalls++
+	return 0, nil
+}
+func (f *fakeStore) TrimManifestsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	f.trimManifestsCalls++
 	return 0, nil
 }
 func (f *fakeStore) Plan(ctx context.Context) ([]store.PlanNode, error) {
@@ -730,5 +745,28 @@ func TestSimpleIndexPackage(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "numpy-1.0.0.whl") || !strings.Contains(body, "https://example.com/numpy-1.0.0.whl") {
 		t.Fatalf("expected wheel link, got %s", body)
+	}
+}
+
+func TestMaybeSweepRetention(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{
+		Store: fs,
+		Config: config.Config{
+			EventRetentionDays:    1,
+			AttemptRetentionDays:  1,
+			ManifestRetentionDays: 1,
+			LogRetentionSweepSec:  1,
+		},
+	}
+	h.maybeSweepLogs(context.Background())
+	if fs.trimEventsCalls != 1 {
+		t.Fatalf("expected events trim call, got %d", fs.trimEventsCalls)
+	}
+	if fs.trimAttemptsCalls != 1 {
+		t.Fatalf("expected attempts trim call, got %d", fs.trimAttemptsCalls)
+	}
+	if fs.trimManifestsCalls != 1 {
+		t.Fatalf("expected manifests trim call, got %d", fs.trimManifestsCalls)
 	}
 }

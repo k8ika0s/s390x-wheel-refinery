@@ -31,6 +31,9 @@ type Config struct {
 	LogChunkMaxAgeHours  int
 	LogEntryMaxAgeHours  int
 	LogRetentionSweepSec int
+	EventRetentionDays   int
+	AttemptRetentionDays int
+	ManifestRetentionDays int
 	HintsDir             string
 	PythonRecipesDir     string
 	SeedHints            bool
@@ -73,6 +76,9 @@ func FromEnv() Config {
 		LogChunkMaxAgeHours:  getenvInt("LOG_CHUNK_MAX_AGE_HOURS", 168),
 		LogEntryMaxAgeHours:  getenvInt("LOG_ENTRY_MAX_AGE_HOURS", 720),
 		LogRetentionSweepSec: getenvInt("LOG_RETENTION_SWEEP_SEC", 300),
+		EventRetentionDays:   getenvInt("EVENT_RETENTION_DAYS", 0),
+		AttemptRetentionDays: getenvInt("BUILD_ATTEMPT_RETENTION_DAYS", 0),
+		ManifestRetentionDays: getenvInt("MANIFEST_RETENTION_DAYS", 0),
 		HintsDir:             getenv("HINTS_DIR", "/hints"),
 		PythonRecipesDir:     getenv("PYTHON_RECIPES_DIR", "/recipes"),
 		SeedHints:            getenv("HINTS_SEED", "1") != "0",

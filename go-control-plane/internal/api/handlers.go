@@ -2001,7 +2001,10 @@ func (h *Handler) maybeSweepLogs(ctx context.Context) {
 	}
 	maxChunkAge := h.Config.LogChunkMaxAgeHours
 	maxLogAge := h.Config.LogEntryMaxAgeHours
-	if maxChunkAge <= 0 && maxLogAge <= 0 {
+	eventDays := h.Config.EventRetentionDays
+	attemptDays := h.Config.AttemptRetentionDays
+	manifestDays := h.Config.ManifestRetentionDays
+	if maxChunkAge <= 0 && maxLogAge <= 0 && eventDays <= 0 && attemptDays <= 0 && manifestDays <= 0 {
 		return
 	}
 	intervalSec := h.Config.LogRetentionSweepSec
@@ -2023,6 +2026,18 @@ func (h *Handler) maybeSweepLogs(ctx context.Context) {
 	if maxLogAge > 0 {
 		cutoff := now.Add(-time.Duration(maxLogAge) * time.Hour)
 		_, _ = h.Store.TrimLogsBefore(ctx, cutoff)
+	}
+	if eventDays > 0 {
+		cutoff := now.Add(-time.Duration(eventDays) * 24 * time.Hour)
+		_, _ = h.Store.TrimEventsBefore(ctx, cutoff)
+	}
+	if attemptDays > 0 {
+		cutoff := now.Add(-time.Duration(attemptDays) * 24 * time.Hour)
+		_, _ = h.Store.TrimBuildAttemptsBefore(ctx, cutoff)
+	}
+	if manifestDays > 0 {
+		cutoff := now.Add(-time.Duration(manifestDays) * 24 * time.Hour)
+		_, _ = h.Store.TrimManifestsBefore(ctx, cutoff)
 	}
 }
 

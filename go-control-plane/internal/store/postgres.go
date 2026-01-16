@@ -1738,6 +1738,51 @@ func (p *PostgresStore) TrimLogsBefore(ctx context.Context, cutoff time.Time) (i
 	return count, nil
 }
 
+func (p *PostgresStore) TrimEventsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	res, err := p.db.ExecContext(ctx, `
+	    DELETE FROM events
+	    WHERE timestamp < $1
+	`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
+func (p *PostgresStore) TrimBuildAttemptsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	res, err := p.db.ExecContext(ctx, `
+	    DELETE FROM build_attempts
+	    WHERE created_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
+func (p *PostgresStore) TrimManifestsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	if err := p.ensureDB(); err != nil {
+		return 0, err
+	}
+	res, err := p.db.ExecContext(ctx, `
+	    DELETE FROM manifests
+	    WHERE created_at < $1
+	`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
+}
+
 func (p *PostgresStore) SearchLogs(ctx context.Context, q string, limit int) ([]LogEntry, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err

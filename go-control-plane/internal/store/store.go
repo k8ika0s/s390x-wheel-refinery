@@ -287,6 +287,9 @@ type Store interface {
 	TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error)
 	TrimLogChunksBefore(ctx context.Context, cutoff time.Time) (int64, error)
 	TrimLogsBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	TrimEventsBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	TrimBuildAttemptsBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	TrimManifestsBefore(ctx context.Context, cutoff time.Time) (int64, error)
 
 	// Plan/Manifest/Artifacts
 	Plan(ctx context.Context) ([]PlanNode, error)
