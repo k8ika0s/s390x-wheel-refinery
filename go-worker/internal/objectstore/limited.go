@@ -5,10 +5,10 @@ import "context"
 // LimitedStore wraps a store with a concurrency limiter for Put/Get.
 type LimitedStore struct {
 	Store Store
-	sem   semaphore
+	sem   limiter
 }
 
-type semaphore interface {
+type limiter interface {
 	Acquire(context.Context, int64) error
 	Release(int64)
 }

@@ -6,7 +6,7 @@ type weightedSemaphore struct {
 	*semaphore.Weighted
 }
 
-func newWeighted(max int) semaphore {
+func newWeighted(max int) limiter {
 	if max <= 0 {
 		return nil
 	}
