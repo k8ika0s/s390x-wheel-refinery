@@ -1348,7 +1348,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireUIToken(r); err != nil {
+	if err := h.requireWorkerToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1369,6 +1369,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		ReasonDetail   string   `json:"reason_detail,omitempty"`
 		Recipes        []string `json:"recipes,omitempty"`
 		HintIDs        []string `json:"hint_ids,omitempty"`
+		WorkerID       string   `json:"worker_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -1378,7 +1379,11 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package, version, and status required"})
 		return
 	}
-	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.BackoffReason, body.BackoffSeconds, body.ReasonCode, body.ReasonDetail, body.Recipes, body.HintIDs, body.PlanID, body.NodeID); err != nil {
+	workerID := strings.TrimSpace(body.WorkerID)
+	if workerID == "" {
+		workerID = strings.TrimSpace(r.Header.Get("X-Worker-Id"))
+	}
+	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.BackoffReason, body.BackoffSeconds, body.ReasonCode, body.ReasonDetail, body.Recipes, body.HintIDs, body.PlanID, body.NodeID, workerID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1434,6 +1439,9 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		if len(body.HintIDs) > 0 {
 			meta["hint_ids"] = body.HintIDs
 		}
+		if workerID != "" {
+			meta["worker_id"] = workerID
+		}
 		_ = h.Store.RecordEvent(r.Context(), store.Event{
 			Name:           body.Package,
 			Version:        body.Version,
@@ -1469,13 +1477,17 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireUIToken(r); err != nil {
+	if err := h.requireWorkerToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 	max := parseIntDefault(r.URL.Query().Get("max"), 5, 100)
+	workerID := strings.TrimSpace(r.Header.Get("X-Worker-Id"))
+	if workerID == "" {
+		workerID = strings.TrimSpace(r.URL.Query().Get("worker_id"))
+	}
 	_, _ = h.requeueStaleBuilds(r.Context())
-	builds, err := h.Store.LeaseBuilds(r.Context(), max)
+	builds, err := h.Store.LeaseBuilds(r.Context(), max, workerID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

@@ -1483,6 +1483,12 @@ function PackageDetail({ token, pushToast, apiBase }) {
                     <span className="truncate max-w-[180px]" title={buildStatus.node_id}>{buildStatus.node_id}</span>
                   </div>
                 )}
+                {buildStatus.worker_id && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Worker</span>
+                    <span className="truncate max-w-[180px]" title={buildStatus.worker_id}>{buildStatus.worker_id}</span>
+                  </div>
+                )}
                 {buildStatus.plan_id ? (
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Plan ID</span>
@@ -4807,6 +4813,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                                     <div><span className="text-slate-500">Backoff:</span> {formatTimestamp(b.backoff_until) || "-"}</div>
                                     <div><span className="text-slate-500">Backoff reason:</span> {b.backoff_reason || "-"}</div>
                                     <div><span className="text-slate-500">Backoff delay:</span> {b.backoff_seconds ? formatDuration(b.backoff_seconds) : "-"}</div>
+                                    <div><span className="text-slate-500">Worker:</span> {b.worker_id || "-"}</div>
                                     <div><span className="text-slate-500">Impact:</span> {impact.impact || "-"}</div>
                                     <div><span className="text-slate-500">Reason:</span> {formatReasonCode(b.reason_code) || "-"}</div>
                                     <div><span className="text-slate-500">Reason detail:</span> {b.reason_detail || "-"}</div>

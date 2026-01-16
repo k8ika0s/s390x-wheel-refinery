@@ -33,6 +33,7 @@ type fakeStore struct {
 	restoredPendingID     int64
 	queuedBuilds          []store.PlanNode
 	leaseBuildsMax        int
+	leaseBuildsWorkerID   string
 	leaseBuilds           []store.BuildStatus
 	requeueCalls          int
 	requeueLeaseAge       int
@@ -40,6 +41,7 @@ type fakeStore struct {
 	requeueResp           []store.BuildStatus
 	lastBuildUpdatePlanID int64
 	lastBuildUpdateNodeID string
+	lastBuildUpdateWorker string
 	lastLogChunksAfterID  int64
 	lastLogChunksAfterSeq int64
 	lastLogChunksAttempt  int
@@ -231,9 +233,10 @@ func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int, pl
 func (f *fakeStore) BuildQueueStats(ctx context.Context) (store.BuildQueueStats, error) {
 	return store.BuildQueueStats{}, nil
 }
-func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string) error {
+func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string, workerID string) error {
 	f.lastBuildUpdatePlanID = planID
 	f.lastBuildUpdateNodeID = nodeID
+	f.lastBuildUpdateWorker = workerID
 	return nil
 }
 func (f *fakeStore) UpsertBuildAttempt(ctx context.Context, attempt store.BuildAttempt) error {
@@ -242,8 +245,9 @@ func (f *fakeStore) UpsertBuildAttempt(ctx context.Context, attempt store.BuildA
 func (f *fakeStore) ListBuildAttempts(ctx context.Context, pkg, version string, limit int) ([]store.BuildAttempt, error) {
 	return nil, nil
 }
-func (f *fakeStore) LeaseBuilds(ctx context.Context, max int) ([]store.BuildStatus, error) {
+func (f *fakeStore) LeaseBuilds(ctx context.Context, max int, workerID string) ([]store.BuildStatus, error) {
 	f.leaseBuildsMax = max
+	f.leaseBuildsWorkerID = workerID
 	return f.leaseBuilds, nil
 }
 func (f *fakeStore) RequeueStaleBuilds(ctx context.Context, leaseAgeSec int, buildAgeSec int) ([]store.BuildStatus, error) {
@@ -622,6 +626,7 @@ func TestBuildQueuePopRequeuesStale(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/build-queue/pop?max=7", nil)
 	req.Header.Set("X-Worker-Token", "token")
+	req.Header.Set("X-Worker-Id", "worker-1")
 	rec := httptest.NewRecorder()
 	h.buildQueuePop(rec, req)
 
@@ -636,6 +641,9 @@ func TestBuildQueuePopRequeuesStale(t *testing.T) {
 	}
 	if fs.leaseBuildsMax != 7 {
 		t.Fatalf("expected lease max 7, got %d", fs.leaseBuildsMax)
+	}
+	if fs.leaseBuildsWorkerID != "worker-1" {
+		t.Fatalf("expected worker_id worker-1, got %q", fs.leaseBuildsWorkerID)
 	}
 
 	var payload struct {
@@ -674,6 +682,7 @@ func TestBuildStatusUpdateCapturesNodeID(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/builds/status", bytes.NewReader(payload))
 	req.Header.Set("X-Worker-Token", "token")
+	req.Header.Set("X-Worker-Id", "worker-9")
 	rec := httptest.NewRecorder()
 	h.buildStatusUpdate(rec, req)
 
@@ -685,6 +694,9 @@ func TestBuildStatusUpdateCapturesNodeID(t *testing.T) {
 	}
 	if fs.lastBuildUpdateNodeID != "node-abc" {
 		t.Fatalf("expected node_id node-abc, got %q", fs.lastBuildUpdateNodeID)
+	}
+	if fs.lastBuildUpdateWorker != "worker-9" {
+		t.Fatalf("expected worker_id worker-9, got %q", fs.lastBuildUpdateWorker)
 	}
 	if fs.lastEvent.Metadata == nil {
 		t.Fatalf("expected event metadata")

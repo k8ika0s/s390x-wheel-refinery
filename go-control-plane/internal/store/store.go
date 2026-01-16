@@ -162,6 +162,7 @@ type PlanSummary struct {
 type BuildStatus struct {
 	ID             int64    `json:"id"`
 	NodeID         string   `json:"node_id,omitempty"`
+	WorkerID       string   `json:"worker_id,omitempty"`
 	Package        string   `json:"package"`
 	Version        string   `json:"version"`
 	PythonTag      string   `json:"python_tag"`
@@ -337,10 +338,10 @@ type Store interface {
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error)
 	BuildQueueStats(ctx context.Context) (BuildQueueStats, error)
-	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string) error
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string, workerID string) error
 	UpsertBuildAttempt(ctx context.Context, attempt BuildAttempt) error
 	ListBuildAttempts(ctx context.Context, pkg, version string, limit int) ([]BuildAttempt, error)
-	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
+	LeaseBuilds(ctx context.Context, max int, workerID string) ([]BuildStatus, error)
 	RequeueStaleBuilds(ctx context.Context, leaseAgeSec int, buildAgeSec int) ([]BuildStatus, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)
 

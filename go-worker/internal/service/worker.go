@@ -570,6 +570,9 @@ func (w *Worker) reportBuildStatus(ctx context.Context, job runner.Job, status s
 	if len(hintIDs) > 0 {
 		body["hint_ids"] = hintIDs
 	}
+	if w.Cfg.WorkerID != "" {
+		body["worker_id"] = w.Cfg.WorkerID
+	}
 	data, _ := json.Marshal(body)
 	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if reqErr != nil {
@@ -578,6 +581,12 @@ func (w *Worker) reportBuildStatus(ctx context.Context, job runner.Job, status s
 	req.Header.Set("Content-Type", "application/json")
 	if w.Cfg.ControlPlaneToken != "" {
 		req.Header.Set("X-Worker-Token", w.Cfg.ControlPlaneToken)
+	}
+	if w.Cfg.WorkerID != "" {
+		req.Header.Set("X-Worker-Id", w.Cfg.WorkerID)
+	}
+	if w.Cfg.WorkerID != "" {
+		req.Header.Set("X-Worker-Id", w.Cfg.WorkerID)
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, doErr := client.Do(req)

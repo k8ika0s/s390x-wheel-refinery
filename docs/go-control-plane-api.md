@@ -30,8 +30,8 @@ This draft captures the intended endpoints for the Go control plane, matching th
 **Builds**
 - `GET /builds?status=&plan_id=&package=&version=&limit=` → build status rows.
 - `GET /builds/attempts?package=&version=&limit=` → per-attempt history for a package/version.
-- `POST /builds/status` → worker status updates (attempts/backoff/failure metadata).
-- `POST /build-queue/pop` → lease build items (worker).
+- `POST /builds/status` → worker status updates (attempts/backoff/failure metadata, optional `worker_id`).
+- `POST /build-queue/pop` → lease build items (worker; accepts optional `X-Worker-Id` header).
 - `POST /build-queue/requeue-stale` → requeue stale leases/building items.
 
 **Plan/Manifest/Artifacts**
