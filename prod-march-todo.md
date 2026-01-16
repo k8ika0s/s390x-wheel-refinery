@@ -106,7 +106,7 @@ Legend:
    - Reduce flicker in queue tables; maintain stable row ordering.
    - Success: tables update without full redraws.
 
-2) Empty/blocked states
+2) Empty/blocked states (done)
    - More informative empty states with recommended actions and links.
    - Success: user always knows the next action.
 
