@@ -2427,15 +2427,17 @@ func (h *Handler) logsChunks(w http.ResponseWriter, r *http.Request) {
 	}
 	name, version := parts[3], parts[4]
 	after := parseInt64Default(r.URL.Query().Get("after"), 0)
+	afterSeq := parseInt64Default(r.URL.Query().Get("after_seq"), 0)
 	limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 2000)
+	attempt := parseIntDefault(r.URL.Query().Get("attempt"), 0, 1000)
 	tail := r.URL.Query().Get("tail")
 	tailOn := tail == "1" || strings.EqualFold(tail, "true")
 	var chunks []store.LogChunk
 	var err error
 	if tailOn {
-		chunks, err = h.Store.TailLogChunks(r.Context(), name, version, limit)
+		chunks, err = h.Store.TailLogChunks(r.Context(), name, version, attempt, limit)
 	} else {
-		chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+		chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, afterSeq, attempt, limit)
 	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -2463,7 +2465,7 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 		}
 		runID := r.URL.Query().Get("run_id")
 		attempt := parseIntDefault(r.URL.Query().Get("attempt"), 0, 1000)
-		key := logStreamKey(name, version)
+		key := logStreamKey(name, version, attempt)
 		seqFallback := int64(0)
 		trimEvery := 50
 		trimCounter := 0
@@ -2527,35 +2529,51 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "log stream ingested"})
 	case http.MethodGet:
 		after := parseInt64Default(r.URL.Query().Get("after"), 0)
+		afterSeq := parseInt64Default(r.URL.Query().Get("after_seq"), 0)
 		limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 2000)
+		attempt := parseIntDefault(r.URL.Query().Get("attempt"), 0, 1000)
 		tail := r.URL.Query().Get("tail")
 		tailOn := tail == "1" || strings.EqualFold(tail, "true")
-		key := logStreamKey(name, version)
+		key := logStreamKey(name, version, attempt)
 		websocket.Handler(func(ws *websocket.Conn) {
 			defer ws.Close()
 			if h.Store != nil {
 				var chunks []store.LogChunk
 				var err error
 				if tailOn {
-					chunks, err = h.Store.TailLogChunks(r.Context(), name, version, limit)
+					chunks, err = h.Store.TailLogChunks(r.Context(), name, version, attempt, limit)
 				} else {
-					chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+					chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, afterSeq, attempt, limit)
 				}
 				if err == nil {
 					for _, chunk := range chunks {
 						_ = websocket.JSON.Send(ws, chunk)
 						after = chunk.ID
+						if chunk.Seq > 0 {
+							afterSeq = chunk.Seq
+						}
 					}
 				}
 			}
 			ch, unsubscribe := h.getLogHub().subscribe(key)
 			defer unsubscribe()
 			for chunk := range ch {
-				if chunk.ID <= after {
+				if afterSeq > 0 {
+					if chunk.Seq > 0 && chunk.Seq <= afterSeq {
+						continue
+					}
+				} else if chunk.ID <= after {
+					continue
+				}
+				if attempt > 0 && chunk.Attempt != attempt {
 					continue
 				}
 				if err := websocket.JSON.Send(ws, chunk); err != nil {
 					return
+				}
+				after = chunk.ID
+				if chunk.Seq > 0 {
+					afterSeq = chunk.Seq
 				}
 			}
 		}).ServeHTTP(w, r)

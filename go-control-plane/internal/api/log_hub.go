@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 
@@ -56,6 +57,10 @@ func (h *logHub) publish(key string, chunk store.LogChunk) {
 	h.mu.RUnlock()
 }
 
-func logStreamKey(name, version string) string {
-	return strings.ToLower(name) + "::" + strings.ToLower(version)
+func logStreamKey(name, version string, attempt int) string {
+	key := strings.ToLower(name) + "::" + strings.ToLower(version)
+	if attempt <= 0 {
+		return key
+	}
+	return key + "::" + strconv.Itoa(attempt)
 }

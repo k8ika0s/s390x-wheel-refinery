@@ -534,6 +534,12 @@ paths:
           name: after
           schema: { type: integer, format: int64 }
         - in: query
+          name: after_seq
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: attempt
+          schema: { type: integer }
+        - in: query
           name: limit
           schema: { type: integer, default: 200, maximum: 2000 }
         - in: query
@@ -563,6 +569,12 @@ paths:
         - in: query
           name: after
           schema: { type: integer, format: int64 }
+        - in: query
+          name: after_seq
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: attempt
+          schema: { type: integer }
         - in: query
           name: limit
           schema: { type: integer, default: 200, maximum: 2000 }

@@ -304,21 +304,29 @@ export function fetchLog(name, version, token) {
   return request(`/api/logs/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, {}, token);
 }
 
-export function fetchLogChunks(name, version, { after = 0, limit = 500, tail = false } = {}, token) {
+export function fetchLogChunks(name, version, { after = 0, afterSeq = 0, attempt = 0, limit = 500, tail = false } = {}, token) {
   const params = new URLSearchParams();
   if (tail) {
     params.set("tail", "1");
+  } else if (afterSeq) {
+    params.set("after_seq", afterSeq);
   } else if (after) {
     params.set("after", after);
   }
+  if (attempt) params.set("attempt", attempt);
   if (limit) params.set("limit", limit);
   const qs = params.toString();
   return request(`/api/logs/chunks/${encodeURIComponent(name)}/${encodeURIComponent(version)}${qs ? `?${qs}` : ""}`, {}, token);
 }
 
-export function openLogStream(name, version, { after = 0, limit = 500 } = {}) {
+export function openLogStream(name, version, { after = 0, afterSeq = 0, attempt = 0, limit = 500 } = {}) {
   const params = new URLSearchParams();
-  if (after) params.set("after", after);
+  if (afterSeq) {
+    params.set("after_seq", afterSeq);
+  } else if (after) {
+    params.set("after", after);
+  }
+  if (attempt) params.set("attempt", attempt);
   if (limit) params.set("limit", limit);
   const qs = params.toString();
   const url = toWebSocketUrl(`/api/logs/stream/${encodeURIComponent(name)}/${encodeURIComponent(version)}${qs ? `?${qs}` : ""}`);

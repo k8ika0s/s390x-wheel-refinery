@@ -73,9 +73,9 @@ This draft captures the intended endpoints for the Go control plane, matching th
 - `GET /logs/{name}/{version}` → log content/metadata (latest stored entry); `?raw=1` returns plain text.
 - `GET /logs/search?q=&limit=` → simple text search over logs.
 - `POST /logs` → ingest/store a full log entry (name/version/content/timestamp auto-set if omitted).
-- `GET /logs/chunks/{name}/{version}?after=&limit=` → list stored log chunks (for replay); `tail=1` returns the newest chunks.
-- `POST /logs/stream/{name}/{version}` → worker streaming ingest (NDJSON chunks).
-- `GET /logs/stream/{name}/{version}?after=&limit=` → WebSocket stream of log chunks (live tail).
+- `GET /logs/chunks/{name}/{version}?after=&after_seq=&attempt=&limit=` → list stored log chunks (for replay); `tail=1` returns the newest chunks; `attempt` scopes a single build attempt.
+- `POST /logs/stream/{name}/{version}?attempt=&run_id=` → worker streaming ingest (NDJSON chunks).
+- `GET /logs/stream/{name}/{version}?after=&after_seq=&attempt=&limit=` → WebSocket stream of log chunks (live tail, attempt-scoped).
 
 ### Data shapes (coarse)
 - Event: `{run_id,name,version,python_tag,platform_tag,status,detail,metadata,timestamp,matched_hint_ids?}`

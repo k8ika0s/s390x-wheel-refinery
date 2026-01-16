@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS log_chunks (
 CREATE INDEX IF NOT EXISTS idx_log_chunks_name ON log_chunks(name);
 CREATE INDEX IF NOT EXISTS idx_log_chunks_version ON log_chunks(version);
 CREATE INDEX IF NOT EXISTS idx_log_chunks_name_version_id ON log_chunks(name, version, id);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_name_version_attempt_seq ON log_chunks(name, version, attempt, seq);
 CREATE INDEX IF NOT EXISTS idx_log_chunks_timestamp ON log_chunks USING BRIN (timestamp);
 
 CREATE TABLE IF NOT EXISTS manifests (
@@ -1565,7 +1566,7 @@ func (p *PostgresStore) PutLogChunk(ctx context.Context, chunk LogChunk) (int64,
 	return id, err
 }
 
-func (p *PostgresStore) ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]LogChunk, error) {
+func (p *PostgresStore) ListLogChunks(ctx context.Context, name, version string, afterID int64, afterSeq int64, attempt int, limit int) ([]LogChunk, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
@@ -1580,12 +1581,19 @@ func (p *PostgresStore) ListLogChunks(ctx context.Context, name, version string,
 	    FROM log_chunks
 	    WHERE name=$1 AND version=$2`
 	args := []any{name, version}
-	if afterID > 0 {
+	if attempt > 0 {
+		args = append(args, attempt)
+		q += fmt.Sprintf(" AND attempt = $%d", len(args))
+	}
+	if afterSeq > 0 {
+		args = append(args, afterSeq)
+		q += fmt.Sprintf(" AND seq > $%d", len(args))
+	} else if afterID > 0 {
 		args = append(args, afterID)
 		q += fmt.Sprintf(" AND id > $%d", len(args))
 	}
 	args = append(args, limit)
-	q += fmt.Sprintf(" ORDER BY id ASC LIMIT $%d", len(args))
+	q += fmt.Sprintf(" ORDER BY CASE WHEN seq IS NULL OR seq = 0 THEN id ELSE seq END ASC, id ASC LIMIT $%d", len(args))
 	rows, err := p.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -1612,7 +1620,7 @@ func (p *PostgresStore) ListLogChunks(ctx context.Context, name, version string,
 }
 
 // TailLogChunks returns the newest log chunks in ascending order.
-func (p *PostgresStore) TailLogChunks(ctx context.Context, name, version string, limit int) ([]LogChunk, error) {
+func (p *PostgresStore) TailLogChunks(ctx context.Context, name, version string, attempt int, limit int) ([]LogChunk, error) {
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
@@ -1622,11 +1630,18 @@ func (p *PostgresStore) TailLogChunks(ctx context.Context, name, version string,
 	if limit > 2000 {
 		limit = 2000
 	}
-	rows, err := p.db.QueryContext(ctx, `
+	q := `
 	    SELECT id,name,version,COALESCE(run_id,''),COALESCE(attempt,0),COALESCE(seq,0),content,extract(epoch from timestamp)::bigint
 	    FROM log_chunks
-	    WHERE name=$1 AND version=$2
-	    ORDER BY id DESC LIMIT $3`, name, version, limit)
+	    WHERE name=$1 AND version=$2`
+	args := []any{name, version}
+	if attempt > 0 {
+		args = append(args, attempt)
+		q += fmt.Sprintf(" AND attempt = $%d", len(args))
+	}
+	args = append(args, limit)
+	q += fmt.Sprintf(" ORDER BY CASE WHEN seq IS NULL OR seq = 0 THEN id ELSE seq END DESC, id DESC LIMIT $%d", len(args))
+	rows, err := p.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -38,6 +38,10 @@ type fakeStore struct {
 	requeueResp       []store.BuildStatus
 	lastBuildUpdatePlanID int64
 	lastBuildUpdateNodeID string
+	lastLogChunksAfterID  int64
+	lastLogChunksAfterSeq int64
+	lastLogChunksAttempt  int
+	lastLogChunksLimit    int
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -95,10 +99,16 @@ func (f *fakeStore) PutLog(ctx context.Context, entry store.LogEntry) error {
 func (f *fakeStore) PutLogChunk(ctx context.Context, chunk store.LogChunk) (int64, error) {
 	return 0, nil
 }
-func (f *fakeStore) ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]store.LogChunk, error) {
+func (f *fakeStore) ListLogChunks(ctx context.Context, name, version string, afterID int64, afterSeq int64, attempt int, limit int) ([]store.LogChunk, error) {
+	f.lastLogChunksAfterID = afterID
+	f.lastLogChunksAfterSeq = afterSeq
+	f.lastLogChunksAttempt = attempt
+	f.lastLogChunksLimit = limit
 	return nil, nil
 }
-func (f *fakeStore) TailLogChunks(ctx context.Context, name, version string, limit int) ([]store.LogChunk, error) {
+func (f *fakeStore) TailLogChunks(ctx context.Context, name, version string, attempt int, limit int) ([]store.LogChunk, error) {
+	f.lastLogChunksAttempt = attempt
+	f.lastLogChunksLimit = limit
 	return nil, nil
 }
 func (f *fakeStore) TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error) {
@@ -647,5 +657,26 @@ func TestBuildStatusUpdateCapturesNodeID(t *testing.T) {
 	}
 	if got := fs.lastEvent.Metadata["plan_id"]; got != int64(12) && got != float64(12) && got != int(12) {
 		t.Fatalf("expected event plan_id 12, got %v", got)
+	}
+}
+
+func TestLogsChunksHonorsAttemptAndSeq(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{Store: fs}
+	req := httptest.NewRequest(http.MethodGet, "/api/logs/chunks/demo/1.0?attempt=2&after_seq=10&limit=12", nil)
+	rec := httptest.NewRecorder()
+	h.logsChunks(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if fs.lastLogChunksAttempt != 2 {
+		t.Fatalf("expected attempt 2, got %d", fs.lastLogChunksAttempt)
+	}
+	if fs.lastLogChunksAfterSeq != 10 {
+		t.Fatalf("expected after_seq 10, got %d", fs.lastLogChunksAfterSeq)
+	}
+	if fs.lastLogChunksLimit != 12 {
+		t.Fatalf("expected limit 12, got %d", fs.lastLogChunksLimit)
 	}
 }

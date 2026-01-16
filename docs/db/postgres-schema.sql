@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS log_chunks (
 CREATE INDEX IF NOT EXISTS idx_log_chunks_name ON log_chunks(name);
 CREATE INDEX IF NOT EXISTS idx_log_chunks_version ON log_chunks(version);
 CREATE INDEX IF NOT EXISTS idx_log_chunks_name_version_id ON log_chunks(name, version, id);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_name_version_attempt_seq ON log_chunks(name, version, attempt, seq);
 CREATE INDEX IF NOT EXISTS idx_log_chunks_timestamp ON log_chunks USING BRIN (timestamp);
 
 CREATE TABLE IF NOT EXISTS manifests (

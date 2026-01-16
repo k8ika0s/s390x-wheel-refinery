@@ -306,6 +306,15 @@ const renderHighlightedText = (line, regex) => {
 };
 
 const buildKey = (name, version) => `${(name || "").toLowerCase()}::${(version || "").toLowerCase()}`;
+const normalizeAttemptValue = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  return Math.floor(num);
+};
+const getEventAttempt = (event) => {
+  const meta = event?.metadata || {};
+  return normalizeAttemptValue(meta.attempt ?? meta.attempts ?? event?.attempt ?? event?.attempts);
+};
 const buildIdentityKey = (nodeId, name, version) => {
   if (nodeId) return `node:${String(nodeId).toLowerCase()}`;
   return buildKey(name, version);
@@ -873,6 +882,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const logRef = useRef(null);
   const logStreamRef = useRef(null);
   const logAfterRef = useRef(0);
+  const logAfterSeqRef = useRef(0);
   const logPollRef = useRef(null);
   const [tab, setTab] = useState("overview");
   const buildFromState = location.state?.build || null;
@@ -951,7 +961,12 @@ function PackageDetail({ token, pushToast, apiBase }) {
 
   const pollLogChunks = useCallback(async (ev) => {
     if (!ev?.name || !ev?.version) return;
-    const chunks = await fetchLogChunks(ev.name, ev.version, { after: logAfterRef.current, limit: 200 }, token).catch(() => []);
+    const chunks = await fetchLogChunks(
+      ev.name,
+      ev.version,
+      { after: logAfterRef.current, afterSeq: logAfterSeqRef.current, attempt: ev.attempt || 0, limit: 200 },
+      token,
+    ).catch(() => []);
     if (Array.isArray(chunks) && chunks.length) {
       chunks.forEach((chunk) => {
         if (chunk?.content) {
@@ -961,6 +976,10 @@ function PackageDetail({ token, pushToast, apiBase }) {
       const lastId = chunks[chunks.length - 1]?.id;
       if (lastId) {
         logAfterRef.current = lastId;
+      }
+      const lastSeq = chunks[chunks.length - 1]?.seq;
+      if (lastSeq) {
+        logAfterSeqRef.current = lastSeq;
       }
     }
   }, [appendLogContent, token]);
@@ -983,20 +1002,28 @@ function PackageDetail({ token, pushToast, apiBase }) {
       setMessage("Log not available: missing package name or version.");
       return;
     }
+    const eventAttempt = getEventAttempt(normalized);
     setSelectedEvent({
       ...normalized,
       name: eventName,
       version: eventVersion,
       timestamp: normalized.timestamp ?? Date.now(),
+      attempt: eventAttempt || undefined,
     });
     logAfterRef.current = 0;
+    logAfterSeqRef.current = 0;
     if (!preserveContent) {
       setLogContent("");
       setLastLogTs(0);
     }
     setMessage("");
     try {
-      const chunks = await fetchLogChunks(eventName, eventVersion, { limit: 500, tail: true }, token).catch(() => []);
+      const chunks = await fetchLogChunks(
+        eventName,
+        eventVersion,
+        { limit: 500, tail: true, attempt: eventAttempt || 0 },
+        token,
+      ).catch(() => []);
       if (Array.isArray(chunks) && chunks.length) {
         const combined = chunks.map((c) => c.content || "").filter(Boolean).join("\n");
         if (combined) {
@@ -1007,6 +1034,10 @@ function PackageDetail({ token, pushToast, apiBase }) {
         const lastId = chunks[chunks.length - 1]?.id;
         if (lastId) {
           logAfterRef.current = lastId;
+        }
+        const lastSeq = chunks[chunks.length - 1]?.seq;
+        if (lastSeq) {
+          logAfterSeqRef.current = lastSeq;
         }
         const lastTs = chunks[chunks.length - 1]?.timestamp;
         if (lastTs) {
@@ -1095,10 +1126,12 @@ function PackageDetail({ token, pushToast, apiBase }) {
       setLogStreamStatus("idle");
       return;
     }
-    setLogStreamStatus("connecting");
+    setLogStreamStatus("replay");
+    const buildAttempt = normalizeAttemptValue(buildStatus?.attempts ?? buildStatus?.attempt ?? 0);
     const ev = {
       name: buildStatus.package || name,
       version: buildStatus.version,
+      attempt: buildAttempt || undefined,
       timestamp: buildStatus.updated_at || buildStatus.created_at || Date.now(),
     };
     let active = true;
@@ -1106,9 +1139,15 @@ function PackageDetail({ token, pushToast, apiBase }) {
       if (!active) return;
       closeLogStream();
       stopLogPolling();
+      setLogStreamStatus("connecting");
       let ws;
       try {
-        ws = openLogStream(ev.name, ev.version, { after: logAfterRef.current, limit: 500 });
+        ws = openLogStream(ev.name, ev.version, {
+          after: logAfterRef.current,
+          afterSeq: logAfterSeqRef.current,
+          attempt: ev.attempt || 0,
+          limit: 500,
+        });
       } catch (e) {
         setMessage(e?.message || "Unable to open log stream.");
         setLogStreamStatus("polling");
@@ -1127,6 +1166,9 @@ function PackageDetail({ token, pushToast, apiBase }) {
           }
           if (payload?.id) {
             logAfterRef.current = payload.id;
+          }
+          if (payload?.seq) {
+            logAfterSeqRef.current = payload.seq;
           }
         } catch {
           appendLogContent(event.data, Date.now());
@@ -1267,6 +1309,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const buildPackageName = buildStatus?.package || summary?.name || name;
   const buildVersionLabel = buildStatus?.version || summary?.latest?.version || "";
   const failureSummary = buildStatus?.failure_summary || "";
+  const logTailLabel = logStreamStatus === "replay" ? "replay" : logStreamStatus;
   const overviewGridClass = buildStatus ? "grid grid-cols-1 md:grid-cols-3 gap-4" : "grid grid-cols-1 md:grid-cols-2 gap-4";
 
   return (
@@ -1476,7 +1519,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
           )}
           {watchBuildLog && isBuildActive && (
             <div className="text-xs text-slate-400 flex flex-wrap gap-3">
-              <span>Log tail: {logStreamStatus}</span>
+              <span>Log tail: {logTailLabel}</span>
               <span>Last chunk: {lastLogAge}</span>
             </div>
           )}
