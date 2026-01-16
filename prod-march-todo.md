@@ -120,15 +120,15 @@ Legend:
    - Success: visually minimal but feature-complete panel.
 
 ### Performance and scale
-5) CAS/object storage batching
+5) CAS/object storage batching (done)
    - Batch uploads and downloads; parallelize safely with limits.
    - Success: faster builds under load without saturation.
 
-6) Build dedupe + reuse
+6) Build dedupe + reuse (done)
    - Detect duplicate queue entries and coalesce in-flight builds.
    - Success: no redundant builds when the same artifact is already running.
 
-7) Worker sharding
+7) Worker sharding (done)
    - Support multiple workers with clear ownership and safe leasing.
    - Success: horizontal scale without double builds.
 
