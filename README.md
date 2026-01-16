@@ -74,7 +74,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 ## Control-plane and UI
 - API on `:8080` (compose wiring): manifests, artifacts, metrics (`/metrics` Prometheus), queue ops, logs, and worker trigger.
 - UI on `:3000` (compose wiring): artifacts with digests/URLs, queue depth, metrics panels, and log viewers.
-- Auth: optional `WORKER_TOKEN` protects queue/trigger endpoints; UI can set it via `POST /api/session/token?token=...`.
+- Auth: optional `UI_TOKEN` protects UI write endpoints; `WORKER_TOKEN` protects worker posts. UI can set `UI_TOKEN` via `POST /api/session/ui-token?token=...`.
 
 ## Worker and queue
 - Queue backends: `file`, `redis`, or `kafka` (compose defaults to Redis).
@@ -101,7 +101,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - **Data dirs**: outputs appear in `./output`, cache/logs in `./cache`. Inputs are uploaded to object storage (MinIO) instead of a local `/input` folder.
 
 ## Configuration reference
-- **Control-plane**: `HTTP_ADDR`, `POSTGRES_DSN`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `WORKER_WEBHOOK_URL`, `WORKER_PLAN_URL`, `WORKER_TOKEN`, `CAS_REGISTRY_URL`, `CAS_REGISTRY_REPO`, `OBJECT_STORE_*`.
+- **Control-plane**: `HTTP_ADDR`, `POSTGRES_DSN`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `WORKER_WEBHOOK_URL`, `WORKER_PLAN_URL`, `UI_TOKEN`, `WORKER_TOKEN`, `CAS_REGISTRY_URL`, `CAS_REGISTRY_REPO`, `OBJECT_STORE_*`.
 - **Worker**: `OUTPUT_DIR`, `CACHE_DIR`, `PYTHON_VERSION`, `PLATFORM_TAG`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `PODMAN_BIN`, `CONTAINER_IMAGE`, `WORKER_RUN_CMD` (override container entrypoint), `PACK_RECIPES_DIR`, `DEFAULT_RUNTIME_CMD`, `DEFAULT_REPAIR_CMD`, `CAS_REGISTRY_URL/REPO`, `LOCAL_CAS_DIR`, `OBJECT_STORE_*`.
 - **Repair metadata**: `REPAIR_POLICY_HASH`, `REPAIR_TOOL_VERSION` are attached to repair artifacts for provenance.
 

@@ -40,7 +40,7 @@ export const getApiBase = () => {
 
 const jsonHeaders = (token) => ({
   "Content-Type": "application/json",
-  ...(token ? { "X-Worker-Token": token } : {}),
+  ...(token ? { "X-UI-Token": token } : {}),
 });
 
 const parseError = async (resp) => {
@@ -144,8 +144,8 @@ export function clearQueue(token) {
   return request("/api/queue/clear", { method: "POST" }, token);
 }
 
-export function setCookieToken(token) {
-  return request(`/api/session/token?token=${encodeURIComponent(token)}`, { method: "POST" }, token);
+export function setCookieUIToken(token) {
+  return request(`/api/session/ui-token?token=${encodeURIComponent(token)}`, { method: "POST" }, token);
 }
 
 export function fetchPendingInputs(token) {
@@ -174,7 +174,7 @@ export function clearPendingInputs(status = "pending", token) {
 export async function uploadRequirements(file, token) {
   const fd = new FormData();
   fd.append("file", file);
-  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const headers = token ? { "X-UI-Token": token } : undefined;
   const resp = await fetch(joinBasePath(getApiBase(), "/api/requirements/upload"), {
     method: "POST",
     body: fd,
@@ -189,7 +189,7 @@ export async function uploadRequirements(file, token) {
 export async function uploadWheel(file, token) {
   const fd = new FormData();
   fd.append("file", file);
-  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const headers = token ? { "X-UI-Token": token } : undefined;
   const resp = await fetch(joinBasePath(getApiBase(), "/api/wheels/upload"), {
     method: "POST",
     body: fd,
@@ -276,7 +276,7 @@ export function deleteHint(id, token) {
 export async function bulkUploadHints(file, token) {
   const fd = new FormData();
   fd.append("file", file);
-  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const headers = token ? { "X-UI-Token": token } : undefined;
   const resp = await fetch(joinBasePath(getApiBase(), "/api/hints/bulk"), {
     method: "POST",
     body: fd,

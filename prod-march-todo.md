@@ -92,7 +92,7 @@ Legend:
     - Success: disaster recovery is documented and tested.
 
 ### Security + access control
-11) Token scoping + rotation
+11) Token scoping + rotation (done)
     - Separate tokens for worker actions vs UI actions; rotate regularly.
     - Success: least-privilege tokens with documented rotation steps.
 

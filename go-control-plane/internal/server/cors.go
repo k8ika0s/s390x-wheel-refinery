@@ -19,7 +19,7 @@ func withCORS(cfg config.Config, next http.Handler) http.Handler {
 	}
 	allowedHeaders := cfg.CORSHeaders
 	if len(allowedHeaders) == 0 {
-		allowedHeaders = []string{"Content-Type", "Authorization", "X-Worker-Token"}
+		allowedHeaders = []string{"Content-Type", "Authorization", "X-Worker-Token", "X-UI-Token"}
 	}
 	allowAny := containsString(allowedOrigins, "*")
 

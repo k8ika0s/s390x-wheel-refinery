@@ -852,3 +852,40 @@ func TestMetricsIncludesAttemptsAndLogs(t *testing.T) {
 		t.Fatalf("expected cas_misses 15, got %v", workers["cas_misses"])
 	}
 }
+
+func TestTokenScopes(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{
+		Store:  fs,
+		Queue:  &fakeQueue{},
+		Config: config.Config{UIToken: "ui123", WorkerToken: "w123"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/queue/clear", nil)
+	rec := httptest.NewRecorder()
+	h.queueClear(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for missing ui token, got %d", rec.Code)
+	}
+	reqOK := httptest.NewRequest(http.MethodPost, "/api/queue/clear", nil)
+	reqOK.Header.Set("X-UI-Token", "ui123")
+	recOK := httptest.NewRecorder()
+	h.queueClear(recOK, reqOK)
+	if recOK.Code != http.StatusOK {
+		t.Fatalf("expected 200 with ui token, got %d", recOK.Code)
+	}
+
+	body := bytes.NewBufferString(`{"name":"demo","version":"1.0.0","content":"hi"}`)
+	reqLog := httptest.NewRequest(http.MethodPost, "/api/logs", body)
+	recLog := httptest.NewRecorder()
+	h.logsIngest(recLog, reqLog)
+	if recLog.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for missing worker token, got %d", recLog.Code)
+	}
+	reqLogOK := httptest.NewRequest(http.MethodPost, "/api/logs", bytes.NewBufferString(`{"name":"demo","version":"1.0.0","content":"hi"}`))
+	reqLogOK.Header.Set("X-Worker-Token", "w123")
+	recLogOK := httptest.NewRecorder()
+	h.logsIngest(recLogOK, reqLogOK)
+	if recLogOK.Code != http.StatusOK {
+		t.Fatalf("expected 200 with worker token, got %d", recLogOK.Code)
+	}
+}

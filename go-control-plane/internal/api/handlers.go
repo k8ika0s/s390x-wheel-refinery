@@ -68,6 +68,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/build-queue/pop", h.buildQueuePop)
 	mux.HandleFunc("/api/build-queue/requeue-stale", h.buildQueueRequeueStale)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
+	mux.HandleFunc("/api/session/ui-token", h.sessionUIToken)
 	mux.HandleFunc("/api/summary", h.summary)
 	mux.HandleFunc("/api/recent", h.recent)
 	mux.HandleFunc("/api/history", h.history)
@@ -519,6 +520,26 @@ func (h *Handler) sessionToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "token set"})
 }
 
+func (h *Handler) sessionUIToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token required"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "ui_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: false,
+		SameSite: http.SameSiteLaxMode,
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"detail": "ui token set"})
+}
+
 func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -781,6 +802,10 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if err := h.requireUIToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
 	if h.Config.ObjectStoreEndpoint == "" || h.Config.ObjectStoreBucket == "" {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input store not configured"})
 		return
@@ -861,6 +886,10 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) wheelsUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireUIToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 	if h.Config.ObjectStoreEndpoint == "" || h.Config.ObjectStoreBucket == "" {
@@ -966,6 +995,10 @@ func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, settings.Load(h.Config.SettingsPath))
 	case http.MethodPost:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		var s settings.Settings
 		if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -1037,7 +1070,7 @@ func (h *Handler) pendingInputsClear(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1083,7 +1116,7 @@ func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if action == "" && r.Method == http.MethodDelete {
-		if err := h.requireWorkerToken(r); err != nil {
+		if err := h.requireUIToken(r); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1108,6 +1141,10 @@ func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 			return
 		}
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		if h.PlanQ == nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "plan queue not configured"})
 			return
@@ -1123,7 +1160,7 @@ func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 			return
 		}
-		if err := h.requireWorkerToken(r); err != nil {
+		if err := h.requireUIToken(r); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1150,7 +1187,7 @@ func (h *Handler) pendingInputPop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1177,7 +1214,7 @@ func (h *Handler) pendingInputStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1215,7 +1252,7 @@ func (h *Handler) planQueueClear(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1270,7 +1307,7 @@ func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, list)
 	case http.MethodDelete:
-		if err := h.requireWorkerToken(r); err != nil {
+		if err := h.requireUIToken(r); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1311,7 +1348,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1432,7 +1469,7 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1725,6 +1762,10 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, res)
 	case http.MethodPost:
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		var body struct {
 			RunID          string           `json:"run_id"`
 			Plan           []store.PlanNode `json:"plan"`
@@ -1774,7 +1815,7 @@ func (h *Handler) plans(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, list)
 	case http.MethodDelete:
-		if err := h.requireWorkerToken(r); err != nil {
+		if err := h.requireUIToken(r); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1854,6 +1895,10 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, snap)
 	case http.MethodPost:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		if action != "enqueue-builds" && action != "enqueue-build" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
 			return
@@ -1977,6 +2022,10 @@ func (h *Handler) manifest(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, res)
 	case http.MethodPost:
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		var entries []store.ManifestEntry
 		if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -2088,6 +2137,10 @@ func (h *Handler) logsIngest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
 	if r.ContentLength > 1_000_000 {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "log too large"})
 		return
@@ -2196,6 +2249,10 @@ func (h *Handler) queueEnqueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if err := h.requireUIToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
 	var req queue.Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -2217,6 +2274,10 @@ func (h *Handler) queueClear(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if err := h.requireUIToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
 	if err := h.Queue.Clear(r.Context()); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -2229,7 +2290,7 @@ func (h *Handler) workerTrigger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -2370,6 +2431,10 @@ func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, hints)
 	case http.MethodPost:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		var hint store.Hint
 		if err := json.NewDecoder(r.Body).Decode(&hint); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -2396,6 +2461,10 @@ func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) hintsBulk(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireUIToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 	if h.Store == nil {
@@ -2480,6 +2549,10 @@ func (h *Handler) hintByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, hint)
 	case http.MethodPut:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		var hint store.Hint
 		if err := json.NewDecoder(r.Body).Decode(&hint); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -2500,6 +2573,10 @@ func (h *Handler) hintByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "updated"})
 	case http.MethodDelete:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		if err := h.Store.DeleteHint(r.Context(), id); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -2849,8 +2926,32 @@ func (h *Handler) requireWorkerToken(r *http.Request) error {
 	if tok == "" {
 		tok = r.URL.Query().Get("token")
 	}
+	if tok == "" {
+		if c, err := r.Cookie("worker_token"); err == nil {
+			tok = c.Value
+		}
+	}
 	if tok != h.Config.WorkerToken {
 		return fmt.Errorf("invalid worker token")
+	}
+	return nil
+}
+
+func (h *Handler) requireUIToken(r *http.Request) error {
+	if h.Config.UIToken == "" {
+		return nil
+	}
+	tok := r.Header.Get("X-UI-Token")
+	if tok == "" {
+		tok = r.URL.Query().Get("ui_token")
+	}
+	if tok == "" {
+		if c, err := r.Cookie("ui_token"); err == nil {
+			tok = c.Value
+		}
+	}
+	if tok != h.Config.UIToken {
+		return fmt.Errorf("invalid ui token")
 	}
 	return nil
 }

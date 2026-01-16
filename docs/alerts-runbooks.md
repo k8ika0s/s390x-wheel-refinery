@@ -51,7 +51,7 @@ Impact
 
 Runbook
 1) Verify worker container is up; restart if necessary.
-2) Check `X-Worker-Token` configuration; ensure token is valid.
+2) Check `WORKER_TOKEN` configuration; ensure token is valid.
 3) Confirm control-plane is reachable from the worker network.
 4) Inspect heartbeat logs for errors.
 

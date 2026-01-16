@@ -159,13 +159,13 @@ This will upload a tiny requirements file, create a plan, enqueue builds, and ta
 - Requeue by clearing builds or wait for lease timeout.
 
 ### No logs appear
-- Check worker token in UI (Settings).
+- Check worker token in the worker environment (`WORKER_TOKEN`).
 - Confirm the worker can reach `/api/logs/stream`.
 - Try opening `/api/logs/chunks/{name}/{version}` directly.
 
 ### Token issues
-- Set `WORKER_TOKEN` in your environment and add the token in the UI Settings page.
-- The UI sends it as `X-Worker-Token` for worker actions.
+- Set `UI_TOKEN` for UI actions and `WORKER_TOKEN` for worker actions.
+- The UI sends `X-UI-Token` and the worker sends `X-Worker-Token`.
 
 ## File locations
 These paths are inside the worker container or bind mounts:

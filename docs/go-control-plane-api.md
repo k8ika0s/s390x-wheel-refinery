@@ -5,7 +5,7 @@ This draft captures the intended endpoints for the Go control plane, matching th
 ### Conventions
 - Base path: `/api` (no legacy v1 coexistence).
 - Pagination: `limit` (default 50, max 500), `offset` (default 0).
-- Auth: currently open; reserve `X-Worker-Token` header/query/cookie for future write protection.
+- Auth: `UI_TOKEN` protects user-initiated writes; `WORKER_TOKEN` protects worker posts.
 - Content: JSON responses; errors use `{ "error": "...", "detail": "..." }`.
 
 ### Endpoints
@@ -44,35 +44,35 @@ This draft captures the intended endpoints for the Go control plane, matching th
 **Config/Backends**
 - Queue backend selectable via config (`QUEUE_BACKEND=file|redis|kafka`); file/Redis supported, Kafka implemented (no queue clear); file is default.
 - Plan stored in Postgres (JSONB) for quick UI fetch; manifests/logs/history also in Postgres.
-- Session helper: `POST /session/token?token=` sets `worker_token` cookie (browser convenience for protected worker/queue actions).
+- Session helpers: `POST /session/ui-token?token=` sets `ui_token` cookie; `POST /session/token?token=` sets `worker_token`.
 
 **Python versions/recipes**
 - `GET /python-versions` → list managed python versions from the recipes directory.
 - `GET /python-versions/{version}` → fetch recipe content/metadata for a version.
-- `PUT /python-versions/{version}` → create/update a recipe (JSON: `{ recipe: "..." }`).
+- `PUT /python-versions/{version}` → create/update a recipe (JSON: `{ recipe: "..." }`, requires UI token).
 
 **Queue**
 - `GET /queue` → items (package, version, tags, recipes, enqueued_at).
 - `GET /queue/stats` → length, oldest age.
-- `POST /queue/enqueue` body `{package, version, python_tag, platform_tag, recipes}`.
-- `POST /queue/clear` → clear queue (not supported for Kafka backend).
+- `POST /queue/enqueue` body `{package, version, python_tag, platform_tag, recipes}` (requires UI token).
+- `POST /queue/clear` → clear queue (not supported for Kafka backend, requires UI token).
 
 **Worker Trigger**
-- `POST /worker/trigger` → drain queue via local or webhook, returns detail + queue length. Honors `X-Worker-Token`/`token` when `WORKER_TOKEN` is set; open otherwise.
+- `POST /worker/trigger` → drain queue via local or webhook, returns detail + queue length. Honors `X-UI-Token` when `UI_TOKEN` is set; open otherwise.
 - `POST /worker/heartbeat` → upsert worker status (worker_id, pools, active builds). Requires `X-Worker-Token` when configured.
 - `GET /workers` → list worker heartbeat statuses and last-seen timestamps.
 - `POST /worker/smoke` (optional) → validate mounts/config without draining. Same token behavior.
 
 **Hints**
 - `GET /hints` → list hints.
-- `POST /hints` body `{pattern, recipes, note}` → create.
-- `PUT /hints/{id}` → update.
-- `DELETE /hints/{id}` → delete.
+- `POST /hints` body `{pattern, recipes, note}` → create (requires UI token).
+- `PUT /hints/{id}` → update (requires UI token).
+- `DELETE /hints/{id}` → delete (requires UI token).
 
 **Logs**
 - `GET /logs/{name}/{version}` → log content/metadata (latest stored entry); `?raw=1` returns plain text.
 - `GET /logs/search?q=&limit=` → simple text search over logs.
-- `POST /logs` → ingest/store a full log entry (name/version/content/timestamp auto-set if omitted).
+- `POST /logs` → ingest/store a full log entry (name/version/content/timestamp auto-set if omitted; requires worker token).
 - `GET /logs/chunks/{name}/{version}?after=&after_seq=&attempt=&limit=` → list stored log chunks (for replay); `tail=1` returns the newest chunks; `attempt` scopes a single build attempt.
 - `POST /logs/stream/{name}/{version}?attempt=&run_id=` → worker streaming ingest (NDJSON chunks).
 - `GET /logs/stream/{name}/{version}?after=&after_seq=&attempt=&limit=` → WebSocket stream of log chunks (live tail, attempt-scoped).

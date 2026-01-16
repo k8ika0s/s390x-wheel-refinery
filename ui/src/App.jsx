@@ -29,7 +29,7 @@ import {
   fetchPythonVersions,
   fetchPythonRecipe,
   fetchHints,
-  setCookieToken,
+  setCookieUIToken,
   triggerWorker,
   updateSettings,
   savePythonRecipe,
@@ -981,7 +981,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
       buildStatusRef.current = nextBuild;
       setBuildStatus(nextBuild);
     } catch (e) {
-      const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
+      const msg = e.status === 403 ? "Forbidden: set a UI token" : e.message;
       setError(msg);
       pushToast?.({ type: "error", title: "Load failed", message: msg || "Unknown error" });
     } finally {
@@ -1894,7 +1894,9 @@ const STATUS_CHIPS = ["built", "failed", "retry", "reused", "cached", "missing",
 function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, apiBase, onApiBaseChange, view = "overview" }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const [authToken, setAuthToken] = useState(localStorage.getItem("refinery_token") || token || "");
+  const [authToken, setAuthToken] = useState(
+    localStorage.getItem("refinery_ui_token") || localStorage.getItem("refinery_token") || token || ""
+  );
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -2226,7 +2228,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       setError("");
       setApiBlocked(false);
     } catch (e) {
-      const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
+      const msg = e.status === 403 ? "Forbidden: set a UI token" : e.message;
       const isApiOffline = msg?.toLowerCase().includes("api not connected");
       const isHttpError = Number.isFinite(e.status);
       setError(msg);
@@ -2981,17 +2983,17 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   };
 
   const handleSaveToken = async () => {
-    localStorage.setItem("refinery_token", authToken);
+    localStorage.setItem("refinery_ui_token", authToken);
     onTokenChange?.(authToken);
     if (authToken) {
       try {
-        await setCookieToken(authToken);
+        await setCookieUIToken(authToken);
       } catch {
         // ignore
       }
     }
     setMessage("Token saved");
-    pushToast?.({ type: "success", title: "Token saved", message: "Worker token stored locally" });
+    pushToast?.({ type: "success", title: "Token saved", message: "UI token stored locally" });
   };
 
   const closePlanGraph = () => {
@@ -3308,7 +3310,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     alerts.push("Auto-build is off; plans require manual build enqueue.");
   }
   if (!authToken) {
-    alerts.push("No worker token set; worker actions may be rejected.");
+    alerts.push("No UI token set; mutating actions may be rejected.");
   }
   const failuresTop = toArray(dashboard?.failures);
   const planListBadge = planListLoading ? "Loading..." : `${planList.length} plans`;
@@ -4838,15 +4840,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       />
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="glass subtle p-4 space-y-2">
-          <div className="text-xs text-slate-400">Worker token</div>
+          <div className="text-xs text-slate-400">UI token</div>
           <div className="text-xs text-slate-500">
-            Required for any action that enqueues work or updates control-plane state. Paste the shared token issued for workers;
-            it is stored locally in this browser and attached as the <span className="chip chip-muted">X-Worker-Token</span> header
-            on API calls. Until provided, queue actions and worker-trigger operations may be rejected.
+            Required for any action that enqueues work or updates control-plane state. Paste the UI token; it is stored locally in
+            this browser and attached as the <span className="chip chip-muted">X-UI-Token</span> header on API calls. Worker tokens
+            are configured on the worker container and are not needed here.
           </div>
           <input
             className="input"
-            placeholder="Worker token (optional)"
+            placeholder="UI token (optional)"
             value={authToken}
             onChange={(e) => setAuthToken(e.target.value)}
           />
@@ -4868,7 +4870,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             <button className="btn btn-primary w-full" onClick={handleSaveToken}>Save</button>
             <button className="btn btn-secondary w-full" onClick={() => load({ packageFilter: pkgFilter, statusFilter })} disabled={loading}>Refresh</button>
           </div>
-          <div className="text-xs text-slate-500">Token required for queue and build actions.</div>
+          <div className="text-xs text-slate-500">UI token required for queue and build actions.</div>
         </div>
         <div className="glass p-4 space-y-3">
           <div className="flex items-center justify-between">
@@ -5417,7 +5419,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
 }
 
 export default function App() {
-  const [token, setToken] = useState(localStorage.getItem("refinery_token") || "");
+  const [token, setToken] = useState(
+    localStorage.getItem("refinery_ui_token") || localStorage.getItem("refinery_token") || ""
+  );
   const [toasts, setToasts] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem("refinery_theme") || "dark");
   const [metrics, setMetrics] = useState(null);

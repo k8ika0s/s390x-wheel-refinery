@@ -75,6 +75,10 @@ func (h *Handler) pythonVersionByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, pythonRecipeDetail{pythonRecipeInfo: info, Recipe: string(data)})
 	case http.MethodPut:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		recipe, err := readRecipeBody(r)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

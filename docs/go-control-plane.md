@@ -16,8 +16,7 @@ We want a fast, scalable API service in Go that acts as the “traffic controlle
 - **Logs/artifacts:** centralized logging/audit tables (not just path refs). Wheel links can point to output/cache; store log records (or references) in DB; add optional text search.
 - **Plan storage:** persist the build plan graph in Postgres (JSONB) so UI can fetch the latest plan quickly; worker will write, API will read.
 - **Plan storage:** persist the build plan graph in Postgres (JSONB) so UI can fetch the latest plan quickly; worker will write, API will read.
-- **Worker trigger:** support both HTTP webhook (POST, token optional) and local trigger. Keep payload compatible with current Python worker (`{action:"drain"}`); optionally support a smoke/dry-run.
-- **Worker trigger:** support both HTTP webhook (POST, token optional) and local trigger. Keep payload compatible with current Python worker (`{action:"drain"}`); optionally support a smoke/dry-run. If `WORKER_TOKEN` is set, require `X-Worker-Token`/`token`; otherwise open.
+- **Worker trigger:** support both HTTP webhook (POST, token optional) and local trigger. Keep payload compatible with current Python worker (`{action:"drain"}`); optionally support a smoke/dry-run. If `UI_TOKEN` is set, require `X-UI-Token` for the trigger endpoint; worker posts remain gated by `WORKER_TOKEN`.
 - **Worker health:** accept periodic heartbeats and expose current worker status/last-seen to the UI.
 - **API surface:** summary, recent/history search, queue (list/enqueue/clear/stats), worker trigger, hint CRUD, log fetch/search, metrics/health, config view, manifests/artifact links. Build plan exposed, but no “why” reasoning needed.
 
@@ -38,7 +37,7 @@ We want a fast, scalable API service in Go that acts as the “traffic controlle
 - `GET /hints`, `POST/PUT/DELETE /hints/{id}`.
 - `GET /logs/{name}/{version}`, `GET /logs/search`, `GET /logs/chunks/{name}/{version}`, `GET /logs/stream/{name}/{version}` (WebSocket).
 - `GET /metrics`, `GET /health`, `GET /config`.
-Auth: stubbed (open for now); reserve header/query/cookie token for future writes.
+Auth: `UI_TOKEN` protects user-initiated writes/queue actions; `WORKER_TOKEN` protects worker posts.
 
 ### Notes
 - No legacy API coexistence needed; this Go service is the first deploy.
@@ -46,4 +45,4 @@ Auth: stubbed (open for now); reserve header/query/cookie token for future write
 - Compose: `podman-compose.yml` brings up Postgres, Redis, Redpanda (Kafka), the Go control-plane, the Go worker (wired to POST plan/manifest/logs back), and the UI pointed at the Go API. File/Redis/Kafka queue backends selectable via env (`QUEUE_BACKEND`).
 - Metrics endpoint is stubbed (501) until Prometheus wiring is added.
 - Kafka backend does not support a “clear” operation; use Redis/file if you need queue clearing during development.
-- Quick start: `podman compose -f podman-compose.yml up` (API :8080, UI :3000). Env overrides: `QUEUE_BACKEND=file|redis|kafka` (default redis), `POSTGRES_DSN`, `REDIS_URL`, `KAFKA_BROKERS`, `WORKER_TOKEN`, `WORKER_WEBHOOK_URL` if you run a remote worker.
+- Quick start: `podman compose -f podman-compose.yml up` (API :8080, UI :3000). Env overrides: `QUEUE_BACKEND=file|redis|kafka` (default redis), `POSTGRES_DSN`, `REDIS_URL`, `KAFKA_BROKERS`, `UI_TOKEN`, `WORKER_TOKEN`, `WORKER_WEBHOOK_URL` if you run a remote worker.
