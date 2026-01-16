@@ -76,6 +76,8 @@ This draft captures the intended endpoints for the Go control plane, matching th
 - `GET /logs/chunks/{name}/{version}?after=&after_seq=&attempt=&limit=` → list stored log chunks (for replay); `tail=1` returns the newest chunks; `attempt` scopes a single build attempt.
 - `POST /logs/stream/{name}/{version}?attempt=&run_id=` → worker streaming ingest (NDJSON chunks).
 - `GET /logs/stream/{name}/{version}?after=&after_seq=&attempt=&limit=` → WebSocket stream of log chunks (live tail, attempt-scoped).
+- `GET /simple` → HTML root index of wheelhouse packages (PEP 503).
+- `GET /simple/{name}` → HTML package index listing wheel files (PEP 503).
 
 ### Data shapes (coarse)
 - Event: `{run_id,name,version,python_tag,platform_tag,status,detail,metadata,timestamp,matched_hint_ids?}`

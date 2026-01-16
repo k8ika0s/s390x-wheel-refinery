@@ -1785,6 +1785,65 @@ func (p *PostgresStore) Manifest(ctx context.Context, limit int) ([]ManifestEntr
 	return out, rows.Err()
 }
 
+func (p *PostgresStore) ManifestPackages(ctx context.Context, limit int) ([]string, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 5000
+	}
+	if limit > 50000 {
+		limit = 50000
+	}
+	rows, err := p.db.QueryContext(ctx, `SELECT DISTINCT name FROM manifests ORDER BY name ASC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+func (p *PostgresStore) ManifestByNormalizedName(ctx context.Context, normalized string, limit int) ([]ManifestEntry, error) {
+	if err := p.ensureDB(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 2000
+	}
+	if limit > 10000 {
+		limit = 10000
+	}
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT name,version,wheel,wheel_url,repair_url,repair_digest,runtime_url,pack_urls,python_tag,platform_tag,status,extract(epoch from created_at)::bigint
+		FROM manifests
+		WHERE lower(regexp_replace(name, '[-_.]+', '-', 'g')) = $1
+		ORDER BY created_at DESC
+		LIMIT $2`, strings.ToLower(normalized), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ManifestEntry
+	for rows.Next() {
+		var m ManifestEntry
+		var packs pq.StringArray
+		if err := rows.Scan(&m.Name, &m.Version, &m.Wheel, &m.WheelURL, &m.RepairURL, &m.RepairDigest, &m.RuntimeURL, &packs, &m.PythonTag, &m.PlatformTag, &m.Status, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		m.PackURLs = []string(packs)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgresStore) SaveManifest(ctx context.Context, entries []ManifestEntry) error {
 	if err := p.ensureDB(); err != nil {
 		return err

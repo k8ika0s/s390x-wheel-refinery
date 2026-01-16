@@ -607,6 +607,30 @@ paths:
       responses:
         "200":
           description: Log stream ingested
+  /simple:
+    get:
+      summary: List wheelhouse packages (PEP 503 index root)
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 5000, maximum: 50000 }
+      responses:
+        "200":
+          description: HTML index
+  /simple/{name}:
+    get:
+      summary: List wheel files for a package (PEP 503 index)
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 2000, maximum: 10000 }
+      responses:
+        "200":
+          description: HTML index
   /session/token:
     post:
       summary: Set worker token cookie (browser helper)

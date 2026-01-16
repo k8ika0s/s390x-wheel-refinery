@@ -295,6 +295,8 @@ type Store interface {
 	DeletePlans(ctx context.Context, planID int64) (int64, error)
 	QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error
 	Manifest(ctx context.Context, limit int) ([]ManifestEntry, error)
+	ManifestPackages(ctx context.Context, limit int) ([]string, error)
+	ManifestByNormalizedName(ctx context.Context, normalized string, limit int) ([]ManifestEntry, error)
 	SaveManifest(ctx context.Context, entries []ManifestEntry) error
 	Artifacts(ctx context.Context, limit int) ([]Artifact, error)
 

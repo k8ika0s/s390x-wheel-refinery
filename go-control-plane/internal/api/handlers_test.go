@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,8 @@ type fakeStore struct {
 	lastLogChunksAfterSeq int64
 	lastLogChunksAttempt  int
 	lastLogChunksLimit    int
+	manifestPackages      []string
+	manifestByNormalized  map[string][]store.ManifestEntry
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -145,6 +148,15 @@ func (f *fakeStore) QueueBuildsFromPlan(ctx context.Context, runID string, planI
 }
 func (f *fakeStore) Manifest(ctx context.Context, limit int) ([]store.ManifestEntry, error) {
 	return nil, nil
+}
+func (f *fakeStore) ManifestPackages(ctx context.Context, limit int) ([]string, error) {
+	return f.manifestPackages, nil
+}
+func (f *fakeStore) ManifestByNormalizedName(ctx context.Context, normalized string, limit int) ([]store.ManifestEntry, error) {
+	if f.manifestByNormalized == nil {
+		return nil, nil
+	}
+	return f.manifestByNormalized[normalized], nil
 }
 func (f *fakeStore) SaveManifest(ctx context.Context, entries []store.ManifestEntry) error {
 	return nil
@@ -678,5 +690,45 @@ func TestLogsChunksHonorsAttemptAndSeq(t *testing.T) {
 	}
 	if fs.lastLogChunksLimit != 12 {
 		t.Fatalf("expected limit 12, got %d", fs.lastLogChunksLimit)
+	}
+}
+
+func TestSimpleIndexRoot(t *testing.T) {
+	fs := &fakeStore{
+		manifestPackages: []string{"NumPy", "requests"},
+	}
+	h := &Handler{Store: fs}
+	req := httptest.NewRequest(http.MethodGet, "/simple", nil)
+	rec := httptest.NewRecorder()
+	h.simpleIndex(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "/simple/numpy/") || !strings.Contains(body, "/simple/requests/") {
+		t.Fatalf("expected simple index entries, got %s", body)
+	}
+}
+
+func TestSimpleIndexPackage(t *testing.T) {
+	fs := &fakeStore{
+		manifestByNormalized: map[string][]store.ManifestEntry{
+			"numpy": {
+				{Name: "NumPy", Version: "1.0.0", WheelURL: "https://example.com/numpy-1.0.0.whl"},
+			},
+		},
+	}
+	h := &Handler{Store: fs}
+	req := httptest.NewRequest(http.MethodGet, "/simple/numpy/", nil)
+	rec := httptest.NewRecorder()
+	h.simpleIndex(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "numpy-1.0.0.whl") || !strings.Contains(body, "https://example.com/numpy-1.0.0.whl") {
+		t.Fatalf("expected wheel link, got %s", body)
 	}
 }

@@ -13,9 +13,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os/exec"
+	"path"
+	"regexp"
 	"strconv"
 	"strings"
+	"sort"
 	"sync"
 	"time"
 
@@ -92,6 +96,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs", h.logsIngest)
 	mux.HandleFunc("/api/logs/stream/", h.logsStream)
 	mux.HandleFunc("/api/logs/chunks/", h.logsChunks)
+	mux.HandleFunc("/simple", h.simpleIndex)
+	mux.HandleFunc("/simple/", h.simpleIndex)
 	mux.HandleFunc("/api/workers", h.workers)
 	mux.HandleFunc("/api/worker/heartbeat", h.workerHeartbeat)
 	mux.HandleFunc("/api/worker/trigger", h.workerTrigger)
@@ -2582,6 +2588,90 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) simpleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/simple")
+	path = strings.Trim(path, "/")
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 5000, 50000)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if path == "" {
+		names, err := h.Store.ManifestPackages(r.Context(), limit)
+		if err != nil {
+			writeHTML(w, http.StatusInternalServerError, "manifest query failed")
+			return
+		}
+		normalized := make([]string, 0, len(names))
+		seen := map[string]bool{}
+		for _, name := range names {
+			n := normalizeProjectName(name)
+			if n == "" || seen[n] {
+				continue
+			}
+			seen[n] = true
+			normalized = append(normalized, n)
+		}
+		sort.Strings(normalized)
+		var builder strings.Builder
+		builder.WriteString("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Wheelhouse</title></head><body>\n")
+		for _, name := range normalized {
+			builder.WriteString(fmt.Sprintf("<a href=\"/simple/%s/\">%s</a><br/>\n", name, name))
+		}
+		builder.WriteString("</body></html>")
+		writeHTML(w, http.StatusOK, builder.String())
+		return
+	}
+	if strings.Contains(path, "/") {
+		writeHTML(w, http.StatusNotFound, "not found")
+		return
+	}
+	normalized := normalizeProjectName(path)
+	if normalized == "" {
+		writeHTML(w, http.StatusNotFound, "not found")
+		return
+	}
+	entries, err := h.Store.ManifestByNormalizedName(r.Context(), normalized, limit)
+	if err != nil {
+		writeHTML(w, http.StatusInternalServerError, "manifest query failed")
+		return
+	}
+	if len(entries) == 0 {
+		writeHTML(w, http.StatusNotFound, "package not found")
+		return
+	}
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>%s</title></head><body>\n", normalized))
+	for _, entry := range entries {
+		href := entry.WheelURL
+		if href == "" {
+			href = entry.Wheel
+		}
+		if href == "" {
+			continue
+		}
+		label := pathBase(href)
+		builder.WriteString(fmt.Sprintf("<a href=\"%s\">%s</a><br/>\n", href, label))
+	}
+	builder.WriteString("</body></html>")
+	writeHTML(w, http.StatusOK, builder.String())
+}
+
+func normalizeProjectName(name string) string {
+	out := strings.ToLower(strings.TrimSpace(name))
+	out = regexp.MustCompile(`[-_.]+`).ReplaceAllString(out, "-")
+	return out
+}
+
+func pathBase(raw string) string {
+	u, err := url.Parse(raw)
+	if err == nil && u.Path != "" {
+		raw = u.Path
+	}
+	return path.Base(raw)
+}
+
 func parseIntDefault(val string, def int, max int) int {
 	if val == "" {
 		return def
@@ -2695,6 +2785,12 @@ func (h *Handler) callWorkerPlan(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	return snap, nil
+}
+
+func writeHTML(w http.ResponseWriter, code int, body string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_, _ = io.WriteString(w, body)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
