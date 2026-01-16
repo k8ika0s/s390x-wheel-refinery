@@ -3058,6 +3058,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     const plat = q.platform_tag || "-";
     return `${pkg}::${ver}::${py}::${plat}`;
   };
+  const selectedQueueCount = Object.keys(selectedQueue).length;
   const hasBuildFilters = Boolean(pkgFilter || statusFilter || buildStatusFilter);
   const hints = toArray(hintsState);
   const metrics = dashboard?.metrics;
@@ -4117,7 +4118,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               </div>
               <button className="btn btn-primary w-full" onClick={handleTriggerWorker}>Run worker now</button>
               <div className="flex flex-wrap gap-2">
-                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!selectedQueueCount}>
                   Retry selected
                 </button>
                 <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
@@ -4827,48 +4828,36 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             </div>
           </div>
           <div className="glass p-4 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
               <div className="text-lg font-semibold flex items-center gap-2">
                 <span>Retry queue</span>
                 <span className="chip text-xs">🧰</span>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>
-                  Refresh list
-                </button>
-                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleTriggerWorker}>
-                  Run worker now
-                </button>
+              <div className="text-xs text-slate-400 mt-1 flex flex-wrap gap-3">
+                <span>Retry items: <span className="text-slate-200">{queueLength}</span></span>
+                <span>Plan queue: <span className="text-slate-200">{planQueueLength}</span></span>
+                <span>Worker: <span className="text-slate-200">{workerMode}</span></span>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-              <span className="chip">Retry items: {queueLength}</span>
-              <span className="chip">Plan queue: {planQueueLength}</span>
-              <span className="chip">Worker mode: {workerMode}</span>
-              <button
-                className="btn btn-secondary px-2 py-1 text-xs"
-                onClick={handleClearPlanQueue}
-                disabled={clearingPlanQueue || !planQueueLength}
-              >
-                {clearingPlanQueue ? "Clearing..." : "Clear plan queue"}
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>
+                Refresh list
+              </button>
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleTriggerWorker}>
+                Run worker now
               </button>
             </div>
-            <div className="grid lg:grid-cols-[1fr,320px] gap-4 items-start">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm text-slate-400">
-                  <span>Retry queue items</span>
-                  <div className="flex items-center gap-2">
-                    <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
-                      Retry selected
-                    </button>
-                    <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
-                      Clear retry queue
-                    </button>
-                  </div>
-                </div>
-                {queueItemsSorted.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-xs border border-border rounded-lg">
+          </div>
+          <div className="grid lg:grid-cols-[minmax(0,1fr),300px] gap-4 items-start">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm text-slate-400">
+                <span>Retry queue items</span>
+                <span className="text-xs text-slate-500">Selected: {selectedQueueCount}</span>
+              </div>
+              {queueItemsSorted.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-xs border border-border rounded-lg">
                       <thead className="bg-slate-900 text-slate-400 sticky top-0">
                         <tr>
                           <th className="px-2 py-2"></th>
@@ -4926,6 +4915,30 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                   <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
                   <button className="btn btn-primary w-full" onClick={handleRetry}>Enqueue</button>
                   <div className="text-slate-500 text-xs">Uses API: POST /package/&lt;name&gt;/retry</div>
+                </div>
+                <div className="glass subtle p-3 space-y-2">
+                  <div className="text-xs text-slate-400">Queue actions</div>
+                  <button
+                    className="btn btn-secondary w-full"
+                    onClick={handleBulkRetry}
+                    disabled={!selectedQueueCount}
+                  >
+                    Retry selected
+                  </button>
+                  <button
+                    className="btn btn-secondary w-full"
+                    onClick={handleClearQueue}
+                    disabled={!queueItemsSorted.length}
+                  >
+                    Clear retry queue
+                  </button>
+                  <button
+                    className="btn btn-secondary w-full"
+                    onClick={handleClearPlanQueue}
+                    disabled={clearingPlanQueue || !planQueueLength}
+                  >
+                    {clearingPlanQueue ? "Clearing..." : "Clear plan queue"}
+                  </button>
                 </div>
               </div>
             </div>
