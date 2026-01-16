@@ -114,7 +114,7 @@ Legend:
    - Add a build-progress banner ("queued", "leased", "building", "repairing").
    - Success: users can understand current state instantly.
 
-4) Retry queue redesign
+4) Retry queue redesign (done)
    - Continued declutter: separate controls from list, collapse advanced
      actions, and surface the highest-value actions first.
    - Success: visually minimal but feature-complete panel.
