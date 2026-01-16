@@ -40,7 +40,7 @@ export const getApiBase = () => {
 
 const jsonHeaders = (token) => ({
   "Content-Type": "application/json",
-  ...(token ? { "X-Worker-Token": token } : {}),
+  ...(token ? { "X-UI-Token": token } : {}),
 });
 
 const parseError = async (resp) => {
@@ -144,8 +144,8 @@ export function clearQueue(token) {
   return request("/api/queue/clear", { method: "POST" }, token);
 }
 
-export function setCookieToken(token) {
-  return request(`/api/session/token?token=${encodeURIComponent(token)}`, { method: "POST" }, token);
+export function setCookieUIToken(token) {
+  return request(`/api/session/ui-token?token=${encodeURIComponent(token)}`, { method: "POST" }, token);
 }
 
 export function fetchPendingInputs(token) {
@@ -174,7 +174,7 @@ export function clearPendingInputs(status = "pending", token) {
 export async function uploadRequirements(file, token) {
   const fd = new FormData();
   fd.append("file", file);
-  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const headers = token ? { "X-UI-Token": token } : undefined;
   const resp = await fetch(joinBasePath(getApiBase(), "/api/requirements/upload"), {
     method: "POST",
     body: fd,
@@ -189,7 +189,7 @@ export async function uploadRequirements(file, token) {
 export async function uploadWheel(file, token) {
   const fd = new FormData();
   fd.append("file", file);
-  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const headers = token ? { "X-UI-Token": token } : undefined;
   const resp = await fetch(joinBasePath(getApiBase(), "/api/wheels/upload"), {
     method: "POST",
     body: fd,
@@ -203,6 +203,19 @@ export async function uploadWheel(file, token) {
 
 export function fetchSettings(token) {
   return request("/api/settings", {}, token);
+}
+
+export function fetchPythonVersions(token) {
+  return request("/api/python-versions", {}, token);
+}
+
+export function fetchPythonRecipe(version, token) {
+  return request(`/api/python-versions/${encodeURIComponent(version)}`, {}, token);
+}
+
+export function savePythonRecipe(version, recipe, token) {
+  const body = JSON.stringify({ recipe });
+  return request(`/api/python-versions/${encodeURIComponent(version)}`, { method: "PUT", body }, token);
 }
 
 export function fetchHints({ limit = 10, offset = 0, query = "" } = {}, token) {
@@ -222,8 +235,8 @@ export function enqueueBuildsFromPlan(planId, token) {
   return request(`/api/plan/${planId}/enqueue-builds`, { method: "POST" }, token);
 }
 
-export function enqueueBuildFromPlan(planId, pkg, version, token) {
-  const body = JSON.stringify({ package: pkg, version });
+export function enqueueBuildFromPlan(planId, pkg, version, nodeId, token) {
+  const body = JSON.stringify({ package: pkg, version, node_id: nodeId });
   return request(`/api/plan/${planId}/enqueue-build`, { method: "POST", body }, token);
 }
 
@@ -263,7 +276,7 @@ export function deleteHint(id, token) {
 export async function bulkUploadHints(file, token) {
   const fd = new FormData();
   fd.append("file", file);
-  const headers = token ? { "X-Worker-Token": token } : undefined;
+  const headers = token ? { "X-UI-Token": token } : undefined;
   const resp = await fetch(joinBasePath(getApiBase(), "/api/hints/bulk"), {
     method: "POST",
     body: fd,
@@ -283,28 +296,37 @@ export function fetchPackageDetail(name, token, limit = 50, opts = {}) {
     request(`/api/failures?name=${encodeURIComponent(name)}&limit=${limit}`, {}, token),
     request(`/api/recent?package=${encodeURIComponent(name)}&limit=${limit}`, {}, token),
     fetchBuilds({ package: name, version, limit: 50 }, token).catch(() => []),
-  ]).then(([summary, variants, failures, events, builds]) => ({ summary, variants, failures, events, builds }));
+    version ? fetchBuildAttempts(name, version, 50, token).catch(() => []) : Promise.resolve([]),
+  ]).then(([summary, variants, failures, events, builds, attempts]) => ({ summary, variants, failures, events, builds, attempts }));
 }
 
 export function fetchLog(name, version, token) {
   return request(`/api/logs/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, {}, token);
 }
 
-export function fetchLogChunks(name, version, { after = 0, limit = 500, tail = false } = {}, token) {
+export function fetchLogChunks(name, version, { after = 0, afterSeq = 0, attempt = 0, limit = 500, tail = false } = {}, token) {
   const params = new URLSearchParams();
   if (tail) {
     params.set("tail", "1");
+  } else if (afterSeq) {
+    params.set("after_seq", afterSeq);
   } else if (after) {
     params.set("after", after);
   }
+  if (attempt) params.set("attempt", attempt);
   if (limit) params.set("limit", limit);
   const qs = params.toString();
   return request(`/api/logs/chunks/${encodeURIComponent(name)}/${encodeURIComponent(version)}${qs ? `?${qs}` : ""}`, {}, token);
 }
 
-export function openLogStream(name, version, { after = 0, limit = 500 } = {}) {
+export function openLogStream(name, version, { after = 0, afterSeq = 0, attempt = 0, limit = 500 } = {}) {
   const params = new URLSearchParams();
-  if (after) params.set("after", after);
+  if (afterSeq) {
+    params.set("after_seq", afterSeq);
+  } else if (after) {
+    params.set("after", after);
+  }
+  if (attempt) params.set("attempt", attempt);
   if (limit) params.set("limit", limit);
   const qs = params.toString();
   const url = toWebSocketUrl(`/api/logs/stream/${encodeURIComponent(name)}/${encodeURIComponent(version)}${qs ? `?${qs}` : ""}`);
@@ -329,9 +351,21 @@ export function fetchBuilds({ status, limit = 200, planId, package: pkg, version
   return request(`/api/builds?${params.toString()}`, {}, token);
 }
 
+export function fetchBuildAttempts(pkg, version, limit = 50, token) {
+  const params = new URLSearchParams();
+  params.set("package", pkg);
+  params.set("version", version);
+  params.set("limit", limit);
+  return request(`/api/builds/attempts?${params.toString()}`, {}, token);
+}
+
 export function clearBuilds(status, token) {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
   const qs = params.toString();
   return request(qs ? `/api/builds?${qs}` : "/api/builds", { method: "DELETE" }, token);
+}
+
+export function requeueStaleBuilds(token) {
+  return request("/api/build-queue/requeue-stale", { method: "POST" }, token);
 }

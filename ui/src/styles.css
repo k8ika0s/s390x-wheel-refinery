@@ -211,6 +211,9 @@ body {
 .theme-light .status.retry {
   color: #d97706;
 }
+.theme-light .status.quarantined {
+  color: #a855f7;
+}
 .theme-light .status.failed,
 .theme-light .status.system_recipe_failed {
   color: #dc2626;
@@ -497,6 +500,9 @@ input:focus-visible {
 }
 .status.retry {
   @apply text-amber-300;
+}
+.status.quarantined {
+  @apply text-fuchsia-300;
 }
 .status.failed,
 .status.system_recipe_failed {

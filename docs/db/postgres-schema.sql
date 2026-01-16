@@ -21,6 +21,7 @@ CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_name_timestamp ON events(name, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_status_timestamp ON events(status, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_events_name_version_timestamp ON events(name, version, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_events_duration_ms ON events(duration_ms) WHERE duration_ms IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS hints (
     id       TEXT PRIMARY KEY,
@@ -43,6 +44,7 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 CREATE INDEX IF NOT EXISTS idx_logs_name ON logs(name);
 CREATE INDEX IF NOT EXISTS idx_logs_version ON logs(version);
+CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs USING BRIN (timestamp);
 
 CREATE TABLE IF NOT EXISTS log_chunks (
     id         BIGSERIAL PRIMARY KEY,
@@ -57,6 +59,8 @@ CREATE TABLE IF NOT EXISTS log_chunks (
 CREATE INDEX IF NOT EXISTS idx_log_chunks_name ON log_chunks(name);
 CREATE INDEX IF NOT EXISTS idx_log_chunks_version ON log_chunks(version);
 CREATE INDEX IF NOT EXISTS idx_log_chunks_name_version_id ON log_chunks(name, version, id);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_name_version_attempt_seq ON log_chunks(name, version, attempt, seq);
+CREATE INDEX IF NOT EXISTS idx_log_chunks_timestamp ON log_chunks USING BRIN (timestamp);
 
 CREATE TABLE IF NOT EXISTS manifests (
     id           BIGSERIAL PRIMARY KEY,
@@ -71,10 +75,14 @@ CREATE TABLE IF NOT EXISTS manifests (
     python_tag   TEXT,
     platform_tag TEXT,
     status       TEXT,
+    manifest_digest TEXT,
+    metadata     JSONB,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_manifests_name ON manifests(name);
 CREATE INDEX IF NOT EXISTS idx_manifests_version ON manifests(version);
+CREATE INDEX IF NOT EXISTS idx_manifests_digest ON manifests(manifest_digest);
+CREATE INDEX IF NOT EXISTS idx_manifests_name_version_tag ON manifests(name, version, python_tag, platform_tag);
 
 -- Build plan snapshots (latest fetched for UI)
 CREATE TABLE IF NOT EXISTS plans (
@@ -87,6 +95,7 @@ CREATE TABLE IF NOT EXISTS plans (
 
 CREATE TABLE IF NOT EXISTS build_status (
     id            BIGSERIAL PRIMARY KEY,
+    node_id       TEXT,
     package       TEXT NOT NULL,
     version       TEXT NOT NULL,
     python_tag    TEXT,
@@ -94,6 +103,10 @@ CREATE TABLE IF NOT EXISTS build_status (
     status        TEXT NOT NULL DEFAULT 'queued',
     attempts      INT NOT NULL DEFAULT 0,
     backoff_until TIMESTAMPTZ,
+    backoff_reason TEXT,
+    backoff_seconds INT,
+    reason_code TEXT,
+    reason_detail TEXT,
     last_error    TEXT,
     failure_summary TEXT,
     recipes       JSONB,
@@ -107,6 +120,36 @@ CREATE TABLE IF NOT EXISTS build_status (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS build_attempts (
+    id            BIGSERIAL PRIMARY KEY,
+    node_id       TEXT,
+    package       TEXT NOT NULL,
+    version       TEXT NOT NULL,
+    attempt       INT NOT NULL,
+    status        TEXT NOT NULL,
+    last_error    TEXT,
+    failure_summary TEXT,
+    backoff_until TIMESTAMPTZ,
+    backoff_reason TEXT,
+    backoff_seconds INT,
+    duration_ms   BIGINT,
+    recipes       JSONB,
+    hint_ids      TEXT[],
+    reason_code TEXT,
+    reason_detail TEXT,
+    run_id        TEXT,
+    plan_id       BIGINT,
+    started_at    TIMESTAMPTZ,
+    finished_at   TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_build_attempts_pkg_version_attempt ON build_attempts(package, version, attempt);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_status ON build_attempts(status);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_pkg_version ON build_attempts(package, version);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_node_id ON build_attempts(node_id);
+CREATE INDEX IF NOT EXISTS idx_build_attempts_created_at ON build_attempts(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS worker_status (
     worker_id    TEXT PRIMARY KEY,
     run_id       TEXT,
@@ -115,14 +158,21 @@ CREATE TABLE IF NOT EXISTS worker_status (
     build_pool_size INT NOT NULL DEFAULT 0,
     plan_pool_size INT NOT NULL DEFAULT 0,
     heartbeat_interval_sec INT NOT NULL DEFAULT 0,
+    cas_hits BIGINT NOT NULL DEFAULT 0,
+    cas_misses BIGINT NOT NULL DEFAULT 0,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_worker_status_last_seen ON worker_status(last_seen);
+CREATE INDEX IF NOT EXISTS idx_worker_status_cas ON worker_status(cas_hits, cas_misses);
 CREATE INDEX IF NOT EXISTS idx_build_status_status ON build_status(status);
 CREATE INDEX IF NOT EXISTS idx_build_status_plan_id ON build_status(plan_id);
 CREATE INDEX IF NOT EXISTS idx_build_status_updated_at ON build_status(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_build_status_node_id ON build_status(node_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_build_status_pkg_version ON build_status(package, version);
+CREATE INDEX IF NOT EXISTS idx_build_status_ready ON build_status(status, backoff_until, created_at) WHERE status IN ('pending','retry');
+CREATE INDEX IF NOT EXISTS idx_build_status_leased_at ON build_status(leased_at) WHERE status = 'leased';
+CREATE INDEX IF NOT EXISTS idx_build_status_started_at ON build_status(started_at) WHERE status = 'building';
 
 CREATE TABLE IF NOT EXISTS pending_inputs (
     id          BIGSERIAL PRIMARY KEY,
@@ -143,6 +193,9 @@ CREATE TABLE IF NOT EXISTS pending_inputs (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_pending_inputs_status ON pending_inputs(status);
+CREATE INDEX IF NOT EXISTS idx_pending_inputs_deleted ON pending_inputs(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_pending_inputs_digest ON pending_inputs(digest);
 
 CREATE TABLE IF NOT EXISTS plan_metadata (
     id             BIGSERIAL PRIMARY KEY,
@@ -153,3 +206,5 @@ CREATE TABLE IF NOT EXISTS plan_metadata (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_plan_metadata_pending_input_created_at ON plan_metadata(pending_input, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_plan_metadata_plan_id ON plan_metadata(plan_id);

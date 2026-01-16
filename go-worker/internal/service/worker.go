@@ -32,6 +32,7 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/reporter"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 // Worker drains the queue and runs jobs.
@@ -48,9 +49,16 @@ type Worker struct {
 	planSnap     plan.Snapshot
 	autoHintMu   sync.Mutex
 	autoHintLast map[string]time.Time
+	autoFixMu    sync.Mutex
+	autoFixState map[string]autoFixState
+	cachePruneMu sync.Mutex
+	cachePruneAt atomic.Int64
+	casLimiter   *semaphore.Weighted
 	// buildPoolSize allows dynamic overrides from control-plane settings.
 	buildPoolSize *atomic.Int32
 	activeBuilds  atomic.Int32
+	casHits       atomic.Int64
+	casMisses     atomic.Int64
 }
 
 type result struct {
@@ -125,10 +133,11 @@ func (w *Worker) Drain(ctx context.Context) error {
 	if len(reqs) == 0 {
 		return nil
 	}
+	w.maybePruneCache()
 
 	reqAttempts := make(map[string]int)
 	for _, r := range reqs {
-		key := queueKey(r.Package, r.Version)
+		key := queueKey(r.Package, r.Version, r.NodeID)
 		if r.Attempts > reqAttempts[key] {
 			reqAttempts[key] = r.Attempts
 		}
@@ -160,7 +169,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 		g.Go(func() error {
 			w.activeBuilds.Add(1)
 			defer w.activeBuilds.Add(-1)
-			attempt := reqAttempts[queueKey(job.Name, job.Version)]
+			attempt := reqAttempts[queueKey(job.Name, job.Version, job.NodeID)]
 			if job.WheelAction == "reuse" && job.WheelDigest != "" {
 				if err := w.fetchWheel(ctx, job); err != nil {
 					return fmt.Errorf("fetch wheel %s: %w", job.WheelDigest, err)
@@ -171,7 +180,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 				defer logStream.Close()
 				job.LogWriter = logStream
 			}
-			w.reportBuildStatus(ctx, job.Name, job.Version, "building", nil, "", attempt, 0, job.Recipes, nil)
+			w.reportBuildStatus(ctx, job, "building", nil, "", attempt, 0, failureReason{}, backoffMeta{}, job.Recipes, nil)
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			if err != nil && strings.TrimSpace(logContent) == "" {
 				logContent = fmt.Sprintf("error: %s", err.Error())
@@ -217,10 +226,19 @@ func (w *Worker) Drain(ctx context.Context) error {
 			"duration_ms": res.duration.Milliseconds(),
 			"attempt":     res.attempt,
 		}
+		if res.job.PlanID > 0 {
+			meta["plan_id"] = res.job.PlanID
+		}
+		if res.job.NodeID != "" {
+			meta["node_id"] = res.job.NodeID
+		}
 		detail := ""
 		recipesForStatus := res.job.Recipes
 		autoFix := autoFixResult{}
 		summary := ""
+		reason := failureReason{}
+		quarantined := false
+		quarantineAfter := w.Cfg.QuarantineAfterAttempts
 		if res.err != nil {
 			status = "failed"
 			meta["error"] = res.err.Error()
@@ -232,6 +250,13 @@ func (w *Worker) Drain(ctx context.Context) error {
 			logForHints := res.log
 			if strings.TrimSpace(logForHints) == "" {
 				logForHints = summary
+			}
+			reason = classifyFailureReason(res.err, logForHints)
+			if reason.Code != "" {
+				meta["reason_code"] = reason.Code
+				if reason.Detail != "" {
+					meta["reason_detail"] = reason.Detail
+				}
 			}
 			autoFix = w.autoFix(ctx, res.job, logForHints, hintCatalog, knownHints)
 			if autoFix.Applied {
@@ -248,16 +273,37 @@ func (w *Worker) Drain(ctx context.Context) error {
 			if autoFix.Applied && status != "retry" {
 				autoFix.BlockedReason = "max attempts reached"
 			}
+			if quarantineAfter > 0 && res.attempt >= quarantineAfter {
+				status = "quarantined"
+				quarantined = true
+				meta["quarantine_after"] = quarantineAfter
+				meta["quarantine_attempt"] = res.attempt
+				meta["quarantine_reason"] = "max attempts reached"
+				if autoFix.Applied {
+					autoFix.BlockedReason = fmt.Sprintf("quarantined after %d attempts", quarantineAfter)
+				}
+			}
 		}
 		// report build status to control-plane
-		backoffUntil := int64(0)
+		var backoff backoffMeta
 		if status == "retry" {
-			backoffUntil = backoffTime(res.attempt)
+			logForBackoff := res.log
+			if strings.TrimSpace(logForBackoff) == "" {
+				logForBackoff = summary
+			}
+			backoff = w.backoffForRetry(res.attempt, res.err, logForBackoff)
 		}
 		if len(recipesForStatus) > 0 {
 			meta["recipes"] = recipesForStatus
 		}
-		if autoFix.Applied || len(autoFix.HintIDs) > 0 || len(autoFix.SavedHintIDs) > 0 {
+		if status == "retry" && backoff.Until > 0 {
+			meta["backoff_reason"] = backoff.Reason
+			meta["backoff_seconds"] = backoff.Seconds
+		}
+		if quarantined {
+			meta["quarantined"] = true
+		}
+		if autoFix.Applied || len(autoFix.HintIDs) > 0 || len(autoFix.SavedHintIDs) > 0 || len(autoFix.BlockedHints) > 0 || autoFix.BlockedReason != "" || len(autoFix.DecisionTrace) > 0 {
 			meta["automation"] = map[string]any{
 				"applied":        autoFix.Applied,
 				"recipes":        recipesForStatus,
@@ -268,9 +314,10 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"blocked_hints":  autoFix.BlockedHints,
 				"impact":         autoFix.Impact,
 				"impact_reason":  autoFix.ImpactReason,
+				"decision_trace": autoFix.DecisionTrace,
 			}
 		}
-		w.reportBuildStatus(ctx, res.job.Name, res.job.Version, status, res.err, summary, res.attempt, backoffUntil, recipesForStatus, autoFix.HintIDs)
+		w.reportBuildStatus(ctx, res.job, status, res.err, summary, res.attempt, res.duration.Milliseconds(), reason, backoff, recipesForStatus, autoFix.HintIDs)
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
@@ -358,6 +405,21 @@ func (w *Worker) Drain(ctx context.Context) error {
 				logPayload["failure_summary"] = summary
 			}
 		}
+		if reason.Code != "" {
+			logPayload["reason_code"] = reason.Code
+			if reason.Detail != "" {
+				logPayload["reason_detail"] = reason.Detail
+			}
+		}
+		if quarantined {
+			logPayload["quarantine_after"] = quarantineAfter
+			logPayload["quarantine_attempt"] = res.attempt
+			logPayload["quarantine_reason"] = "max attempts reached"
+		}
+		if status == "retry" && backoff.Until > 0 {
+			logPayload["backoff_reason"] = backoff.Reason
+			logPayload["backoff_seconds"] = backoff.Seconds
+		}
 		if autoFix.Applied {
 			logPayload["auto_fix"] = map[string]any{
 				"recipes": recipesForStatus,
@@ -421,6 +483,13 @@ func (w *Worker) Drain(ctx context.Context) error {
 			if autoFix.Applied {
 				detail = fmt.Sprintf("auto-fix applied: %s", autoFix.Reason)
 			}
+			if quarantined {
+				if detail != "" {
+					detail = fmt.Sprintf("%s | quarantined after %d attempts", detail, quarantineAfter)
+				} else {
+					detail = fmt.Sprintf("quarantined after %d attempts", quarantineAfter)
+				}
+			}
 			if res.err != nil {
 				if detail != "" {
 					detail = detail + " | " + res.err.Error()
@@ -454,16 +523,22 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status string, err error, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) {
+func (w *Worker) reportBuildStatus(ctx context.Context, job runner.Job, status string, err error, summary string, attempts int, durationMs int64, reason failureReason, backoff backoffMeta, recipes []string, hintIDs []string) {
 	if w.Cfg.ControlPlaneURL == "" {
 		return
 	}
 	url := strings.TrimRight(w.Cfg.ControlPlaneURL, "/") + "/api/builds/status"
 	body := map[string]any{
-		"package":  pkg,
-		"version":  version,
+		"package":  job.Name,
+		"version":  job.Version,
 		"status":   status,
 		"attempts": attempts,
+	}
+	if job.PlanID > 0 {
+		body["plan_id"] = job.PlanID
+	}
+	if job.NodeID != "" {
+		body["node_id"] = job.NodeID
 	}
 	if err != nil {
 		body["error"] = err.Error()
@@ -471,14 +546,32 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	if summary != "" {
 		body["failure_summary"] = summary
 	}
-	if backoffUntil > 0 {
-		body["backoff_until"] = backoffUntil
+	if durationMs > 0 {
+		body["duration_ms"] = durationMs
+	}
+	if reason.Code != "" {
+		body["reason_code"] = reason.Code
+		if reason.Detail != "" {
+			body["reason_detail"] = reason.Detail
+		}
+	}
+	if backoff.Until > 0 {
+		body["backoff_until"] = backoff.Until
+	}
+	if backoff.Reason != "" {
+		body["backoff_reason"] = backoff.Reason
+	}
+	if backoff.Seconds > 0 {
+		body["backoff_seconds"] = backoff.Seconds
 	}
 	if len(recipes) > 0 {
 		body["recipes"] = recipes
 	}
 	if len(hintIDs) > 0 {
 		body["hint_ids"] = hintIDs
+	}
+	if w.Cfg.WorkerID != "" {
+		body["worker_id"] = w.Cfg.WorkerID
 	}
 	data, _ := json.Marshal(body)
 	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
@@ -488,6 +581,12 @@ func (w *Worker) reportBuildStatus(ctx context.Context, pkg, version, status str
 	req.Header.Set("Content-Type", "application/json")
 	if w.Cfg.ControlPlaneToken != "" {
 		req.Header.Set("X-Worker-Token", w.Cfg.ControlPlaneToken)
+	}
+	if w.Cfg.WorkerID != "" {
+		req.Header.Set("X-Worker-Id", w.Cfg.WorkerID)
+	}
+	if w.Cfg.WorkerID != "" {
+		req.Header.Set("X-Worker-Id", w.Cfg.WorkerID)
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, doErr := client.Do(req)
@@ -523,6 +622,9 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 			if node.Name == "" || node.Version == "" {
 				continue
 			}
+			if req.NodeID != "" && node.NodeID != "" && req.NodeID != node.NodeID {
+				continue
+			}
 			if !equalsIgnoreCase(node.Name, req.Package) {
 				continue
 			}
@@ -530,11 +632,16 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 				continue
 			}
 			wheelDigest, wheelAction, packIDs, runtimeID := findWheelArtifact(snap.DAG, node, req)
+			if req.NodeID != "" && node.NodeID == "" && wheelDigest != "" && req.NodeID != wheelDigest {
+				continue
+			}
 			orderedPacks := topoSortFromDag(packIDs, snap.DAG)
 			recipes := mergeRecipes(req.Recipes, recipeNames(node.Recipes))
 			jobs = append(jobs, runner.Job{
 				Name:              node.Name,
 				Version:           node.Version,
+				PlanID:            req.PlanID,
+				NodeID:            firstNonEmpty(req.NodeID, node.NodeID, wheelDigest),
 				PythonVersion:     firstNonEmpty(req.PythonVersion, node.PythonVersion),
 				PythonTag:         firstNonEmpty(node.PythonTag, pyTagFromVersion(firstNonEmpty(req.PythonVersion, node.PythonVersion))),
 				PlatformTag:       node.PlatformTag,
@@ -742,6 +849,7 @@ func (w *Worker) requestsFromPlan() []queue.Request {
 			continue
 		}
 		reqs = append(reqs, queue.Request{
+			NodeID:        node.NodeID,
 			Package:       node.Name,
 			Version:       node.Version,
 			PythonVersion: node.PythonVersion,
@@ -832,6 +940,13 @@ func BuildWorker(cfg Config) (*Worker, error) {
 		},
 		packPath:     make(map[string]string),
 		autoHintLast: make(map[string]time.Time),
+		autoFixState: make(map[string]autoFixState),
+		casLimiter: func() *semaphore.Weighted {
+			if cfg.CASMaxParallel <= 0 {
+				return nil
+			}
+			return semaphore.NewWeighted(int64(cfg.CASMaxParallel))
+		}(),
 		buildPoolSize: func() *atomic.Int32 {
 			var v atomic.Int32
 			if cfg.BuildPoolSize > 0 {
@@ -842,15 +957,50 @@ func BuildWorker(cfg Config) (*Worker, error) {
 	}, nil
 }
 
-func queueKey(name, version string) string {
+func queueKey(name, version, nodeID string) string {
+	if nodeID != "" {
+		return "node:" + strings.ToLower(nodeID)
+	}
 	return strings.ToLower(name) + "::" + strings.ToLower(version)
+}
+
+func (w *Worker) withCASLimit(ctx context.Context, fn func() error) error {
+	if w.casLimiter == nil {
+		return fn()
+	}
+	if err := w.casLimiter.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer w.casLimiter.Release(1)
+	return fn()
+}
+
+func (w *Worker) casFetch(ctx context.Context, id artifact.ID, destPath string) error {
+	return w.withCASLimit(ctx, func() error {
+		return w.Fetcher.Fetch(ctx, id, destPath)
+	})
+}
+
+func (w *Worker) casPush(ctx context.Context, id artifact.ID, data []byte, contentType string) error {
+	return w.withCASLimit(ctx, func() error {
+		_, err := w.Pusher.Push(ctx, id, data, contentType)
+		return err
+	})
+}
+
+func (w *Worker) recordCASHit() {
+	w.casHits.Add(1)
+}
+
+func (w *Worker) recordCASMiss() {
+	w.casMisses.Add(1)
 }
 
 func (w *Worker) shouldRequeue(reqAttempts map[string]int, job runner.Job) bool {
 	if !w.Cfg.RequeueOnFailure {
 		return false
 	}
-	key := queueKey(job.Name, job.Version)
+	key := queueKey(job.Name, job.Version, job.NodeID)
 	attempt := reqAttempts[key]
 	if attempt >= w.Cfg.MaxRequeueAttempts {
 		return false
@@ -871,9 +1021,17 @@ func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	if w.Cfg.BatchSize > 0 {
+	max := w.Cfg.BatchSize
+	poolSize := w.Cfg.BuildPoolSize
+	if w.buildPoolSize != nil && w.buildPoolSize.Load() > 0 {
+		poolSize = int(w.buildPoolSize.Load())
+	}
+	if poolSize > 0 && (max == 0 || poolSize < max) {
+		max = poolSize
+	}
+	if max > 0 {
 		q := req.URL.Query()
-		q.Set("max", strconv.Itoa(w.Cfg.BatchSize))
+		q.Set("max", strconv.Itoa(max))
 		req.URL.RawQuery = q.Encode()
 	}
 	if w.Cfg.ControlPlaneToken != "" {
@@ -891,6 +1049,7 @@ func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
 	}
 	var payload struct {
 		Builds []struct {
+			NodeID      string   `json:"node_id,omitempty"`
 			Package     string   `json:"package"`
 			Version     string   `json:"version"`
 			PythonTag   string   `json:"python_tag"`
@@ -908,6 +1067,7 @@ func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
 	var out []queue.Request
 	for _, b := range payload.Builds {
 		out = append(out, queue.Request{
+			NodeID:        b.NodeID,
 			Package:       b.Package,
 			Version:       b.Version,
 			PythonTag:     b.PythonTag,
@@ -955,20 +1115,137 @@ func (w *Worker) fetchPlanSnapshot(ctx context.Context, planID int64) (plan.Snap
 	return plan.Snapshot{RunID: payload.RunID, Plan: payload.Plan, DAG: payload.DAG}, nil
 }
 
-// backoffTime returns a Unix timestamp for the next retry using capped exponential backoff with jitter.
-func backoffTime(attempt int) int64 {
+type backoffMeta struct {
+	Until   int64
+	Seconds int
+	Reason  string
+}
+
+// backoffForRetry returns a retry schedule using adaptive backoff with jitter.
+func (w *Worker) backoffForRetry(attempt int, err error, logText string) backoffMeta {
+	reason := classifyBackoffReason(err, logText)
+	baseSec := w.Cfg.BackoffBaseSec
+	if baseSec <= 0 {
+		baseSec = 5
+	}
+	maxSec := w.Cfg.BackoffMaxSec
+	if maxSec <= 0 {
+		maxSec = 600
+	}
+	if maxSec < baseSec {
+		maxSec = baseSec
+	}
+	mult := 1
+	switch reason {
+	case "transient":
+		mult = w.Cfg.BackoffTransientMult
+	case "resource":
+		mult = w.Cfg.BackoffResourceMult
+	}
+	if mult < 1 {
+		mult = 1
+	}
 	if attempt < 1 {
 		attempt = 1
 	}
-	base := 5 * time.Second
-	max := 10 * time.Minute
-	d := base * time.Duration(1<<(attempt-1))
-	if d > max {
-		d = max
+	exp := attempt - 1
+	if exp > 10 {
+		exp = 10
 	}
-	// Add up to 1s jitter to avoid thundering herd.
+	delay := time.Duration(baseSec) * time.Second
+	delay *= time.Duration(1 << exp)
+	delay *= time.Duration(mult)
+	maxDelay := time.Duration(maxSec) * time.Second
+	if delay > maxDelay {
+		delay = maxDelay
+	}
 	jitter := time.Duration(rand.Int63n(int64(time.Second)))
-	return time.Now().Add(d + jitter).Unix()
+	total := delay + jitter
+	seconds := int(total.Seconds())
+	if seconds < 1 {
+		seconds = 1
+	}
+	return backoffMeta{
+		Until:   time.Now().Add(total).Unix(),
+		Seconds: seconds,
+		Reason:  reason,
+	}
+}
+
+func classifyBackoffReason(err error, logText string) string {
+	text := strings.ToLower(strings.TrimSpace(logText))
+	if err != nil {
+		errText := strings.ToLower(err.Error())
+		if text != "" {
+			text = errText + " " + text
+		} else {
+			text = errText
+		}
+	}
+	if text == "" {
+		return "default"
+	}
+	if matchAny(text, resourceBackoffHints) {
+		return "resource"
+	}
+	if matchAny(text, transientBackoffHints) {
+		return "transient"
+	}
+	return "default"
+}
+
+func matchAny(text string, patterns []string) bool {
+	for _, p := range patterns {
+		if p == "" {
+			continue
+		}
+		if strings.Contains(text, p) {
+			return true
+		}
+	}
+	return false
+}
+
+var transientBackoffHints = []string{
+	"connection reset",
+	"connection refused",
+	"connection aborted",
+	"connection closed",
+	"network is unreachable",
+	"no route to host",
+	"i/o timeout",
+	"tls handshake timeout",
+	"timeout",
+	"timed out",
+	"context deadline exceeded",
+	"temporary failure",
+	"temporary failure in name resolution",
+	"service unavailable",
+	"bad gateway",
+	"gateway timeout",
+	"too many requests",
+	"rate limit",
+	"429",
+	"502",
+	"503",
+	"504",
+	"unexpected eof",
+	"connection timed out",
+}
+
+var resourceBackoffHints = []string{
+	"out of memory",
+	"oom",
+	"cannot allocate memory",
+	"memory exhausted",
+	"killed",
+	"signal: killed",
+	"no space left on device",
+	"disk quota exceeded",
+	"no space",
+	"too many open files",
+	"resource temporarily unavailable",
+	"file too large",
 }
 
 // writeManifest writes manifest.json locally (best effort).
@@ -997,6 +1274,28 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 	if err != nil {
 		return
 	}
+	var objectTasks []func(context.Context) error
+	var casTasks []func(context.Context) error
+	runTasks := func(label string, limit int, tasks []func(context.Context) error) {
+		if len(tasks) == 0 {
+			return
+		}
+		if limit <= 0 {
+			limit = 1
+		}
+		g, ctx := errgroup.WithContext(ctx)
+		g.SetLimit(limit)
+		for _, task := range tasks {
+			task := task
+			g.Go(func() error {
+				return task(ctx)
+			})
+		}
+		if err := g.Wait(); err != nil {
+			log.Printf("upload %s tasks: %v", label, err)
+		}
+	}
+
 	// Pack publish is not tied to specific files; packs are metadata-only here.
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".whl") {
@@ -1018,9 +1317,15 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 			}
 		}
 		key := fmt.Sprintf("%s/%s/%s", strings.ToLower(job.Name), job.Version, e.Name())
-		_ = store.Put(ctx, key, data, "application/octet-stream")
+		payload := data
+		objectTasks = append(objectTasks, func(ctx context.Context) error {
+			return store.Put(ctx, key, payload, "application/octet-stream")
+		})
 		if w.Cfg.CASPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
-			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, data, "application/octet-stream")
+			id := artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}
+			casTasks = append(casTasks, func(ctx context.Context) error {
+				return w.casPush(ctx, id, payload, "application/octet-stream")
+			})
 		}
 	}
 	if w.Cfg.RepairPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
@@ -1045,11 +1350,15 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 			if ok, err := verifyBytesDigest(repData, repKey.Digest()); err == nil && !ok {
 				log.Printf("skip CAS push for repair: digest mismatch %s", repKey.Digest())
 			} else {
-				_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}, repData, "application/octet-stream")
-				if store != nil {
-					repairKey := fmt.Sprintf("%s/%s/repair-%s.whl", strings.ToLower(job.Name), job.Version, job.WheelDigest)
-					_ = store.Put(ctx, repairKey, repData, "application/octet-stream")
-				}
+				id := artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}
+				payload := repData
+				casTasks = append(casTasks, func(ctx context.Context) error {
+					return w.casPush(ctx, id, payload, "application/octet-stream")
+				})
+				repairKey := fmt.Sprintf("%s/%s/repair-%s.whl", strings.ToLower(job.Name), job.Version, job.WheelDigest)
+				objectTasks = append(objectTasks, func(ctx context.Context) error {
+					return store.Put(ctx, repairKey, payload, "application/octet-stream")
+				})
 			}
 		}
 	}
@@ -1062,12 +1371,20 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 						log.Printf("skip CAS push for pack: digest mismatch %s", d)
 						continue
 					}
-					_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.PackType, Digest: d}, data, "application/octet-stream")
+					id := artifact.ID{Type: artifact.PackType, Digest: d}
+					payload := data
+					casTasks = append(casTasks, func(ctx context.Context) error {
+						return w.casPush(ctx, id, payload, "application/octet-stream")
+					})
 					continue
 				}
 			}
 			if stub, err := w.stubPayload("pack", d, nil); err == nil {
-				_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.PackType, Digest: d}, stub, "application/octet-stream")
+				id := artifact.ID{Type: artifact.PackType, Digest: d}
+				payload := stub
+				casTasks = append(casTasks, func(ctx context.Context) error {
+					return w.casPush(ctx, id, payload, "application/octet-stream")
+				})
 			}
 		}
 	}
@@ -1076,16 +1393,27 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 			if data, err := os.ReadFile(job.RuntimePath); err == nil {
 				if ok, err := verifyBytesDigest(data, job.RuntimeDigest); err == nil && !ok {
 					log.Printf("skip CAS push for runtime: digest mismatch %s", job.RuntimeDigest)
-					return
+					goto finalize
 				}
-				_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}, data, "application/octet-stream")
-				return
+				id := artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}
+				payload := data
+				casTasks = append(casTasks, func(ctx context.Context) error {
+					return w.casPush(ctx, id, payload, "application/octet-stream")
+				})
+				goto finalize
 			}
 		}
 		if stub, err := w.stubPayload("runtime", job.RuntimeDigest, nil); err == nil {
-			_, _ = w.Pusher.Push(ctx, artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}, stub, "application/octet-stream")
+			id := artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}
+			payload := stub
+			casTasks = append(casTasks, func(ctx context.Context) error {
+				return w.casPush(ctx, id, payload, "application/octet-stream")
+			})
 		}
 	}
+finalize:
+	runTasks("object store", w.Cfg.ObjectStoreMaxParallel, objectTasks)
+	runTasks("cas", w.Cfg.CASMaxParallel, casTasks)
 }
 
 func (w *Worker) stubPayload(kind, digest string, meta map[string]any) ([]byte, error) {
@@ -1268,18 +1596,22 @@ func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
 		return err
 	}
 	destPath := filepath.Join(destDir, strings.ReplaceAll(job.WheelDigest, ":", "_")+".bin")
-	if err := w.Fetcher.Fetch(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, destPath); err != nil {
+	if err := w.casFetch(ctx, artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}, destPath); err != nil {
+		w.recordCASMiss()
 		return err
 	}
 	if _, err := os.Stat(destPath); err != nil {
+		w.recordCASMiss()
 		return err
 	}
 	if ok, err := verifyFileDigest(destPath, job.WheelDigest); err != nil || !ok {
+		w.recordCASMiss()
 		if err != nil {
 			return err
 		}
 		return fmt.Errorf("wheel digest mismatch: expected %s", job.WheelDigest)
 	}
+	w.recordCASHit()
 	return nil
 }
 
@@ -1309,12 +1641,17 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 		extractDir := filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_"))
 		fetched := false
 		if w.Fetcher.BaseURL != "" {
-			if err := w.Fetcher.Fetch(ctx, id, destPath); err == nil {
+			if err := w.casFetch(ctx, id, destPath); err == nil {
 				if _, err := os.Stat(destPath); err == nil {
 					if ok, err := verifyFileDigest(destPath, id.Digest); err == nil && ok {
 						fetched = true
 					}
 				}
+			}
+			if fetched {
+				w.recordCASHit()
+			} else {
+				w.recordCASMiss()
 			}
 		}
 		if !fetched && actions[id.Digest] == "build" {
@@ -1368,15 +1705,17 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 	destPath := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_")+".tar")
 	extractDir := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_"))
 	if w.Fetcher.BaseURL != "" {
-		if err := w.Fetcher.Fetch(ctx, rtID, destPath); err == nil {
+		if err := w.casFetch(ctx, rtID, destPath); err == nil {
 			if _, err := os.Stat(destPath); err == nil {
 				if ok, err := verifyFileDigest(destPath, rtID.Digest); err == nil && ok {
 					if err := extractTar(destPath, extractDir); err == nil && !isManifestOnly(extractDir) {
+						w.recordCASHit()
 						return extractDir
 					}
 				}
 			}
 		}
+		w.recordCASMiss()
 	}
 	if action == "build" {
 		cmd := w.Cfg.RuntimeBuilderCmd

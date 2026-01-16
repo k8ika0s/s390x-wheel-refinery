@@ -36,6 +36,57 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Config"
+  /python-versions:
+    get:
+      summary: List managed python versions
+      responses:
+        "200":
+          description: Python versions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PythonRecipeInfo"
+  /python-versions/{version}:
+    get:
+      summary: Fetch python recipe content
+      parameters:
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Python recipe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PythonRecipeDetail"
+        "404":
+          description: Not found
+    put:
+      summary: Create or update a python recipe
+      parameters:
+        - in: path
+          name: version
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                recipe: { type: string }
+      responses:
+        "200":
+          description: Python recipe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PythonRecipeDetail"
   /summary:
     get:
       summary: Recent status counts and failures
@@ -302,6 +353,11 @@ paths:
   /queue/enqueue:
     post:
       summary: Enqueue retry/build
+      parameters:
+        - in: header
+          name: X-UI-Token
+          required: false
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -315,6 +371,11 @@ paths:
     post:
       summary: Clear queue
       description: Not supported for Kafka backend; use file/redis if you need clearing.
+      parameters:
+        - in: header
+          name: X-UI-Token
+          required: false
+          schema: { type: string }
       responses:
         "200":
           description: Cleared
@@ -323,7 +384,7 @@ paths:
       summary: Trigger worker (local or webhook)
       parameters:
         - in: header
-          name: X-Worker-Token
+          name: X-UI-Token
           required: false
           schema: { type: string }
       responses:
@@ -388,6 +449,11 @@ paths:
                   $ref: "#/components/schemas/Hint"
     post:
       summary: Create hint
+      parameters:
+        - in: header
+          name: X-UI-Token
+          required: false
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -405,6 +471,10 @@ paths:
           name: id
           required: true
           schema: { type: string }
+        - in: header
+          name: X-UI-Token
+          required: false
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -420,6 +490,10 @@ paths:
         - in: path
           name: id
           required: true
+          schema: { type: string }
+        - in: header
+          name: X-UI-Token
+          required: false
           schema: { type: string }
       responses:
         "200":
@@ -483,6 +557,12 @@ paths:
           name: after
           schema: { type: integer, format: int64 }
         - in: query
+          name: after_seq
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: attempt
+          schema: { type: integer }
+        - in: query
           name: limit
           schema: { type: integer, default: 200, maximum: 2000 }
         - in: query
@@ -512,6 +592,12 @@ paths:
         - in: query
           name: after
           schema: { type: integer, format: int64 }
+        - in: query
+          name: after_seq
+          schema: { type: integer, format: int64 }
+        - in: query
+          name: attempt
+          schema: { type: integer }
         - in: query
           name: limit
           schema: { type: integer, default: 200, maximum: 2000 }
@@ -544,9 +630,46 @@ paths:
       responses:
         "200":
           description: Log stream ingested
+  /simple:
+    get:
+      summary: List wheelhouse packages (PEP 503 index root)
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 5000, maximum: 50000 }
+      responses:
+        "200":
+          description: HTML index
+  /simple/{name}:
+    get:
+      summary: List wheel files for a package (PEP 503 index)
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 2000, maximum: 10000 }
+      responses:
+        "200":
+          description: HTML index
   /session/token:
     post:
       summary: Set worker token cookie (browser helper)
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Token set in cookie
+        "400":
+          description: Token missing
+  /session/ui-token:
+    post:
+      summary: Set UI token cookie (browser helper)
       parameters:
         - in: query
           name: token
@@ -611,6 +734,19 @@ components:
             type: array
             items: { type: string }
         note: { type: string }
+    PythonRecipeInfo:
+      type: object
+      properties:
+        version: { type: string }
+        name: { type: string }
+        filename: { type: string }
+        updated_at: { type: string }
+    PythonRecipeDetail:
+      allOf:
+        - $ref: "#/components/schemas/PythonRecipeInfo"
+        - type: object
+          properties:
+            recipe: { type: string }
     LogEntry:
       type: object
       properties:
@@ -682,9 +818,19 @@ components:
         name: { type: string }
         version: { type: string }
         wheel: { type: string }
+        wheel_url: { type: string }
+        repair_url: { type: string }
+        repair_digest: { type: string }
+        runtime_url: { type: string }
+        pack_urls:
+          type: array
+          items: { type: string }
         python_tag: { type: string }
         platform_tag: { type: string }
         status: { type: string }
+        manifest_digest: { type: string }
+        metadata: { type: object }
+        created_at: { type: integer, format: int64 }
     Artifact:
       type: object
       properties:

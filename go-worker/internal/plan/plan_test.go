@@ -46,6 +46,21 @@ func TestNormalizePyTag(t *testing.T) {
 	}
 }
 
+func TestFlatNodeIDStable(t *testing.T) {
+	id1 := flatNodeID("demo", "1.0.0", "cp311", "manylinux2014_s390x", "build")
+	id2 := flatNodeID("demo", "1.0.0", "cp311", "manylinux2014_s390x", "build")
+	if id1 == "" || id2 == "" {
+		t.Fatalf("expected non-empty node IDs")
+	}
+	if id1 != id2 {
+		t.Fatalf("expected stable node IDs, got %q and %q", id1, id2)
+	}
+	id3 := flatNodeID("demo", "1.0.0", "cp311", "manylinux2014_s390x", "repair")
+	if id1 == id3 {
+		t.Fatalf("expected different node IDs for different action")
+	}
+}
+
 func TestComputePlanReuseVsBuild(t *testing.T) {
 	dir := t.TempDir()
 	// reusable pure wheel

@@ -1,13 +1,15 @@
 sequenceDiagram
-    participant Builder
-    participant History
+    participant Worker
+    participant ControlPlane
     participant HintCatalog
     participant Queue
 
-    Builder->>HintCatalog: Load patterns/recipes
-    Builder->>History: Record failure + logs
-    Builder->>HintCatalog: Match errors -> recipes
-    HintCatalog-->>Builder: Suggested system packages
-    Builder->>Queue: Enqueue retry with recipes
-    Queue-->>Builder: Next retry job
-    Builder->>History: Record success/fail + hint used
+    Worker->>ControlPlane: Fetch hints
+    Worker->>ControlPlane: Stream logs and record failure event
+    ControlPlane->>HintCatalog: Store failure context
+    Worker->>Worker: Classify reason and match hints
+    Worker->>ControlPlane: Save auto hint when new pattern
+    Worker->>ControlPlane: Record decision trace metadata
+    Worker->>Queue: Enqueue retry with recipes
+    Queue-->>Worker: Next retry job
+    Worker->>ControlPlane: Record final outcome and hint usage

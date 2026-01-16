@@ -26,3 +26,6 @@
 - Ensure worker runs with the builder image in all deployments.
 - Enforce non-stub outputs (fail manifest-only) once real recipes are active.
 - Continue evolving pack dependency metadata in the catalog instead of hardcoded map.
+
+## Operator docs
+- Production deployment guide: `docs/production-deployment-guide.md`.

@@ -4,6 +4,7 @@ import {
   getApiBase,
   clearQueue,
   clearBuilds,
+  requeueStaleBuilds,
   clearPendingInputs,
   clearPlanQueue,
   enqueueRetry,
@@ -25,10 +26,13 @@ import {
   fetchRecent,
   fetchBuilds,
   fetchSettings,
+  fetchPythonVersions,
+  fetchPythonRecipe,
   fetchHints,
-  setCookieToken,
+  setCookieUIToken,
   triggerWorker,
   updateSettings,
+  savePythonRecipe,
   uploadRequirements,
   uploadWheel,
   deletePendingInput,
@@ -58,6 +62,12 @@ const formatBytes = (value) => {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 };
+const readFileAsText = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result || ""));
+  reader.onerror = () => reject(reader.error || new Error("Failed to read file"));
+  reader.readAsText(file);
+});
 const formatDuration = (seconds) => {
   const total = Math.floor(Number(seconds));
   if (!Number.isFinite(total) || total <= 0) return "—";
@@ -70,16 +80,110 @@ const formatDuration = (seconds) => {
   if (minutes > 0) return `${minutes}m ${secs}s`;
   return `${secs}s`;
 };
+const pythonVersionRe = /^3\.[0-9]{1,2}$/;
+const pythonRecipeFilenameRe = /^cpython(\d{2,3})\.sh$/;
+const pythonTagFromVersion = (version) => {
+  if (!pythonVersionRe.test(version || "")) return "";
+  const [, minorRaw] = String(version).split(".");
+  const minor = Number(minorRaw);
+  if (!Number.isFinite(minor)) return "";
+  return `3${minor}`;
+};
+const pythonVersionFromTag = (tag) => {
+  if (!tag || !tag.startsWith("3")) return "";
+  const minor = Number(tag.slice(1));
+  if (!Number.isFinite(minor)) return "";
+  return `3.${minor}`;
+};
+const pythonVersionFromFilename = (filename) => {
+  const match = pythonRecipeFilenameRe.exec(filename || "");
+  if (!match) return "";
+  return pythonVersionFromTag(match[1]);
+};
+const pythonRecipeTemplate = (version) => {
+  const tag = pythonTagFromVersion(version);
+  if (!tag) return "";
+  return `#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/_common.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/versions.sh"
+
+PY_VERSION="\${PY${tag}_VERSION}"
+PY_SOURCE_URL="\${PY${tag}_SOURCE_URL}"
+PY_SOURCE_SHA256="\${PY${tag}_SOURCE_SHA256}"
+
+export PACK_NAME="cpython${tag}"
+export PACK_VERSION="$PY_VERSION"
+export PACK_SOURCE_URL="$PY_SOURCE_URL"
+export PACK_SOURCE_SHA256="$PY_SOURCE_SHA256"
+export PACK_DEPS="\${PACK_DEPS:-openssl zlib libffi bzip2 xz sqlite}"
+export RECIPE_DIGEST="$(compute_recipe_digest "$0" "$SCRIPT_DIR/_common.sh" "$SCRIPT_DIR/versions.sh")"
+
+pack_start
+require_tool make
+require_tool gcc
+require_tool g++
+require_tool pkg-config || true
+
+WORKDIR="$(mktemp -d)"
+trap 'rm -rf "$WORKDIR"' EXIT
+setup_repro_flags_for_workdir "$WORKDIR"
+
+OPENSSL_PREFIX="\${OPENSSL_PREFIX:-}"
+if [[ -z "$OPENSSL_PREFIX" ]]; then
+  OPENSSL_PREFIX="$(find_dep_prefix_with_file "include/openssl/ssl.h" || true)"
+fi
+[[ -n "$OPENSSL_PREFIX" ]] || die "OpenSSL headers not found. Provide openssl via DEPS_PREFIXES or set OPENSSL_PREFIX."
+
+src_dir="$(pack_fetch_and_extract "$WORKDIR" "$(basename "$PACK_SOURCE_URL")")"
+cd "$src_dir/Python-$PACK_VERSION"
+
+export CFLAGS="\${CFLAGS:-} -O2 -fPIC"
+export LDFLAGS="\${LDFLAGS:-} -Wl,-rpath,'\\\\$ORIGIN/../lib'"
+
+./configure \\
+  --prefix="$PREFIX" \\
+  --libdir="$LIBDIR" \\
+  --enable-shared \\
+  --with-ensurepip=install \\
+  --with-system-ffi \\
+  --with-openssl="$OPENSSL_PREFIX"
+
+make -j"$JOBS"
+make install
+
+if [[ "\${KEEP_PYTHON_TESTS:-0}" != "1" ]]; then
+  rm -rf "$PREFIX/lib/python"*/test || true
+fi
+find "$PREFIX" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+find "$PREFIX" -type f -name '*.pyc' -delete 2>/dev/null || true
+
+postprocess_prefix "$PREFIX"
+emit_manifest_json "$PACK_OUTPUT"
+log "done: $PACK_NAME"
+`;
+};
 const buildStatusChipClass = (status) => {
   const value = (status || "").toLowerCase();
   if (value === "built") return "bg-emerald-500/20 text-emerald-200 border-emerald-500/40";
   if (value === "building") return "bg-sky-500/20 text-sky-200 border-sky-500/40";
   if (value === "leased") return "bg-indigo-500/20 text-indigo-200 border-indigo-500/40";
+  if (value === "repairing" || value === "repair") return "bg-purple-500/20 text-purple-200 border-purple-500/40";
   if (value === "retry") return "bg-amber-500/20 text-amber-200 border-amber-500/40";
   if (value === "failed") return "bg-red-500/20 text-red-200 border-red-500/40";
+  if (value === "quarantined") return "bg-fuchsia-500/20 text-fuchsia-200 border-fuchsia-500/40";
   if (value === "pending") return "bg-slate-700/30 text-slate-200 border-slate-600/50";
   return "";
 };
+const buildProgressSteps = [
+  { key: "queued", label: "Queued", statuses: ["pending", "retry", "queued"] },
+  { key: "leased", label: "Leased", statuses: ["leased"] },
+  { key: "building", label: "Building", statuses: ["building"] },
+  { key: "repairing", label: "Repairing", statuses: ["repairing", "repair"] },
+];
 const workerHeartbeatThreshold = (worker) => {
   const interval = Number(worker?.heartbeat_interval_sec) || 15;
   return Math.max(interval * 2, 30);
@@ -118,7 +222,7 @@ const pickStatusSince = (build) => {
   if (status === "building") {
     return build.started_at || build.leased_at || build.updated_at || build.created_at || 0;
   }
-  if (status === "built" || status === "failed") {
+  if (status === "built" || status === "failed" || status === "quarantined") {
     return build.finished_at || build.updated_at || build.created_at || 0;
   }
   return build.updated_at || build.created_at || 0;
@@ -209,6 +313,75 @@ const renderHighlightedText = (line, regex) => {
 };
 
 const buildKey = (name, version) => `${(name || "").toLowerCase()}::${(version || "").toLowerCase()}`;
+const normalizeAttemptValue = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  return Math.floor(num);
+};
+const getEventAttempt = (event) => {
+  const meta = event?.metadata || {};
+  return normalizeAttemptValue(meta.attempt ?? meta.attempts ?? event?.attempt ?? event?.attempts);
+};
+const reasonLabels = {
+  missing_module: "Missing module",
+  missing_header: "Missing header",
+  missing_library: "Missing library",
+  pkg_config_missing: "pkg-config missing",
+  cmake_missing: "CMake missing",
+  cmake_failure: "CMake failure",
+  linker_error: "Linker error",
+  rust_toolchain_missing: "Rust toolchain missing",
+  compiler_missing: "Compiler missing",
+  build_tool_missing: "Build tool missing",
+};
+const formatReasonCode = (code) => {
+  if (!code) return "";
+  const key = String(code);
+  if (reasonLabels[key]) return reasonLabels[key];
+  const clean = key.replace(/_/g, " ");
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
+};
+const recipeImpact = (recipes = []) => {
+  if (!Array.isArray(recipes) || recipes.length === 0) {
+    return { impact: "", reason: "" };
+  }
+  if (recipes.length >= 6) {
+    return { impact: "high", reason: "bulk dependency install" };
+  }
+  const high = new Set([
+    "build-essential",
+    "gcc",
+    "g++",
+    "clang",
+    "llvm",
+    "rust",
+    "rustc",
+    "cargo",
+    "gcc-c++",
+  ]);
+  for (const recipe of recipes) {
+    const [mgrRaw = "", argRaw = ""] = String(recipe).split(":", 2);
+    const mgr = mgrRaw.trim().toLowerCase();
+    const arg = argRaw.trim();
+    if (mgr === "env") {
+      return { impact: "high", reason: "environment override" };
+    }
+    if (mgr === "apt" || mgr === "dnf" || mgr === "pip") {
+      for (const tok of arg.split(/\s+/)) {
+        if (high.has(tok.toLowerCase())) {
+          return { impact: "high", reason: `installs ${tok}` };
+        }
+      }
+    }
+  }
+  return { impact: "normal", reason: "" };
+};
+const buildIdentityKey = (nodeId, name, version) => {
+  if (nodeId) return `node:${String(nodeId).toLowerCase()}`;
+  return buildKey(name, version);
+};
+const buildStatusKey = (build) => buildIdentityKey(build?.node_id, build?.package, build?.version);
+const planNodeKey = (node) => buildIdentityKey(node?.node_id, node?.name, node?.version);
 
 const DAG_LAYOUT = {
   nodeWidth: 210,
@@ -459,7 +632,12 @@ function Skeleton({ className = "" }) {
   return <div className={`skeleton ${className}`} />;
 }
 
-function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, icon = "🫗" }) {
+function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, actions, icon = "🫗" }) {
+  const actionItems = Array.isArray(actions) && actions.length
+    ? actions
+    : actionLabel && onAction
+      ? [{ label: actionLabel, onAction }]
+      : [];
   return (
     <div className="glass p-4 text-slate-300 text-sm space-y-2 border-dashed border border-border">
       <div className="flex items-center gap-2 font-semibold">
@@ -467,8 +645,32 @@ function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, ico
         <span>{title}</span>
       </div>
       {detail && <div className="text-slate-500">{detail}</div>}
-      {actionLabel && onAction && (
-        <button className="btn btn-secondary px-2 py-1 text-xs" onClick={onAction}>{actionLabel}</button>
+      {actionItems.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {actionItems.map((action, idx) => {
+            const label = action?.label || action?.text || "Action";
+            const className = action?.variant === "primary"
+              ? "btn btn-primary px-2 py-1 text-xs"
+              : "btn btn-secondary px-2 py-1 text-xs";
+            if (action?.to) {
+              return (
+                <Link key={`${label}-${idx}`} className={className} to={action.to}>
+                  {label}
+                </Link>
+              );
+            }
+            return (
+              <button
+                key={`${label}-${idx}`}
+                className={className}
+                onClick={action?.onAction}
+                disabled={action?.disabled}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -770,6 +972,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const logRef = useRef(null);
   const logStreamRef = useRef(null);
   const logAfterRef = useRef(0);
+  const logAfterSeqRef = useRef(0);
   const logPollRef = useRef(null);
   const [tab, setTab] = useState("overview");
   const buildFromState = location.state?.build || null;
@@ -814,7 +1017,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
       buildStatusRef.current = nextBuild;
       setBuildStatus(nextBuild);
     } catch (e) {
-      const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
+      const msg = e.status === 403 ? "Forbidden: set a UI token" : e.message;
       setError(msg);
       pushToast?.({ type: "error", title: "Load failed", message: msg || "Unknown error" });
     } finally {
@@ -838,9 +1041,22 @@ function PackageDetail({ token, pushToast, apiBase }) {
     }
   }, []);
 
+  const appendLogContent = useCallback((chunk, ts) => {
+    if (!chunk) return;
+    const normalized = String(chunk).replace(/\n$/, "");
+    setLogContent((prev) => (prev ? `${prev}\n${normalized}` : normalized));
+    const nextTs = ts ? toTimestampMs(ts) : Date.now();
+    setLastLogTs(nextTs);
+  }, []);
+
   const pollLogChunks = useCallback(async (ev) => {
     if (!ev?.name || !ev?.version) return;
-    const chunks = await fetchLogChunks(ev.name, ev.version, { after: logAfterRef.current, limit: 200 }, token).catch(() => []);
+    const chunks = await fetchLogChunks(
+      ev.name,
+      ev.version,
+      { after: logAfterRef.current, afterSeq: logAfterSeqRef.current, attempt: ev.attempt || 0, limit: 200 },
+      token,
+    ).catch(() => []);
     if (Array.isArray(chunks) && chunks.length) {
       chunks.forEach((chunk) => {
         if (chunk?.content) {
@@ -850,6 +1066,10 @@ function PackageDetail({ token, pushToast, apiBase }) {
       const lastId = chunks[chunks.length - 1]?.id;
       if (lastId) {
         logAfterRef.current = lastId;
+      }
+      const lastSeq = chunks[chunks.length - 1]?.seq;
+      if (lastSeq) {
+        logAfterSeqRef.current = lastSeq;
       }
     }
   }, [appendLogContent, token]);
@@ -862,14 +1082,6 @@ function PackageDetail({ token, pushToast, apiBase }) {
     }, 3000);
   }, [pollLogChunks, stopLogPolling]);
 
-  const appendLogContent = useCallback((chunk, ts) => {
-    if (!chunk) return;
-    const normalized = String(chunk).replace(/\n$/, "");
-    setLogContent((prev) => (prev ? `${prev}\n${normalized}` : normalized));
-    const nextTs = ts ? toTimestampMs(ts) : Date.now();
-    setLastLogTs(nextTs);
-  }, []);
-
   const loadLog = useCallback(async (ev, opts = {}) => {
     const silent = Boolean(opts.silent);
     const preserveContent = Boolean(opts.preserveContent);
@@ -880,20 +1092,28 @@ function PackageDetail({ token, pushToast, apiBase }) {
       setMessage("Log not available: missing package name or version.");
       return;
     }
+    const eventAttempt = getEventAttempt(normalized);
     setSelectedEvent({
       ...normalized,
       name: eventName,
       version: eventVersion,
       timestamp: normalized.timestamp ?? Date.now(),
+      attempt: eventAttempt || undefined,
     });
     logAfterRef.current = 0;
+    logAfterSeqRef.current = 0;
     if (!preserveContent) {
       setLogContent("");
       setLastLogTs(0);
     }
     setMessage("");
     try {
-      const chunks = await fetchLogChunks(eventName, eventVersion, { limit: 500, tail: true }, token).catch(() => []);
+      const chunks = await fetchLogChunks(
+        eventName,
+        eventVersion,
+        { limit: 500, tail: true, attempt: eventAttempt || 0 },
+        token,
+      ).catch(() => []);
       if (Array.isArray(chunks) && chunks.length) {
         const combined = chunks.map((c) => c.content || "").filter(Boolean).join("\n");
         if (combined) {
@@ -904,6 +1124,10 @@ function PackageDetail({ token, pushToast, apiBase }) {
         const lastId = chunks[chunks.length - 1]?.id;
         if (lastId) {
           logAfterRef.current = lastId;
+        }
+        const lastSeq = chunks[chunks.length - 1]?.seq;
+        if (lastSeq) {
+          logAfterSeqRef.current = lastSeq;
         }
         const lastTs = chunks[chunks.length - 1]?.timestamp;
         if (lastTs) {
@@ -992,10 +1216,12 @@ function PackageDetail({ token, pushToast, apiBase }) {
       setLogStreamStatus("idle");
       return;
     }
-    setLogStreamStatus("connecting");
+    setLogStreamStatus("replay");
+    const buildAttempt = normalizeAttemptValue(buildStatus?.attempts ?? buildStatus?.attempt ?? 0);
     const ev = {
       name: buildStatus.package || name,
       version: buildStatus.version,
+      attempt: buildAttempt || undefined,
       timestamp: buildStatus.updated_at || buildStatus.created_at || Date.now(),
     };
     let active = true;
@@ -1003,9 +1229,15 @@ function PackageDetail({ token, pushToast, apiBase }) {
       if (!active) return;
       closeLogStream();
       stopLogPolling();
+      setLogStreamStatus("connecting");
       let ws;
       try {
-        ws = openLogStream(ev.name, ev.version, { after: logAfterRef.current, limit: 500 });
+        ws = openLogStream(ev.name, ev.version, {
+          after: logAfterRef.current,
+          afterSeq: logAfterSeqRef.current,
+          attempt: ev.attempt || 0,
+          limit: 500,
+        });
       } catch (e) {
         setMessage(e?.message || "Unable to open log stream.");
         setLogStreamStatus("polling");
@@ -1024,6 +1256,9 @@ function PackageDetail({ token, pushToast, apiBase }) {
           }
           if (payload?.id) {
             logAfterRef.current = payload.id;
+          }
+          if (payload?.seq) {
+            logAfterSeqRef.current = payload.seq;
           }
         } catch {
           appendLogContent(event.data, Date.now());
@@ -1068,6 +1303,23 @@ function PackageDetail({ token, pushToast, apiBase }) {
     return { total, slice };
   };
 
+  const attemptsArr = useMemo(() => toArray(data?.attempts), [data]);
+  const attemptsTimeline = useMemo(() => {
+    const sorted = attemptsArr
+      .filter((a) => Number.isFinite(a.attempt))
+      .slice()
+      .sort((a, b) => a.attempt - b.attempt);
+    let prevRecipes = [];
+    return sorted.map((entry) => {
+      const recipes = toArray(entry.recipes);
+      const added = recipes.filter((r) => !prevRecipes.includes(r));
+      const removed = prevRecipes.filter((r) => !recipes.includes(r));
+      const out = { ...entry, recipes, added, removed };
+      prevRecipes = recipes;
+      return out;
+    });
+  }, [attemptsArr]);
+
   if (loading) {
     return (
       <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -1095,7 +1347,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   if (error) return <div className="error">{error}</div>;
   if (!data) return null;
 
-  const { summary, variants, failures, events, hints = [] } = data;
+  const { summary, variants, failures, events, hints = [], attempts = [] } = data;
   const variantsArr = toArray(variants).map(normalizeEvent);
   const failuresArr = toArray(failures).map(normalizeEvent);
   const eventsArr = toArray(events).map(normalizeEvent);
@@ -1140,10 +1392,19 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const buildCreatedLabel = formatEpoch(buildStatus?.created_at);
   const buildUpdatedLabel = formatEpoch(buildStatus?.updated_at);
   const buildBackoffLabel = formatEpoch(buildStatus?.backoff_until);
+  const buildBackoffReason = buildStatus?.backoff_reason || "";
+  const buildBackoffSeconds = Number(buildStatus?.backoff_seconds) || 0;
+  const backoffRemainingSec = buildStatus?.backoff_until ? Math.max(0, buildStatus.backoff_until - nowSec) : 0;
+  const backoffRemainingLabel = backoffRemainingSec ? formatDuration(backoffRemainingSec) : "—";
   const buildPackageName = buildStatus?.package || summary?.name || name;
   const buildVersionLabel = buildStatus?.version || summary?.latest?.version || "";
   const failureSummary = buildStatus?.failure_summary || "";
+  const logTailLabel = logStreamStatus === "replay" ? "replay" : logStreamStatus;
   const overviewGridClass = buildStatus ? "grid grid-cols-1 md:grid-cols-3 gap-4" : "grid grid-cols-1 md:grid-cols-2 gap-4";
+  const statusValue = (buildStatus?.status || "").toLowerCase();
+  const progressIndex = buildProgressSteps.findIndex((step) => step.statuses.includes(statusValue));
+  const progressComplete = ["built", "failed", "quarantined"].includes(statusValue);
+  const progressActiveIndex = progressIndex >= 0 ? progressIndex : 0;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -1155,6 +1416,38 @@ function PackageDetail({ token, pushToast, apiBase }) {
         </div>
         <button className="btn btn-secondary" onClick={() => navigate(backTarget)}>Back</button>
       </div>
+      {buildStatus && (
+        <div className="glass subtle px-4 py-3 rounded-lg border border-border space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-200">
+            <div className="font-semibold">Build progress</div>
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <span className={`chip ${buildStatusChipClass(buildStatus.status)}`}>{buildStatus.status}</span>
+              <span>in state {buildAgeLabel}</span>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {buildProgressSteps.map((step, idx) => {
+              const isDone = progressComplete || idx < progressActiveIndex;
+              const isActive = !progressComplete && idx === progressActiveIndex;
+              const className = isActive
+                ? "chip chip-animated bg-sky-900/60 border-sky-500/60 text-sky-100"
+                : isDone
+                  ? "chip bg-emerald-900/60 border-emerald-500/60 text-emerald-100"
+                  : "chip text-slate-500 border-slate-700/60";
+              return (
+                <span key={step.key} className={className}>
+                  {step.label}
+                </span>
+              );
+            })}
+          </div>
+          {progressComplete && (
+            <div className="text-xs text-slate-400">
+              Outcome: <span className={`chip ${buildStatusChipClass(buildStatus.status)}`}>{buildStatus.status}</span>
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex gap-2">
         {["overview", "events", "hints"].map((t) => (
           <button
@@ -1184,6 +1477,24 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   <span className="text-slate-400">Status</span>
                   <span className={`status ${buildStatus.status}`}>{buildStatus.status}</span>
                 </div>
+                {buildStatus.node_id && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Node ID</span>
+                    <span className="truncate max-w-[180px]" title={buildStatus.node_id}>{buildStatus.node_id}</span>
+                  </div>
+                )}
+                {buildStatus.worker_id && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Worker</span>
+                    <span className="truncate max-w-[180px]" title={buildStatus.worker_id}>{buildStatus.worker_id}</span>
+                  </div>
+                )}
+                {buildStatus.plan_id ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Plan ID</span>
+                    <span>{buildStatus.plan_id}</span>
+                  </div>
+                ) : null}
                 <div className="flex items-center justify-between">
                   <span className="text-slate-400">Attempts</span>
                   <span>{buildStatus.attempts ?? 0}</span>
@@ -1200,6 +1511,30 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   <div className="flex items-center justify-between">
                     <span className="text-slate-400">Backoff until</span>
                     <span>{buildBackoffLabel}</span>
+                  </div>
+                )}
+                {buildStatus.reason_code && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Reason</span>
+                    <span>{formatReasonCode(buildStatus.reason_code)}</span>
+                  </div>
+                )}
+                {buildStatus.reason_detail && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Reason detail</span>
+                    <span>{buildStatus.reason_detail}</span>
+                  </div>
+                )}
+                {buildBackoffReason && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Backoff reason</span>
+                    <span className="capitalize">{buildBackoffReason}</span>
+                  </div>
+                )}
+                {buildBackoffSeconds > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Retry in</span>
+                    <span>{backoffRemainingLabel}</span>
                   </div>
                 )}
                 {buildStatus.recipes?.length > 0 && (
@@ -1316,7 +1651,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
           )}
           {watchBuildLog && isBuildActive && (
             <div className="text-xs text-slate-400 flex flex-wrap gap-3">
-              <span>Log tail: {logStreamStatus}</span>
+              <span>Log tail: {logTailLabel}</span>
               <span>Last chunk: {lastLogAge}</span>
             </div>
           )}
@@ -1349,6 +1684,11 @@ function PackageDetail({ token, pushToast, apiBase }) {
                       <div className="text-slate-400">Applied: {entry.automation.applied ? "yes" : "no"}</div>
                     )}
                     {entry.automation?.reason && <div className="text-slate-400">{entry.automation.reason}</div>}
+                    {toArray(entry.automation?.decision_trace).length > 0 && (
+                      <div className="text-slate-400">
+                        Decision trace: {toArray(entry.automation?.decision_trace).join(" · ")}
+                      </div>
+                    )}
                     {entry.recipes.length > 0 && <div className="text-slate-400">Recipes: {entry.recipes.join(", ")}</div>}
                     {entry.hints.length > 0 && <div className="text-slate-400">Hints: {entry.hints.join(", ")}</div>}
                     {entry.savedHints.length > 0 && <div className="text-slate-400">Saved hints: {entry.savedHints.join(", ")}</div>}
@@ -1367,6 +1707,57 @@ function PackageDetail({ token, pushToast, apiBase }) {
               </div>
             ) : (
               <EmptyState title="No automation history" detail="Builds have not reported auto-fix activity yet." />
+            )}
+          </StatCard>
+          <StatCard title="Attempt timeline">
+            {attemptsTimeline.length ? (
+              <div className="space-y-3">
+                {attemptsTimeline.map((attempt, idx) => {
+                  const durationLabel = attempt.duration_ms ? formatDuration(Math.max(0, attempt.duration_ms / 1000)) : "—";
+                  const backoffDelay = attempt.backoff_seconds ? formatDuration(attempt.backoff_seconds) : "";
+                  const backoffLabel = attempt.backoff_reason
+                    ? `${attempt.backoff_reason}${backoffDelay ? ` (${backoffDelay})` : ""}`
+                    : attempt.backoff_until
+                    ? formatTimestamp(attempt.backoff_until)
+                    : "—";
+                  const errorLabel = attempt.failure_summary || attempt.last_error || "";
+                  const recipesLabel = attempt.recipes.length ? attempt.recipes.join(", ") : "none";
+                  const reasonChip = formatReasonCode(attempt.reason_code);
+                  return (
+                    <div key={`${attempt.package}-${attempt.version}-${attempt.attempt}`} className="border border-border rounded-lg p-3 text-xs text-slate-200">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="chip">Attempt {attempt.attempt}</span>
+                          <span className={`status ${attempt.status}`}>{attempt.status}</span>
+                          {reasonChip && <span className="chip text-[10px]" title={attempt.reason_detail || ""}>{reasonChip}</span>}
+                          {idx < attemptsTimeline.length - 1 && <span className="text-slate-500">→</span>}
+                        </div>
+                        <div className="text-slate-400 flex flex-wrap gap-3">
+                          <span>Started: {formatTimestamp(attempt.started_at) || "—"}</span>
+                          <span>Finished: {formatTimestamp(attempt.finished_at) || "—"}</span>
+                          <span>Duration: {durationLabel}</span>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-slate-400">Recipes: <span className="text-slate-200">{recipesLabel}</span></div>
+                      {(attempt.added.length > 0 || attempt.removed.length > 0) && (
+                        <div className="mt-1 flex flex-wrap gap-3 text-slate-400">
+                          <span className="text-slate-500">Recipe changes:</span>
+                          {attempt.added.length > 0 && <span className="text-emerald-300">+ {attempt.added.join(", ")}</span>}
+                          {attempt.removed.length > 0 && <span className="text-amber-200">- {attempt.removed.join(", ")}</span>}
+                        </div>
+                      )}
+                      {(backoffLabel !== "—" || errorLabel) && (
+                        <div className="mt-2 flex flex-wrap gap-3">
+                          {backoffLabel !== "—" && <span className="text-slate-400">Backoff: {backoffLabel}</span>}
+                          {errorLabel && <span className="text-amber-200">Outcome: {errorLabel}</span>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <EmptyState title="No attempts yet" detail="Attempts will appear once a build starts." />
             )}
           </StatCard>
           <div className="glass p-4 space-y-3 min-w-0">
@@ -1581,7 +1972,9 @@ const STATUS_CHIPS = ["built", "failed", "retry", "reused", "cached", "missing",
 function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, apiBase, onApiBaseChange, view = "overview" }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const [authToken, setAuthToken] = useState(localStorage.getItem("refinery_token") || token || "");
+  const [authToken, setAuthToken] = useState(
+    localStorage.getItem("refinery_ui_token") || localStorage.getItem("refinery_token") || token || ""
+  );
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1604,6 +1997,16 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [settingsData, setSettingsData] = useState(null);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [pythonVersions, setPythonVersions] = useState([]);
+  const [pythonVersionsLoading, setPythonVersionsLoading] = useState(false);
+  const [pythonVersionsError, setPythonVersionsError] = useState("");
+  const [selectedPythonVersion, setSelectedPythonVersion] = useState("");
+  const [pythonRecipeDraft, setPythonRecipeDraft] = useState("");
+  const [pythonRecipeInfo, setPythonRecipeInfo] = useState(null);
+  const [pythonRecipeDirty, setPythonRecipeDirty] = useState(false);
+  const [pythonRecipeSaving, setPythonRecipeSaving] = useState(false);
+  const [pythonRecipeLoading, setPythonRecipeLoading] = useState(false);
+  const [newPythonVersion, setNewPythonVersion] = useState("");
   const [apiBaseInput, setApiBaseInput] = useState(apiBase || "");
   const [apiBlocked, setApiBlocked] = useState(false);
   const [pendingInputs, setPendingInputs] = useState([]);
@@ -1615,6 +2018,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [buildsLoading, setBuildsLoading] = useState(false);
   const [buildStatusFilter, setBuildStatusFilter] = useState("");
   const [clearingBuilds, setClearingBuilds] = useState(false);
+  const [requeueingStaleBuilds, setRequeueingStaleBuilds] = useState(false);
   const [clearingPendingInputs, setClearingPendingInputs] = useState(false);
   const [clearingPlanQueue, setClearingPlanQueue] = useState(false);
   const [pendingActions, setPendingActions] = useState({});
@@ -1656,6 +2060,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const [hintQuery, setHintQuery] = useState("");
   const [selectedHintId, setSelectedHintId] = useState("");
   const [hintForm, setHintForm] = useState(null);
+  const selectedPythonMeta = useMemo(() => {
+    if (!selectedPythonVersion) return null;
+    return pythonVersions.find((item) => item.version === selectedPythonVersion) || pythonRecipeInfo;
+  }, [pythonVersions, pythonRecipeInfo, selectedPythonVersion]);
   const [hintFormError, setHintFormError] = useState("");
   const [hintSaving, setHintSaving] = useState(false);
   const [hintsState, setHintsState] = useState([]);
@@ -1835,7 +2243,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           const pulseKeys = collectPulseKeys(
             prev,
             buildsList,
-            (b) => (b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version)),
+            (b) => (b?.id ? `id:${b.id}` : buildStatusKey(b)),
             (b) => `${b?.status || ""}|${b?.attempts || 0}|${b?.updated_at || 0}|${b?.failure_summary || ""}|${b?.last_error || ""}`,
           );
           if (prev.length) {
@@ -1898,7 +2306,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       setError("");
       setApiBlocked(false);
     } catch (e) {
-      const msg = e.status === 403 ? "Forbidden: set a worker token" : e.message;
+      const msg = e.status === 403 ? "Forbidden: set a UI token" : e.message;
       const isApiOffline = msg?.toLowerCase().includes("api not connected");
       const isHttpError = Number.isFinite(e.status);
       setError(msg);
@@ -2184,6 +2592,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
+  const focusRetryInput = () => {
+    if (retryPkgRef.current) {
+      retryPkgRef.current.focus();
+      retryPkgRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  };
+
   const handleRetry = async () => {
     setMessage("");
     if (!retryPkg) {
@@ -2386,6 +2801,20 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
+  const handleRequeueStaleBuilds = async () => {
+    if (!window.confirm("Requeue stale leased/building items? This resets them to pending.")) return;
+    setRequeueingStaleBuilds(true);
+    try {
+      const resp = await requeueStaleBuilds(authToken);
+      pushToast?.({ type: "success", title: "Stale builds requeued", message: `${resp.count ?? 0} item(s) reset` });
+      await load({ packageFilter: pkgFilter, statusFilter, buildStatusFilter });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Requeue stale failed", message: e.message });
+    } finally {
+      setRequeueingStaleBuilds(false);
+    }
+  };
+
   const toggleBuildSelect = (b) => {
     const key = buildRowKey(b);
     if (!key) return;
@@ -2494,6 +2923,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
 
   const reqInputRef = useRef(null);
   const wheelInputRef = useRef(null);
+  const retryPkgRef = useRef(null);
 
   const hashFile = async (file) => {
     const buf = await file.arrayBuffer();
@@ -2639,17 +3069,17 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   };
 
   const handleSaveToken = async () => {
-    localStorage.setItem("refinery_token", authToken);
+    localStorage.setItem("refinery_ui_token", authToken);
     onTokenChange?.(authToken);
     if (authToken) {
       try {
-        await setCookieToken(authToken);
+        await setCookieUIToken(authToken);
       } catch {
         // ignore
       }
     }
     setMessage("Token saved");
-    pushToast?.({ type: "success", title: "Token saved", message: "Worker token stored locally" });
+    pushToast?.({ type: "success", title: "Token saved", message: "UI token stored locally" });
   };
 
   const closePlanGraph = () => {
@@ -2670,18 +3100,29 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const pendingInputsCount = toArray(pendingInputs).length;
   const clearBuildsLabel = buildStatusFilter ? `Clear ${buildStatusFilter} builds` : "Clear pending builds";
   const queueItemsSorted = queueItems.slice().sort((a, b) => (a.package || "").localeCompare(b.package || ""));
+  const queueItemKey = (q) => {
+    const pkg = q.package || "unknown";
+    const ver = q.version || "latest";
+    const py = q.python_tag || "-";
+    const plat = q.platform_tag || "-";
+    return `${pkg}::${ver}::${py}::${plat}`;
+  };
+  const selectedQueueCount = Object.keys(selectedQueue).length;
+  const hasBuildFilters = Boolean(pkgFilter || statusFilter || buildStatusFilter);
   const hints = toArray(hintsState);
   const metrics = dashboard?.metrics;
   const buildStatusCounts = builds.reduce(
     (acc, b) => {
       const status = (b?.status || "").toLowerCase();
-      if (status === "building" || status === "leased") acc.active += 1;
+      if (status === "building") acc.building += 1;
+      if (status === "leased") acc.leased += 1;
       if (status === "pending" || status === "retry") acc.queued += 1;
       if (status === "failed") acc.failed += 1;
+      if (status === "quarantined") acc.quarantined += 1;
       if (status === "built") acc.built += 1;
       return acc;
     },
-    { active: 0, queued: 0, failed: 0, built: 0 },
+    { building: 0, leased: 0, queued: 0, failed: 0, built: 0, quarantined: 0 },
   );
   const pollState = !pollMs
     ? "off"
@@ -2762,7 +3203,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const recent = toArray(dashboard?.recent);
   const selectedPlanNodes = toArray(selectedPlan?.plan);
   const selectedPlanBuilds = selectedPlanNodes.filter((n) => (n?.action || "").toLowerCase() === "build");
-  const planBuildStatusByKey = new Map(planBuilds.map((b) => [buildKey(b.package, b.version), b]));
+  const planBuildStatusByKey = new Map(planBuilds.map((b) => [buildStatusKey(b), b]));
   const planDagRaw = normalizeDag(selectedPlan?.dag);
   const planGraphFocusSet = collectDagFocusSet(planDagRaw, planGraphFocus);
   const planDagNodes = planGraphFocusSet
@@ -2893,7 +3334,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const pendingSelectable = visiblePendingInputs.filter((pi) => ["pending", "failed"].includes(pi.status));
   const pendingSelectedList = pendingSelectable.filter((pi) => selectedPending[pi.id]);
   const pendingAllSelected = pendingSelectable.length > 0 && pendingSelectedList.length === pendingSelectable.length;
-  const buildRowKey = (b) => (b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version));
+  const buildRowKey = (b) => (b?.id ? `id:${b.id}` : buildStatusKey(b));
   const selectedBuildList = builds.filter((b) => selectedBuilds[buildRowKey(b)]);
   const buildsAllSelected = builds.length > 0 && selectedBuildList.length === builds.length;
   const filteredRecent = recent.filter((e) => {
@@ -2964,7 +3405,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     alerts.push("Auto-build is off; plans require manual build enqueue.");
   }
   if (!authToken) {
-    alerts.push("No worker token set; worker actions may be rejected.");
+    alerts.push("No UI token set; mutating actions may be rejected.");
   }
   const failuresTop = toArray(dashboard?.failures);
   const planListBadge = planListLoading ? "Loading..." : `${planList.length} plans`;
@@ -3018,6 +3459,132 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       setSettingsSaving(false);
     }
   };
+
+  const loadPythonVersions = async () => {
+    setPythonVersionsLoading(true);
+    setPythonVersionsError("");
+    try {
+      const list = await fetchPythonVersions(authToken);
+      const items = Array.isArray(list) ? list : [];
+      setPythonVersions(items);
+    } catch (e) {
+      const message = e.message || "Failed to load python versions.";
+      setPythonVersionsError(message);
+      pushToast?.({ type: "error", title: "Python versions load failed", message });
+    } finally {
+      setPythonVersionsLoading(false);
+    }
+  };
+
+  const loadPythonRecipe = async (version) => {
+    if (!version) {
+      setPythonRecipeInfo(null);
+      setPythonRecipeDraft("");
+      setPythonRecipeDirty(false);
+      return;
+    }
+    setPythonRecipeLoading(true);
+    try {
+      const detail = await fetchPythonRecipe(version, authToken);
+      setPythonRecipeInfo(detail);
+      setPythonRecipeDraft(detail?.recipe || "");
+      setPythonRecipeDirty(false);
+    } catch (e) {
+      if (e.status === 404) {
+        const template = pythonRecipeTemplate(version);
+        setPythonRecipeInfo(null);
+        setPythonRecipeDraft(template);
+        setPythonRecipeDirty(Boolean(template));
+        return;
+      }
+      const message = e.message || "Failed to load recipe.";
+      setPythonRecipeInfo(null);
+      setPythonRecipeDraft("");
+      setPythonRecipeDirty(false);
+      pushToast?.({ type: "error", title: "Recipe load failed", message });
+    } finally {
+      setPythonRecipeLoading(false);
+    }
+  };
+
+  const handleSavePythonRecipe = async () => {
+    const version = selectedPythonVersion.trim();
+    if (!version) {
+      pushToast?.({ type: "error", title: "Missing version", message: "Choose a python version to save." });
+      return;
+    }
+    if (!pythonVersionRe.test(version)) {
+      pushToast?.({ type: "error", title: "Invalid version", message: "Use a version like 3.11." });
+      return;
+    }
+    setPythonRecipeSaving(true);
+    try {
+      const detail = await savePythonRecipe(version, pythonRecipeDraft, authToken);
+      setPythonRecipeInfo(detail);
+      setPythonRecipeDirty(false);
+      await loadPythonVersions();
+      pushToast?.({ type: "success", title: "Recipe saved", message: `${version} updated.` });
+    } catch (e) {
+      pushToast?.({ type: "error", title: "Recipe save failed", message: e.message });
+    } finally {
+      setPythonRecipeSaving(false);
+    }
+  };
+
+  const handleRecipeFileSelect = async (file) => {
+    if (!file) return;
+    try {
+      const text = await readFileAsText(file);
+      setPythonRecipeDraft(text);
+      setPythonRecipeDirty(true);
+      if (!selectedPythonVersion) {
+        const inferred = pythonVersionFromFilename(file.name);
+        if (inferred) {
+          setSelectedPythonVersion(inferred);
+        }
+      }
+    } catch (e) {
+      pushToast?.({ type: "error", title: "File read failed", message: e.message });
+    }
+  };
+
+  const handleStartNewVersion = () => {
+    const version = newPythonVersion.trim();
+    if (!version) {
+      pushToast?.({ type: "error", title: "Missing version", message: "Enter a python version first." });
+      return;
+    }
+    if (!pythonVersionRe.test(version)) {
+      pushToast?.({ type: "error", title: "Invalid version", message: "Use a version like 3.11." });
+      return;
+    }
+    setSelectedPythonVersion(version);
+    const template = pythonRecipeTemplate(version);
+    if (template) {
+      setPythonRecipeDraft(template);
+      setPythonRecipeDirty(true);
+    } else {
+      setPythonRecipeDraft("");
+      setPythonRecipeDirty(false);
+    }
+  };
+
+  useEffect(() => {
+    if (viewKey !== "settings") return;
+    loadPythonVersions();
+  }, [viewKey, authToken]);
+
+  useEffect(() => {
+    if (!pythonVersions.length) return;
+    if (selectedPythonVersion) return;
+    const preferred = settingsData?.python_version;
+    const found = preferred ? pythonVersions.find((item) => item.version === preferred) : null;
+    setSelectedPythonVersion(found?.version || pythonVersions[0].version);
+  }, [pythonVersions, selectedPythonVersion, settingsData]);
+
+  useEffect(() => {
+    loadPythonRecipe(selectedPythonVersion);
+  }, [selectedPythonVersion, authToken]);
 
   const handleHintSave = async () => {
     if (!hintForm) return;
@@ -3142,15 +3709,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   };
 
   const handleEnqueuePlanBuild = async (node) => {
-    if (!selectedPlanId || !node?.name || !node?.version) {
+    if (!selectedPlanId || (!node?.node_id && (!node?.name || !node?.version))) {
       pushToast?.({ type: "error", title: "Enqueue failed", message: "Missing build node details." });
       return;
     }
-    const key = buildKey(node.name, node.version);
+    const key = planNodeKey(node);
     if (planBuildActions[key]) return;
     setPlanBuildActions((prev) => ({ ...prev, [key]: "enqueue" }));
     try {
-      await enqueueBuildFromPlan(selectedPlanId, node.name, node.version, authToken);
+      await enqueueBuildFromPlan(selectedPlanId, node.name, node.version, node.node_id, authToken);
       pushToast?.({ type: "success", title: "Build enqueued", message: `${node.name} ${node.version}` });
       setSelectedPlan((prev) => (prev ? { ...prev, queued: true } : prev));
       setPlanList((prev) => prev.map((p) => (p.id === selectedPlanId ? { ...p, queued: true } : p)));
@@ -3480,7 +4047,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             </div>
           )}
           {visiblePendingInputs.length === 0 ? (
-            <EmptyState title="No pending uploads" detail="New uploads will appear here until planned." icon="✅" />
+            <EmptyState
+              title="No pending uploads"
+              detail="Upload requirements or wheel files to generate plans."
+              icon="✅"
+              actions={[
+                { label: "Upload requirements", variant: "primary", onAction: () => reqInputRef.current?.click() },
+                { label: "Upload wheel", onAction: () => wheelInputRef.current?.click() },
+              ]}
+            />
           ) : (
             <div className="flex flex-col gap-2 text-sm text-slate-200">
               {visiblePendingInputs.map((pi) => (
@@ -3592,7 +4167,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               </div>
               <button className="btn btn-primary w-full" onClick={handleTriggerWorker}>Run worker now</button>
               <div className="flex flex-wrap gap-2">
-                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!selectedQueueCount}>
                   Retry selected
                 </button>
                 <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
@@ -3607,7 +4182,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <span className="chip text-xs">⏩</span>
             </div>
             <div className="flex flex-col gap-3">
-              <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
+              <input
+                ref={retryPkgRef}
+                className="input"
+                placeholder="package name"
+                value={retryPkg}
+                onChange={(e) => setRetryPkg(e.target.value)}
+              />
               <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
               <button className="btn btn-primary" onClick={handleRetry}>Enqueue</button>
             </div>
@@ -3636,11 +4217,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                   </tr>
                 </thead>
                 <tbody>
-                  {queueItemsSorted.map((q, idx) => {
+                  {queueItemsSorted.map((q) => {
                     const key = `${q.package}@${q.version || "latest"}`;
                     const checked = Boolean(selectedQueue[key]);
                     return (
-                      <tr key={`${q.package}-${q.version}-${idx}`} className="border-t border-slate-800">
+                      <tr key={queueItemKey(q)} className="border-t border-slate-800">
                         <td className="px-2 py-2">
                           <input type="checkbox" checked={checked} onChange={() => toggleSelectQueue(q)} />
                         </td>
@@ -3657,7 +4238,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               </table>
             </div>
           ) : (
-            <EmptyState title="Queue is empty" detail="No retry requests pending." actionLabel="Refresh" onAction={() => load({ packageFilter: pkgFilter, statusFilter })} />
+            <EmptyState
+              title="Queue is empty"
+              detail="No retry requests pending."
+              actions={[
+                { label: "Enqueue retry", variant: "primary", onAction: focusRetryInput },
+                { label: "Refresh", onAction: () => load({ packageFilter: pkgFilter, statusFilter }) },
+              ]}
+            />
           )}
         </div>
       </div>
@@ -3694,7 +4282,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           <div className="text-xs text-slate-400">
             Plan queue: {planQueueLength}. Auto-build is {settingsData?.auto_build ? "on" : "off"}.
           </div>
-            {renderPollingMeta(updatedPlansLabel)}
+          {renderPollingMeta(updatedPlansLabel)}
           {planListLoading ? (
             <div className="text-xs text-slate-500">Loading plans…</div>
           ) : planList.length ? (
@@ -3729,7 +4317,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               })}
             </div>
           ) : (
-            <div className="text-xs text-slate-500">No plans available yet.</div>
+            <EmptyState
+              title="No plans yet"
+              detail="Upload inputs and enqueue planning to create your first plan."
+              actions={[
+                { label: "Open inputs", variant: "primary", onAction: () => navigate("/inputs") },
+                { label: "Refresh", onAction: loadPlanList },
+              ]}
+            />
           )}
           {planListError && <div className="text-xs text-amber-200">{planListError}</div>}
         </div>
@@ -3809,12 +4404,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                   <div className={`scroll-panel ${planPanelHeightClass} overflow-auto rounded-lg border border-slate-800/60 p-2 space-y-2`}>
                     {planTab === "builds" && (
                       selectedPlanBuilds.length ? selectedPlanBuilds.map((node, idx) => {
-                        const key = buildKey(node.name, node.version);
+                        const key = planNodeKey(node);
                         const buildStatus = planBuildStatusByKey.get(key);
                         const isEnqueueing = Boolean(planBuildActions[key]);
                         return (
                           <div
-                            key={`${node.name}-${node.version}-${idx}`}
+                            key={node.node_id ? `node:${node.node_id}` : `${node.name}-${node.version}-${idx}`}
                             className="glass subtle px-3 py-2 rounded-lg flex items-center justify-between"
                           >
                             <div className="flex flex-col min-w-0">
@@ -4027,6 +4622,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                 {buildsLoading && <span className="animate-pulse">Refreshing…</span>}
                 <button
                   className="btn btn-secondary px-2 py-1 text-xs"
+                  onClick={handleRequeueStaleBuilds}
+                  disabled={requeueingStaleBuilds}
+                >
+                  {requeueingStaleBuilds ? "Requeueing..." : "Requeue stale"}
+                </button>
+                <button
+                  className="btn btn-secondary px-2 py-1 text-xs"
                   onClick={handleClearBuilds}
                   disabled={clearingBuilds || !builds.length}
                 >
@@ -4035,7 +4637,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               </div>
             </div>
             <div className="flex flex-wrap gap-2 text-sm">
-              {["", "pending", "leased", "retry", "building", "failed", "built"].map((s) => (
+              {["", "pending", "leased", "retry", "building", "failed", "quarantined", "built"].map((s) => (
                 <button
                   key={s || "all"}
                   className={`chip ${buildStatusFilter === s ? "chip-active" : "hover:bg-slate-800"} ${buildsLoading ? "opacity-60 cursor-wait" : ""}`}
@@ -4051,9 +4653,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             </div>
             <div className="text-xs text-slate-400 flex flex-wrap gap-3">
               <span>Oldest queued: {buildQueueOldest === "-" ? "—" : `${buildQueueOldest}s`}</span>
-              <span>Active: {buildStatusCounts.active}</span>
+              <span>Building: {buildStatusCounts.building}</span>
+              <span>Leased: {buildStatusCounts.leased}</span>
               <span>Queued: {buildStatusCounts.queued}</span>
               <span>Failed: {buildStatusCounts.failed}</span>
+              <span>Quarantined: {buildStatusCounts.quarantined}</span>
               <span>Built: {buildStatusCounts.built}</span>
             </div>
             {renderPollingMeta(updatedBuildsLabel)}
@@ -4130,11 +4734,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                         const statusSince = pickStatusSince(b);
                         const statusAge = statusSince ? formatDuration(Math.max(0, nowSec - statusSince)) : "—";
                         const errorLabel = b.failure_summary || b.last_error || "-";
+                        const reasonLabel = formatReasonCode(b.reason_code);
+                        const reasonDetail = b.reason_detail || "";
                         const rowKey = buildRowKey(b) || `${b.package}-${b.version}-${idx}`;
-                        const pulseKey = b?.id ? `id:${b.id}` : buildKey(b?.package, b?.version);
+                        const pulseKey = buildRowKey(b);
                         const isExpanded = Boolean(expandedBuilds[rowKey]);
                         const isSelected = Boolean(selectedBuilds[rowKey]);
                         const recipesLabel = (b.recipes || []).join(", ") || "-";
+                        const impact = recipeImpact(b.recipes || []);
+                        const impactLabel = impact.impact === "high" ? "High impact" : "";
                         const hintsLabel = (b.hint_ids || []).join(", ") || "-";
                         const logHref = b.package && b.version
                           ? `${apiBase || getApiBase()}/api/logs/${encodeURIComponent(b.package)}/${encodeURIComponent(b.version)}`
@@ -4171,14 +4779,30 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                               <td className="px-2 py-2">{b.attempts ?? 0}</td>
                               <td className="px-2 py-2 text-slate-400">{b.python_tag || "-"}</td>
                               <td className="px-2 py-2 text-slate-400">{b.platform_tag || "-"}</td>
-                              <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{recipesLabel}</td>
-                              <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">{errorLabel}</td>
+                              <td className="px-2 py-2 text-slate-400">
+                                <div className="truncate max-w-[220px]">{recipesLabel}</div>
+                                {impactLabel && (
+                                  <span className="chip text-[10px] text-amber-200 border-amber-400/30" title={impact.reason}>
+                                    {impactLabel}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-2 py-2 text-slate-400 truncate max-w-[220px]">
+                                {reasonLabel ? (
+                                  <span className="chip text-[10px]" title={reasonDetail || errorLabel}>
+                                    {reasonLabel}
+                                  </span>
+                                ) : (
+                                  errorLabel
+                                )}
+                              </td>
                             </tr>
                             {isExpanded && (
                               <tr className="border-t border-slate-800 bg-slate-900/30">
                                 <td className="px-3 py-3" colSpan="10">
                                   <div className="grid gap-3 text-xs text-slate-300 md:grid-cols-3">
                                     <div><span className="text-slate-500">Plan ID:</span> {b.plan_id || "-"}</div>
+                                    <div><span className="text-slate-500">Node ID:</span> {b.node_id || "-"}</div>
                                     <div><span className="text-slate-500">Run ID:</span> {b.run_id || "-"}</div>
                                     <div><span className="text-slate-500">Status since:</span> {statusSince ? formatTimestamp(statusSince) : "-"}</div>
                                     <div><span className="text-slate-500">Created:</span> {formatTimestamp(b.created_at) || "-"}</div>
@@ -4187,6 +4811,12 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                                     <div><span className="text-slate-500">Started:</span> {formatTimestamp(b.started_at) || "-"}</div>
                                     <div><span className="text-slate-500">Finished:</span> {formatTimestamp(b.finished_at) || "-"}</div>
                                     <div><span className="text-slate-500">Backoff:</span> {formatTimestamp(b.backoff_until) || "-"}</div>
+                                    <div><span className="text-slate-500">Backoff reason:</span> {b.backoff_reason || "-"}</div>
+                                    <div><span className="text-slate-500">Backoff delay:</span> {b.backoff_seconds ? formatDuration(b.backoff_seconds) : "-"}</div>
+                                    <div><span className="text-slate-500">Worker:</span> {b.worker_id || "-"}</div>
+                                    <div><span className="text-slate-500">Impact:</span> {impact.impact || "-"}</div>
+                                    <div><span className="text-slate-500">Reason:</span> {formatReasonCode(b.reason_code) || "-"}</div>
+                                    <div><span className="text-slate-500">Reason detail:</span> {b.reason_detail || "-"}</div>
                                     <div className="md:col-span-2"><span className="text-slate-500">Hints:</span> {hintsLabel}</div>
                                     <div className="md:col-span-3"><span className="text-slate-500">Recipes:</span> {recipesLabel}</div>
                                   </div>
@@ -4220,8 +4850,26 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                       })
                     : !buildsLoading && (
                         <tr>
-                          <td className="px-2 py-3 text-slate-400 text-center" colSpan="10">
-                            No builds found
+                          <td className="px-2 py-3" colSpan="10">
+                            <EmptyState
+                              title="No builds found"
+                              detail={hasBuildFilters ? "Clear filters to see more builds." : "Enqueue builds from a plan to get started."}
+                              actions={[
+                                ...(hasBuildFilters
+                                  ? [{
+                                      label: "Clear filters",
+                                      onAction: () => {
+                                        setPkgFilter("");
+                                        setSearch("");
+                                        setStatusFilter("");
+                                        setBuildStatusFilter("");
+                                        load({ packageFilter: "", statusFilter: "", buildStatusFilter: "" });
+                                      },
+                                    }]
+                                  : []),
+                                { label: "Open plans", onAction: () => navigate("/plans") },
+                              ]}
+                            />
                           </td>
                         </tr>
                       )}
@@ -4230,63 +4878,36 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             </div>
           </div>
           <div className="glass p-4 space-y-3">
-            <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
               <div className="text-lg font-semibold flex items-center gap-2">
                 <span>Retry queue</span>
                 <span className="chip text-xs">🧰</span>
               </div>
-              <div className="flex items-center gap-2 text-xs text-slate-400">
-                <span className="chip">{queueLength}</span>
-                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleTriggerWorker}>
-                  Run worker now
-                </button>
+              <div className="text-xs text-slate-400 mt-1 flex flex-wrap gap-3">
+                <span>Retry items: <span className="text-slate-200">{queueLength}</span></span>
+                <span>Plan queue: <span className="text-slate-200">{planQueueLength}</span></span>
+                <span>Worker: <span className="text-slate-200">{workerMode}</span></span>
               </div>
             </div>
-            <div className="grid md:grid-cols-[280px,1fr] gap-4 items-start">
-              <div className="space-y-2 text-sm text-slate-200">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Worker mode</span>
-                  <span className="chip">{workerMode}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Plan queue</span>
-                  <div className="flex items-center gap-2">
-                    <span className="chip">{metrics?.pending?.plan_queue ?? 0}</span>
-                    <button
-                      className="btn btn-secondary px-2 py-1 text-xs"
-                      onClick={handleClearPlanQueue}
-                      disabled={clearingPlanQueue || !planQueueLength}
-                    >
-                      {clearingPlanQueue ? "Clearing..." : "Clear plan queue"}
-                    </button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleBulkRetry} disabled={!Object.keys(selectedQueue).length}>
-                    Retry selected
-                  </button>
-                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleClearQueue} disabled={!queueItemsSorted.length}>
-                    Clear retry queue
-                  </button>
-                </div>
-                <div className="glass subtle p-3 space-y-2">
-                  <div className="text-xs text-slate-400">Enqueue retry</div>
-                  <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
-                  <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
-                  <button className="btn btn-primary w-full" onClick={handleRetry}>Enqueue</button>
-                  <div className="text-slate-500 text-xs">Uses API: POST /package/&lt;name&gt;/retry</div>
-                </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>
+                Refresh list
+              </button>
+              <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleTriggerWorker}>
+                Run worker now
+              </button>
+            </div>
+          </div>
+          <div className="grid lg:grid-cols-[minmax(0,1fr),300px] gap-4 items-start">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm text-slate-400">
+                <span>Retry queue items</span>
+                <span className="text-xs text-slate-500">Selected: {selectedQueueCount}</span>
               </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm text-slate-400">
-                  <span>Retry queue items</span>
-                  <button className="btn btn-secondary px-2 py-1 text-xs" onClick={() => load({ packageFilter: pkgFilter, statusFilter })}>
-                    Refresh
-                  </button>
-                </div>
-                {queueItemsSorted.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-xs border border-border rounded-lg">
+              {queueItemsSorted.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-xs border border-border rounded-lg">
                       <thead className="bg-slate-900 text-slate-400 sticky top-0">
                         <tr>
                           <th className="px-2 py-2"></th>
@@ -4299,11 +4920,11 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                         </tr>
                       </thead>
                       <tbody>
-                        {queueItemsSorted.map((q, idx) => {
+                        {queueItemsSorted.map((q) => {
                           const key = `${q.package}@${q.version || "latest"}`;
                           const checked = Boolean(selectedQueue[key]);
                           return (
-                            <tr key={`${q.package}-${q.version}-${idx}`} className="border-t border-slate-800">
+                            <tr key={queueItemKey(q)} className="border-t border-slate-800">
                               <td className="px-2 py-2">
                                 <input type="checkbox" checked={checked} onChange={() => toggleSelectQueue(q)} />
                               </td>
@@ -4320,8 +4941,55 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                     </table>
                   </div>
                 ) : (
-                  <EmptyState title="Retry queue is empty" detail="No retry requests pending." icon="✅" />
+                  <EmptyState
+                    title="Retry queue is empty"
+                    detail="No retry requests pending."
+                    icon="✅"
+                    actions={[
+                      { label: "Enqueue retry", variant: "primary", onAction: focusRetryInput },
+                      { label: "Refresh list", onAction: () => load({ packageFilter: pkgFilter, statusFilter }) },
+                    ]}
+                  />
                 )}
+              </div>
+              <div className="space-y-3">
+                <div className="glass subtle p-3 space-y-2">
+                  <div className="text-xs text-slate-400">Enqueue retry</div>
+                  <input
+                    ref={retryPkgRef}
+                    className="input"
+                    placeholder="package name"
+                    value={retryPkg}
+                    onChange={(e) => setRetryPkg(e.target.value)}
+                  />
+                  <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
+                  <button className="btn btn-primary w-full" onClick={handleRetry}>Enqueue</button>
+                  <div className="text-slate-500 text-xs">Uses API: POST /package/&lt;name&gt;/retry</div>
+                </div>
+                <div className="glass subtle p-3 space-y-2">
+                  <div className="text-xs text-slate-400">Queue actions</div>
+                  <button
+                    className="btn btn-secondary w-full"
+                    onClick={handleBulkRetry}
+                    disabled={!selectedQueueCount}
+                  >
+                    Retry selected
+                  </button>
+                  <button
+                    className="btn btn-secondary w-full"
+                    onClick={handleClearQueue}
+                    disabled={!queueItemsSorted.length}
+                  >
+                    Clear retry queue
+                  </button>
+                  <button
+                    className="btn btn-secondary w-full"
+                    onClick={handleClearPlanQueue}
+                    disabled={clearingPlanQueue || !planQueueLength}
+                  >
+                    {clearingPlanQueue ? "Clearing..." : "Clear plan queue"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -4340,15 +5008,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
       />
       <div className="grid lg:grid-cols-2 gap-4">
         <div className="glass subtle p-4 space-y-2">
-          <div className="text-xs text-slate-400">Worker token</div>
+          <div className="text-xs text-slate-400">UI token</div>
           <div className="text-xs text-slate-500">
-            Required for any action that enqueues work or updates control-plane state. Paste the shared token issued for workers;
-            it is stored locally in this browser and attached as the <span className="chip chip-muted">X-Worker-Token</span> header
-            on API calls. Until provided, queue actions and worker-trigger operations may be rejected.
+            Required for any action that enqueues work or updates control-plane state. Paste the UI token; it is stored locally in
+            this browser and attached as the <span className="chip chip-muted">X-UI-Token</span> header on API calls. Worker tokens
+            are configured on the worker container and are not needed here.
           </div>
           <input
             className="input"
-            placeholder="Worker token (optional)"
+            placeholder="UI token (optional)"
             value={authToken}
             onChange={(e) => setAuthToken(e.target.value)}
           />
@@ -4370,7 +5038,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             <button className="btn btn-primary w-full" onClick={handleSaveToken}>Save</button>
             <button className="btn btn-secondary w-full" onClick={() => load({ packageFilter: pkgFilter, statusFilter })} disabled={loading}>Refresh</button>
           </div>
-          <div className="text-xs text-slate-500">Token required for queue and build actions.</div>
+          <div className="text-xs text-slate-500">UI token required for queue and build actions.</div>
         </div>
         <div className="glass p-4 space-y-3">
           <div className="flex items-center justify-between">
@@ -4388,12 +5056,18 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <input
                 className="input"
                 placeholder="e.g. 3.11"
+                list="python-version-list"
                 value={settingsData?.python_version || ""}
                 onChange={(e) => {
                   setSettingsData((s) => ({ ...(s || {}), python_version: e.target.value }));
                   setSettingsDirty(true);
                 }}
               />
+              <datalist id="python-version-list">
+                {pythonVersions.map((item) => (
+                  <option key={item.version} value={item.version}>{item.filename}</option>
+                ))}
+              </datalist>
             </div>
             <div className="space-y-1">
               <div className="text-xs text-slate-400">Platform tag</div>
@@ -4485,6 +5159,121 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           <div className="text-xs text-slate-500">
             Defaults inform queue enqueues and UI polling limits. Worker runtime Python still follows the configured worker image/env.
           </div>
+        </div>
+      </div>
+      <div className="glass p-4 space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-lg font-semibold flex items-center gap-2">
+            <span>Python versions</span>
+            <span className="chip text-xs">🐍</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="btn btn-secondary px-2 py-1 text-xs" onClick={loadPythonVersions} disabled={pythonVersionsLoading}>
+              {pythonVersionsLoading ? "Refreshing..." : "Refresh list"}
+            </button>
+            <button
+              className="btn btn-primary px-2 py-1 text-xs"
+              onClick={handleSavePythonRecipe}
+              disabled={!selectedPythonVersion || pythonRecipeSaving || !pythonRecipeDirty}
+            >
+              {pythonRecipeSaving ? "Saving..." : "Save recipe"}
+            </button>
+          </div>
+        </div>
+        <div className="grid lg:grid-cols-[minmax(220px,1fr)_minmax(0,2fr)] gap-4">
+          <div className="space-y-2">
+            <div className="text-xs text-slate-400">Managed versions</div>
+            {pythonVersionsError && <div className="text-xs text-rose-400">{pythonVersionsError}</div>}
+            {!pythonVersionsLoading && !pythonVersions.length && (
+              <div className="text-xs text-slate-500">No recipes found yet.</div>
+            )}
+            <div className="space-y-2">
+              {pythonVersions.map((item) => (
+                <button
+                  key={item.version}
+                  className={`w-full text-left rounded-lg border px-3 py-2 transition ${item.version === selectedPythonVersion ? "border-sky-500/70 bg-sky-500/10" : "border-slate-700/60 hover:border-slate-600/80"}`}
+                  onClick={() => setSelectedPythonVersion(item.version)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-100">{item.version}</div>
+                      <div className="text-xs text-slate-400">{item.filename}</div>
+                    </div>
+                    <div className="text-[11px] text-slate-500">{item.updated_at ? new Date(item.updated_at).toLocaleString() : "—"}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="pt-2 space-y-1">
+              <div className="text-xs text-slate-400">Add version</div>
+              <div className="flex items-center gap-2">
+                <input
+                  className="input"
+                  placeholder="3.13"
+                  value={newPythonVersion}
+                  onChange={(e) => setNewPythonVersion(e.target.value)}
+                />
+                <button className="btn btn-secondary px-2 py-1 text-xs" onClick={handleStartNewVersion}>
+                  Start
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-xs text-slate-400">Recipe editor</div>
+                <div className="text-sm text-slate-200">
+                  {selectedPythonVersion ? `Editing ${selectedPythonVersion}` : "Select a version to edit"}
+                </div>
+                {selectedPythonMeta?.filename && (
+                  <div className="text-xs text-slate-500">{selectedPythonMeta.filename}</div>
+                )}
+              </div>
+              <div className="text-xs text-slate-400">{pythonRecipeDirty ? "Unsaved changes" : "Saved"}</div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+              <input
+                className="input text-xs"
+                type="file"
+                accept=".sh,.txt"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  handleRecipeFileSelect(file);
+                  e.target.value = "";
+                }}
+                disabled={!selectedPythonVersion && !newPythonVersion}
+              />
+              <button
+                className="btn btn-secondary px-2 py-1 text-xs"
+                disabled={!selectedPythonVersion}
+                onClick={() => {
+                  const template = pythonRecipeTemplate(selectedPythonVersion);
+                  if (template) {
+                    setPythonRecipeDraft(template);
+                    setPythonRecipeDirty(true);
+                  }
+                }}
+              >
+                Use template
+              </button>
+            </div>
+            <textarea
+              className="input font-mono text-xs h-64"
+              placeholder="Recipe script content..."
+              value={pythonRecipeDraft}
+              onChange={(e) => {
+                setPythonRecipeDraft(e.target.value);
+                setPythonRecipeDirty(true);
+              }}
+              disabled={!selectedPythonVersion}
+            />
+            {pythonRecipeLoading && <div className="text-xs text-slate-500">Loading recipe...</div>}
+          </div>
+        </div>
+        <div className="text-xs text-slate-500">
+          Recipes are loaded from the control-plane recipes directory and used to validate the default python version. New versions
+          should also be added to recipes/versions.sh with PY### pins.
         </div>
       </div>
       <div className="glass p-4 space-y-3">
@@ -4611,7 +5400,24 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                 <div className="font-semibold text-slate-100">{h.id}</div>
                 <div className="text-xs text-slate-400 truncate">{h.pattern}</div>
               </button>
-            )) : <EmptyState title="No hints" detail="No hints match your search." />}
+            )) : (
+              <EmptyState
+                title="No hints"
+                detail="No hints match your search."
+                actions={[
+                  { label: "Clear search", onAction: () => loadHints({ page: 1, query: "" }) },
+                  {
+                    label: "New hint",
+                    variant: "primary",
+                    onAction: () => {
+                      setSelectedHintId("");
+                      setHintForm(normalizeHintForm({}));
+                      setHintFormError("");
+                    },
+                  },
+                ]}
+              />
+            )}
           </div>
         </div>
         <div className="glass p-4 space-y-3 flex flex-col min-h-[520px]">
@@ -4626,7 +5432,21 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           </div>
           {!hintForm ? (
             <div className="flex-1 min-h-0 flex items-center">
-              <EmptyState title="Select a hint" detail="Pick a hint from the list to edit or create a new one." />
+              <EmptyState
+                title="Select a hint"
+                detail="Pick a hint from the list to edit or create a new one."
+                actions={[
+                  {
+                    label: "New hint",
+                    variant: "primary",
+                    onAction: () => {
+                      setSelectedHintId("");
+                      setHintForm(normalizeHintForm({}));
+                      setHintFormError("");
+                    },
+                  },
+                ]}
+              />
             </div>
           ) : (
             <div className="space-y-3 text-sm text-slate-200 flex-1 min-h-0 overflow-auto pr-1">
@@ -4798,7 +5618,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
 }
 
 export default function App() {
-  const [token, setToken] = useState(localStorage.getItem("refinery_token") || "");
+  const [token, setToken] = useState(
+    localStorage.getItem("refinery_ui_token") || localStorage.getItem("refinery_token") || ""
+  );
   const [toasts, setToasts] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem("refinery_theme") || "dark");
   const [metrics, setMetrics] = useState(null);

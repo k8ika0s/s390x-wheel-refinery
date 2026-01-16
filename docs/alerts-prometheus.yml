@@ -1,0 +1,56 @@
+groups:
+  - name: s390x-wheel-refinery
+    rules:
+      - alert: RefineryBuildQueueBacklog
+        expr: refinery_build_queue_length > 0 and refinery_build_queue_oldest_seconds > 900
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Build queue backlog
+          description: Build queue has items older than 15 minutes.
+
+      - alert: RefineryBuildFailureSpike
+        expr: refinery_build_failure_rate > 0.30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Build failure spike
+          description: Failure rate exceeded 30 percent over the metrics window.
+
+      - alert: RefineryWorkerSilence
+        expr: refinery_workers_online == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: No workers online
+          description: No worker heartbeats detected.
+
+      - alert: RefineryDBDown
+        expr: refinery_db_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Database down
+          description: Control-plane cannot reach Postgres.
+
+      - alert: RefineryLogStreamStall
+        expr: refinery_log_chunks_per_min == 0 and refinery_build_queue_length > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Log stream stalled
+          description: Builds are queued but no log chunks are being ingested.
+
+      - alert: RefineryCASHitRateLow
+        expr: refinery_cas_hit_rate < 0.20
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: CAS hit rate low
+          description: CAS hit rate below 20 percent; expect slower builds.

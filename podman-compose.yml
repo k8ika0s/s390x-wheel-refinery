@@ -92,11 +92,13 @@ services:
       INPUT_OBJECT_PREFIX: inputs
       HINTS_DIR: /hints
       HINTS_SEED: "1"
+      PYTHON_RECIPES_DIR: /recipes
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
     ports:
       - "8080:8080"
     volumes:
       - ./hints:/hints:ro
+      - ./recipes:/recipes:rw
 
   ui:
     build:
@@ -114,9 +116,13 @@ services:
       context: .
       dockerfile: containers/go-worker/Containerfile
     privileged: true
+    mem_limit: ${WORKER_MEM_LIMIT:-8g}
+    cpus: ${WORKER_CPU_LIMIT:-2}
     environment:
       OUTPUT_DIR: /output
       CACHE_DIR: /cache
+      CACHE_MAX_BYTES: ${CACHE_MAX_BYTES:-10737418240}
+      CACHE_PRUNE_INTERVAL_SEC: ${CACHE_PRUNE_INTERVAL_SEC:-300}
       PYTHON_VERSION: "3.11"
       PLATFORM_TAG: "manylinux2014_s390x"
       WORKER_TOKEN: ${WORKER_TOKEN:-}

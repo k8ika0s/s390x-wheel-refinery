@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -293,6 +294,53 @@ func TestDrainRespectsBuildPoolSize(t *testing.T) {
 	}
 	if atomic.LoadInt32(&r.totalRuns) != 2 {
 		t.Fatalf("expected 2 runs, got %d", r.totalRuns)
+	}
+}
+
+func TestPopBuildQueueCapsMax(t *testing.T) {
+	tests := []struct {
+		name     string
+		batch    int
+		pool     int
+		override int32
+		wantMax  string
+	}{
+		{name: "pool overrides batch", batch: 10, pool: 4, wantMax: "4"},
+		{name: "batch smaller than pool", batch: 2, pool: 5, wantMax: "2"},
+		{name: "no batch uses pool", batch: 0, pool: 3, wantMax: "3"},
+		{name: "override smaller than batch", batch: 10, pool: 5, override: 2, wantMax: "2"},
+		{name: "no limits", batch: 0, pool: 0, wantMax: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotMax := ""
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotMax = r.URL.Query().Get("max")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"builds":[]}`))
+			}))
+			defer srv.Close()
+
+			worker := &Worker{
+				Cfg: Config{
+					ControlPlaneURL: srv.URL,
+					BatchSize:       tt.batch,
+					BuildPoolSize:   tt.pool,
+				},
+			}
+			if tt.override > 0 {
+				v := atomic.Int32{}
+				v.Store(tt.override)
+				worker.buildPoolSize = &v
+			}
+
+			if _, err := worker.popBuildQueue(context.Background()); err != nil {
+				t.Fatalf("popBuildQueue: %v", err)
+			}
+			if gotMax != tt.wantMax {
+				t.Fatalf("expected max=%q, got %q", tt.wantMax, gotMax)
+			}
+		})
 	}
 }
 

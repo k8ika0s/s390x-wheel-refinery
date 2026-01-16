@@ -8,75 +8,95 @@ import (
 
 // Config holds runtime settings for the Go control plane.
 type Config struct {
-	HTTPAddr            string
-	PostgresDSN         string
-	QueueBackend        string
-	QueueFile           string
-	RedisURL            string
-	RedisKey            string
-	PlanRedisKey        string
-	KafkaBrokers        string
-	KafkaTopic          string
-	WorkerWebhookURL    string
-	WorkerPlanURL       string
-	WorkerToken         string
-	WorkerLocalCmd      string
-	SkipMigrate         bool
-	SettingsPath        string
-	AutoPlan            bool
-	AutoBuild           bool
-	BuildLeaseTimeout   int
-	LogChunkMax         int
-	HintsDir            string
-	SeedHints           bool
-	ObjectStoreEndpoint string
-	ObjectStoreBucket   string
-	ObjectStoreAccess   string
-	ObjectStoreSecret   string
-	ObjectStoreUseSSL   bool
-	InputObjectPrefix   string
-	CORSOrigins         []string
-	CORSHeaders         []string
-	CORSMethods         []string
-	CORSCredentials     bool
-	CORSMaxAge          int
+	HTTPAddr              string
+	PostgresDSN           string
+	QueueBackend          string
+	QueueFile             string
+	RedisURL              string
+	RedisKey              string
+	PlanRedisKey          string
+	KafkaBrokers          string
+	KafkaTopic            string
+	WorkerWebhookURL      string
+	WorkerPlanURL         string
+	WorkerToken           string
+	UIToken               string
+	WorkerLocalCmd        string
+	SkipMigrate           bool
+	SettingsPath          string
+	AutoPlan              bool
+	AutoBuild             bool
+	BuildLeaseTimeout     int
+	BuildStallTimeout     int
+	LogChunkMax           int
+	LogChunkMaxAgeHours   int
+	LogEntryMaxAgeHours   int
+	LogRetentionSweepSec  int
+	MetricsWindowMin      int
+	EventRetentionDays    int
+	AttemptRetentionDays  int
+	ManifestRetentionDays int
+	HintsDir              string
+	PythonRecipesDir      string
+	SeedHints             bool
+	ObjectStoreEndpoint   string
+	ObjectStoreBucket     string
+	ObjectStoreAccess     string
+	ObjectStoreSecret     string
+	ObjectStoreUseSSL     bool
+	InputObjectPrefix     string
+	CORSOrigins           []string
+	CORSHeaders           []string
+	CORSMethods           []string
+	CORSCredentials       bool
+	CORSMaxAge            int
 }
 
 // FromEnv loads configuration with sensible defaults.
 func FromEnv() Config {
 	cfg := Config{
-		HTTPAddr:            getenv("HTTP_ADDR", ":8080"),
-		PostgresDSN:         getenv("POSTGRES_DSN", "postgres://postgres:postgres@localhost:5432/refinery?sslmode=disable"),
-		QueueBackend:        getenv("QUEUE_BACKEND", "file"),
-		QueueFile:           getenv("QUEUE_FILE", "/tmp/refinery/retry_queue.json"),
-		RedisURL:            getenv("REDIS_URL", ""),
-		RedisKey:            getenv("REDIS_KEY", "refinery:queue"),
-		PlanRedisKey:        getenv("PLAN_REDIS_KEY", "refinery:plan_queue"),
-		KafkaBrokers:        getenv("KAFKA_BROKERS", ""),
-		KafkaTopic:          getenv("KAFKA_TOPIC", "refinery.queue"),
-		WorkerWebhookURL:    getenv("WORKER_WEBHOOK_URL", ""),
-		WorkerPlanURL:       getenv("WORKER_PLAN_URL", ""),
-		WorkerToken:         getenv("WORKER_TOKEN", ""),
-		WorkerLocalCmd:      getenv("WORKER_LOCAL_CMD", ""),
-		SkipMigrate:         getenv("CP_SKIP_MIGRATE", "") != "",
-		SettingsPath:        getenv("SETTINGS_PATH", "/config/settings.json"),
-		AutoPlan:            getenv("AUTO_PLAN", "0") != "0",
-		AutoBuild:           getenv("AUTO_BUILD", "0") != "0",
-		BuildLeaseTimeout:   getenvInt("BUILD_LEASE_TIMEOUT_SEC", 600),
-		LogChunkMax:         getenvInt("LOG_CHUNK_MAX", 5000),
-		HintsDir:            getenv("HINTS_DIR", "/hints"),
-		SeedHints:           getenv("HINTS_SEED", "1") != "0",
-		ObjectStoreEndpoint: getenv("OBJECT_STORE_ENDPOINT", ""),
-		ObjectStoreBucket:   getenv("OBJECT_STORE_BUCKET", ""),
-		ObjectStoreAccess:   getenv("OBJECT_STORE_ACCESS_KEY", ""),
-		ObjectStoreSecret:   getenv("OBJECT_STORE_SECRET_KEY", ""),
-		ObjectStoreUseSSL:   getenvBool("OBJECT_STORE_USE_SSL", false),
-		InputObjectPrefix:   getenv("INPUT_OBJECT_PREFIX", "inputs"),
-		CORSOrigins:         parseCSV(getenv("CORS_ORIGINS", "")),
-		CORSHeaders:         parseCSV(getenv("CORS_HEADERS", "Content-Type,Authorization,X-Worker-Token")),
-		CORSMethods:         parseCSV(getenv("CORS_METHODS", "GET,POST,PUT,DELETE,OPTIONS")),
-		CORSCredentials:     getenvBool("CORS_CREDENTIALS", false),
-		CORSMaxAge:          getenvInt("CORS_MAX_AGE", 600),
+		HTTPAddr:              getenv("HTTP_ADDR", ":8080"),
+		PostgresDSN:           getenv("POSTGRES_DSN", "postgres://postgres:postgres@localhost:5432/refinery?sslmode=disable"),
+		QueueBackend:          getenv("QUEUE_BACKEND", "file"),
+		QueueFile:             getenv("QUEUE_FILE", "/tmp/refinery/retry_queue.json"),
+		RedisURL:              getenv("REDIS_URL", ""),
+		RedisKey:              getenv("REDIS_KEY", "refinery:queue"),
+		PlanRedisKey:          getenv("PLAN_REDIS_KEY", "refinery:plan_queue"),
+		KafkaBrokers:          getenv("KAFKA_BROKERS", ""),
+		KafkaTopic:            getenv("KAFKA_TOPIC", "refinery.queue"),
+		WorkerWebhookURL:      getenv("WORKER_WEBHOOK_URL", ""),
+		WorkerPlanURL:         getenv("WORKER_PLAN_URL", ""),
+		WorkerToken:           getenv("WORKER_TOKEN", ""),
+		UIToken:               getenv("UI_TOKEN", ""),
+		WorkerLocalCmd:        getenv("WORKER_LOCAL_CMD", ""),
+		SkipMigrate:           getenv("CP_SKIP_MIGRATE", "") != "",
+		SettingsPath:          getenv("SETTINGS_PATH", "/config/settings.json"),
+		AutoPlan:              getenv("AUTO_PLAN", "0") != "0",
+		AutoBuild:             getenv("AUTO_BUILD", "0") != "0",
+		BuildLeaseTimeout:     getenvInt("BUILD_LEASE_TIMEOUT_SEC", 600),
+		BuildStallTimeout:     getenvInt("BUILD_STALL_TIMEOUT_SEC", 1800),
+		LogChunkMax:           getenvInt("LOG_CHUNK_MAX", 5000),
+		LogChunkMaxAgeHours:   getenvInt("LOG_CHUNK_MAX_AGE_HOURS", 168),
+		LogEntryMaxAgeHours:   getenvInt("LOG_ENTRY_MAX_AGE_HOURS", 720),
+		LogRetentionSweepSec:  getenvInt("LOG_RETENTION_SWEEP_SEC", 300),
+		MetricsWindowMin:      getenvInt("METRICS_WINDOW_MINUTES", 60),
+		EventRetentionDays:    getenvInt("EVENT_RETENTION_DAYS", 0),
+		AttemptRetentionDays:  getenvInt("BUILD_ATTEMPT_RETENTION_DAYS", 0),
+		ManifestRetentionDays: getenvInt("MANIFEST_RETENTION_DAYS", 0),
+		HintsDir:              getenv("HINTS_DIR", "/hints"),
+		PythonRecipesDir:      getenv("PYTHON_RECIPES_DIR", "/recipes"),
+		SeedHints:             getenv("HINTS_SEED", "1") != "0",
+		ObjectStoreEndpoint:   getenv("OBJECT_STORE_ENDPOINT", ""),
+		ObjectStoreBucket:     getenv("OBJECT_STORE_BUCKET", ""),
+		ObjectStoreAccess:     getenv("OBJECT_STORE_ACCESS_KEY", ""),
+		ObjectStoreSecret:     getenv("OBJECT_STORE_SECRET_KEY", ""),
+		ObjectStoreUseSSL:     getenvBool("OBJECT_STORE_USE_SSL", false),
+		InputObjectPrefix:     getenv("INPUT_OBJECT_PREFIX", "inputs"),
+		CORSOrigins:           parseCSV(getenv("CORS_ORIGINS", "")),
+		CORSHeaders:           parseCSV(getenv("CORS_HEADERS", "Content-Type,Authorization,X-Worker-Token,X-UI-Token")),
+		CORSMethods:           parseCSV(getenv("CORS_METHODS", "GET,POST,PUT,DELETE,OPTIONS")),
+		CORSCredentials:       getenvBool("CORS_CREDENTIALS", false),
+		CORSMaxAge:            getenvInt("CORS_MAX_AGE", 600),
 	}
 	return cfg
 }

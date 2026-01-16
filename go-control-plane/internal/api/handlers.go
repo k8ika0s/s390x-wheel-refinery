@@ -13,7 +13,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os/exec"
+	"path"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,13 +34,15 @@ import (
 
 // Handler wires HTTP routes to store/queue backends.
 type Handler struct {
-	Store      store.Store
-	Queue      queue.Backend
-	PlanQ      queue.PlanQueueBackend
-	InputStore objectstore.Store
-	Config     config.Config
-	logHubOnce sync.Once
-	logHub     *logHub
+	Store                 store.Store
+	Queue                 queue.Backend
+	PlanQ                 queue.PlanQueueBackend
+	InputStore            objectstore.Store
+	Config                config.Config
+	logHubOnce            sync.Once
+	logHub                *logHub
+	logRetentionMu        sync.Mutex
+	lastLogRetentionSweep time.Time
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
@@ -46,6 +52,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/metrics", h.promMetrics)
 	mux.HandleFunc("/api/config", h.config)
 	mux.HandleFunc("/api/settings", h.settings)
+	mux.HandleFunc("/api/python-versions", h.pythonVersions)
+	mux.HandleFunc("/api/python-versions/", h.pythonVersionByID)
 	mux.HandleFunc("/api/pending-inputs", h.pendingInputs)
 	mux.HandleFunc("/api/pending-inputs/clear", h.pendingInputsClear)
 	mux.HandleFunc("/api/pending-inputs/", h.pendingInputAction)
@@ -55,9 +63,12 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/requirements/upload", h.requirementsUpload)
 	mux.HandleFunc("/api/wheels/upload", h.wheelsUpload)
 	mux.HandleFunc("/api/builds", h.builds)
+	mux.HandleFunc("/api/builds/attempts", h.buildAttempts)
 	mux.HandleFunc("/api/builds/status", h.buildStatusUpdate)
 	mux.HandleFunc("/api/build-queue/pop", h.buildQueuePop)
+	mux.HandleFunc("/api/build-queue/requeue-stale", h.buildQueueRequeueStale)
 	mux.HandleFunc("/api/session/token", h.sessionToken)
+	mux.HandleFunc("/api/session/ui-token", h.sessionUIToken)
 	mux.HandleFunc("/api/summary", h.summary)
 	mux.HandleFunc("/api/recent", h.recent)
 	mux.HandleFunc("/api/history", h.history)
@@ -86,6 +97,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/logs", h.logsIngest)
 	mux.HandleFunc("/api/logs/stream/", h.logsStream)
 	mux.HandleFunc("/api/logs/chunks/", h.logsChunks)
+	mux.HandleFunc("/simple", h.simpleIndex)
+	mux.HandleFunc("/simple/", h.simpleIndex)
 	mux.HandleFunc("/api/workers", h.workers)
 	mux.HandleFunc("/api/worker/heartbeat", h.workerHeartbeat)
 	mux.HandleFunc("/api/worker/trigger", h.workerTrigger)
@@ -146,6 +159,23 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		Online        int   `json:"online"`
 		Stale         int   `json:"stale"`
 		LatestSeenSec int64 `json:"latest_seen_seconds,omitempty"`
+		CASHits       int64 `json:"cas_hits,omitempty"`
+		CASMisses     int64 `json:"cas_misses,omitempty"`
+	}
+	type attemptMetrics struct {
+		Total         int     `json:"total"`
+		Built         int     `json:"built"`
+		Failed        int     `json:"failed"`
+		Retry         int     `json:"retry"`
+		Quarantined   int     `json:"quarantined"`
+		AvgDurationMs float64 `json:"avg_duration_ms"`
+		FailureRate   float64 `json:"failure_rate"`
+		RetryChurn    float64 `json:"retry_churn"`
+	}
+	type logMetrics struct {
+		RecentChunks int     `json:"recent_chunks"`
+		WindowMin    int     `json:"window_minutes"`
+		ChunksPerMin float64 `json:"chunks_per_min"`
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
@@ -236,6 +266,8 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 				} else {
 					wm.Stale++
 				}
+				wm.CASHits += ws.CASHits
+				wm.CASMisses += ws.CASMisses
 			}
 		}
 	}
@@ -251,6 +283,38 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		poolPlan = s.PlanPoolSize
 		poolBuild = s.BuildPoolSize
 	}
+	windowMin := h.Config.MetricsWindowMin
+	if windowMin <= 0 {
+		windowMin = 60
+	}
+	since := time.Now().Add(-time.Duration(windowMin) * time.Minute)
+	am := attemptMetrics{}
+	if h.Store != nil {
+		if stats, err := h.Store.BuildAttemptStats(ctx, since); err == nil {
+			am.Total = stats.Total
+			am.Built = stats.Built
+			am.Failed = stats.Failed
+			am.Retry = stats.Retry
+			am.Quarantined = stats.Quarantined
+			am.AvgDurationMs = stats.AvgDurationMs
+			denom := stats.Built + stats.Failed + stats.Quarantined
+			if denom > 0 {
+				am.FailureRate = float64(stats.Failed+stats.Quarantined) / float64(denom)
+			}
+			if stats.Total > 0 {
+				am.RetryChurn = float64(stats.Retry) / float64(stats.Total)
+			}
+		}
+	}
+	lm := logMetrics{WindowMin: windowMin}
+	if h.Store != nil {
+		if stats, err := h.Store.LogChunkStats(ctx, since); err == nil {
+			lm.RecentChunks = stats.Total
+			if windowMin > 0 {
+				lm.ChunksPerMin = float64(stats.Total) / float64(windowMin)
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary": map[string]any{
 			"title":       "Control-plane metrics",
@@ -262,6 +326,8 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		"build":           buildStats,
 		"hints":           hm,
 		"workers":         wm,
+		"attempts":        am,
+		"logs":            lm,
 		"db":              dbm,
 		"status_counts":   sum.StatusCounts,
 		"recent_failures": sum.Failures,
@@ -337,6 +403,8 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 	if list, err := h.Store.ListWorkers(ctx); err == nil {
 		total := 0
 		online := 0
+		var casHits int64
+		var casMisses int64
 		now := time.Now().Unix()
 		for _, ws := range list {
 			total++
@@ -351,6 +419,8 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 			if now-ws.LastSeen <= threshold {
 				online++
 			}
+			casHits += ws.CASHits
+			casMisses += ws.CASMisses
 		}
 		fmt.Fprintf(&buf, "# HELP refinery_workers_total Total workers reporting heartbeats.\n")
 		fmt.Fprintf(&buf, "# TYPE refinery_workers_total gauge\n")
@@ -358,6 +428,18 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&buf, "# HELP refinery_workers_online Workers seen within heartbeat window.\n")
 		fmt.Fprintf(&buf, "# TYPE refinery_workers_online gauge\n")
 		fmt.Fprintf(&buf, "refinery_workers_online %d\n", online)
+		fmt.Fprintf(&buf, "# HELP refinery_cas_hits Total CAS fetch hits reported by workers.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_cas_hits gauge\n")
+		fmt.Fprintf(&buf, "refinery_cas_hits %d\n", casHits)
+		fmt.Fprintf(&buf, "# HELP refinery_cas_misses Total CAS fetch misses reported by workers.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_cas_misses gauge\n")
+		fmt.Fprintf(&buf, "refinery_cas_misses %d\n", casMisses)
+		totalCAS := casHits + casMisses
+		if totalCAS > 0 {
+			fmt.Fprintf(&buf, "# HELP refinery_cas_hit_rate CAS hit ratio over reported lifetime.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_cas_hit_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_cas_hit_rate %.4f\n", float64(casHits)/float64(totalCAS))
+		}
 	}
 	fmt.Fprintf(&buf, "# HELP refinery_db_up Database connectivity (1=up,0=down).\n")
 	fmt.Fprintf(&buf, "# TYPE refinery_db_up gauge\n")
@@ -366,6 +448,52 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&buf, "# TYPE refinery_status_count gauge\n")
 	for k, v := range sum.StatusCounts {
 		fmt.Fprintf(&buf, "refinery_status_count{status=%q} %d\n", k, v)
+	}
+	windowMin := h.Config.MetricsWindowMin
+	if windowMin <= 0 {
+		windowMin = 60
+	}
+	since := time.Now().Add(-time.Duration(windowMin) * time.Minute)
+	if stats, err := h.Store.BuildAttemptStats(ctx, since); err == nil {
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_total Build attempts in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_total %d\n", stats.Total)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_failed Build attempts failed in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_failed gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_failed %d\n", stats.Failed)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_retry Build attempts scheduled for retry in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_retry gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_retry %d\n", stats.Retry)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_quarantined Build attempts quarantined in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_quarantined gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_quarantined %d\n", stats.Quarantined)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_built Build attempts completed successfully in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_built gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_built %d\n", stats.Built)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_avg_duration_ms Average build duration in ms.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_avg_duration_ms gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_avg_duration_ms %.2f\n", stats.AvgDurationMs)
+		denom := stats.Built + stats.Failed + stats.Quarantined
+		if denom > 0 {
+			fmt.Fprintf(&buf, "# HELP refinery_build_failure_rate Failure rate in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_build_failure_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_build_failure_rate %.4f\n", float64(stats.Failed+stats.Quarantined)/float64(denom))
+		}
+		if stats.Total > 0 {
+			fmt.Fprintf(&buf, "# HELP refinery_build_retry_churn Retry ratio in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_build_retry_churn gauge\n")
+			fmt.Fprintf(&buf, "refinery_build_retry_churn %.4f\n", float64(stats.Retry)/float64(stats.Total))
+		}
+	}
+	if stats, err := h.Store.LogChunkStats(ctx, since); err == nil {
+		fmt.Fprintf(&buf, "# HELP refinery_log_chunks_recent_total Log chunks ingested in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_log_chunks_recent_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_log_chunks_recent_total{window_min=%d} %d\n", windowMin, stats.Total)
+		if windowMin > 0 {
+			fmt.Fprintf(&buf, "# HELP refinery_log_chunks_per_min Log chunk throughput per minute.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_log_chunks_per_min gauge\n")
+			fmt.Fprintf(&buf, "refinery_log_chunks_per_min %0.2f\n", float64(stats.Total)/float64(windowMin))
+		}
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	w.WriteHeader(http.StatusOK)
@@ -390,6 +518,26 @@ func (h *Handler) sessionToken(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "token set"})
+}
+
+func (h *Handler) sessionUIToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token required"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "ui_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: false,
+		SameSite: http.SameSiteLaxMode,
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"detail": "ui token set"})
 }
 
 func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
@@ -654,6 +802,10 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if err := h.requireUIToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
 	if h.Config.ObjectStoreEndpoint == "" || h.Config.ObjectStoreBucket == "" {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "input store not configured"})
 		return
@@ -734,6 +886,10 @@ func (h *Handler) requirementsUpload(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) wheelsUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireUIToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 	if h.Config.ObjectStoreEndpoint == "" || h.Config.ObjectStoreBucket == "" {
@@ -839,6 +995,10 @@ func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, settings.Load(h.Config.SettingsPath))
 	case http.MethodPost:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		var s settings.Settings
 		if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -855,6 +1015,17 @@ func (h *Handler) settings(w http.ResponseWriter, r *http.Request) {
 		if err := settings.Validate(s); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
+		}
+		if s.PythonVersion != "" {
+			versions, err := h.listPythonRecipes()
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			if len(versions) > 0 && !containsPythonVersion(versions, s.PythonVersion) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "python_version not in managed versions list"})
+				return
+			}
 		}
 		if h.Store != nil {
 			if err := h.Store.SaveSettings(r.Context(), s); err != nil {
@@ -899,7 +1070,7 @@ func (h *Handler) pendingInputsClear(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -945,7 +1116,7 @@ func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if action == "" && r.Method == http.MethodDelete {
-		if err := h.requireWorkerToken(r); err != nil {
+		if err := h.requireUIToken(r); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 			return
 		}
@@ -970,6 +1141,10 @@ func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 			return
 		}
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		if h.PlanQ == nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "plan queue not configured"})
 			return
@@ -985,7 +1160,7 @@ func (h *Handler) pendingInputAction(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 			return
 		}
-		if err := h.requireWorkerToken(r); err != nil {
+		if err := h.requireUIToken(r); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1012,7 +1187,7 @@ func (h *Handler) pendingInputPop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1039,7 +1214,7 @@ func (h *Handler) pendingInputStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1077,7 +1252,7 @@ func (h *Handler) planQueueClear(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1132,7 +1307,7 @@ func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, list)
 	case http.MethodDelete:
-		if err := h.requireWorkerToken(r); err != nil {
+		if err := h.requireUIToken(r); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1146,6 +1321,26 @@ func (h *Handler) builds(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+func (h *Handler) buildAttempts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	pkg := r.URL.Query().Get("package")
+	version := r.URL.Query().Get("version")
+	if pkg == "" || version == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package and version required"})
+		return
+	}
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 50, 200)
+	rows, err := h.Store.ListBuildAttempts(r.Context(), pkg, version, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
@@ -1164,9 +1359,17 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		Error          string   `json:"error,omitempty"`
 		FailureSummary string   `json:"failure_summary,omitempty"`
 		Attempts       int      `json:"attempts,omitempty"`
+		PlanID         int64    `json:"plan_id,omitempty"`
+		NodeID         string   `json:"node_id,omitempty"`
 		BackoffUntil   int64    `json:"backoff_until,omitempty"`
+		BackoffReason  string   `json:"backoff_reason,omitempty"`
+		BackoffSeconds int      `json:"backoff_seconds,omitempty"`
+		DurationMS     int64    `json:"duration_ms,omitempty"`
+		ReasonCode     string   `json:"reason_code,omitempty"`
+		ReasonDetail   string   `json:"reason_detail,omitempty"`
 		Recipes        []string `json:"recipes,omitempty"`
 		HintIDs        []string `json:"hint_ids,omitempty"`
+		WorkerID       string   `json:"worker_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -1176,9 +1379,33 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package, version, and status required"})
 		return
 	}
-	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.Recipes, body.HintIDs); err != nil {
+	workerID := strings.TrimSpace(body.WorkerID)
+	if workerID == "" {
+		workerID = strings.TrimSpace(r.Header.Get("X-Worker-Id"))
+	}
+	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.BackoffReason, body.BackoffSeconds, body.ReasonCode, body.ReasonDetail, body.Recipes, body.HintIDs, body.PlanID, body.NodeID, workerID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	if body.Attempts > 0 && shouldRecordBuildAttempt(body.Status) {
+		_ = h.Store.UpsertBuildAttempt(r.Context(), store.BuildAttempt{
+			Package:        body.Package,
+			Version:        body.Version,
+			Attempt:        body.Attempts,
+			Status:         body.Status,
+			LastError:      body.Error,
+			FailureSummary: body.FailureSummary,
+			BackoffUntil:   body.BackoffUntil,
+			BackoffReason:  body.BackoffReason,
+			BackoffSeconds: body.BackoffSeconds,
+			DurationMS:     body.DurationMS,
+			ReasonCode:     body.ReasonCode,
+			ReasonDetail:   body.ReasonDetail,
+			Recipes:        body.Recipes,
+			HintIDs:        body.HintIDs,
+			NodeID:         body.NodeID,
+			PlanID:         body.PlanID,
+		})
 	}
 	if body.Status == "building" || body.Status == "pending" || body.Status == "retry" {
 		detail := "build status updated"
@@ -1194,11 +1421,26 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		if body.Attempts > 0 {
 			meta["attempt"] = body.Attempts
 		}
+		if body.BackoffReason != "" {
+			meta["backoff_reason"] = body.BackoffReason
+		}
+		if body.BackoffSeconds > 0 {
+			meta["backoff_seconds"] = body.BackoffSeconds
+		}
+		if body.PlanID > 0 {
+			meta["plan_id"] = body.PlanID
+		}
+		if body.NodeID != "" {
+			meta["node_id"] = body.NodeID
+		}
 		if len(body.Recipes) > 0 {
 			meta["recipes"] = body.Recipes
 		}
 		if len(body.HintIDs) > 0 {
 			meta["hint_ids"] = body.HintIDs
+		}
+		if workerID != "" {
+			meta["worker_id"] = workerID
 		}
 		_ = h.Store.RecordEvent(r.Context(), store.Event{
 			Name:           body.Package,
@@ -1221,6 +1463,15 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "build status updated"})
 }
 
+func shouldRecordBuildAttempt(status string) bool {
+	switch strings.ToLower(status) {
+	case "building", "retry", "failed", "built", "quarantined":
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -1231,15 +1482,18 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	max := parseIntDefault(r.URL.Query().Get("max"), 5, 100)
-	if h.Store != nil && h.Config.BuildLeaseTimeout > 0 {
-		_, _ = h.Store.RequeueStaleLeases(r.Context(), h.Config.BuildLeaseTimeout)
+	workerID := strings.TrimSpace(r.Header.Get("X-Worker-Id"))
+	if workerID == "" {
+		workerID = strings.TrimSpace(r.URL.Query().Get("worker_id"))
 	}
-	builds, err := h.Store.LeaseBuilds(r.Context(), max)
+	_, _ = h.requeueStaleBuilds(r.Context())
+	builds, err := h.Store.LeaseBuilds(r.Context(), max, workerID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	type job struct {
+		NodeID      string   `json:"node_id,omitempty"`
 		Package     string   `json:"package"`
 		Version     string   `json:"version"`
 		PythonTag   string   `json:"python_tag"`
@@ -1253,6 +1507,7 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 	var out []job
 	for _, b := range builds {
 		out = append(out, job{
+			NodeID:      b.NodeID,
 			Package:     b.Package,
 			Version:     b.Version,
 			PythonTag:   b.PythonTag,
@@ -1265,6 +1520,57 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"builds": out})
+}
+
+func (h *Handler) buildQueueRequeueStale(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	stale, err := h.requeueStaleBuilds(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"detail": "requeued stale builds", "count": len(stale)})
+}
+
+func (h *Handler) requeueStaleBuilds(ctx context.Context) ([]store.BuildStatus, error) {
+	if h.Store == nil || (h.Config.BuildLeaseTimeout <= 0 && h.Config.BuildStallTimeout <= 0) {
+		return nil, nil
+	}
+	stale, err := h.Store.RequeueStaleBuilds(ctx, h.Config.BuildLeaseTimeout, h.Config.BuildStallTimeout)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range stale {
+		detail := "requeued stale lease"
+		if b.PreviousStatus == "building" {
+			detail = "requeued stalled build"
+		}
+		if b.StaleAgeSec > 0 {
+			detail = fmt.Sprintf("%s (age %ds)", detail, b.StaleAgeSec)
+		}
+		_ = h.Store.RecordEvent(ctx, store.Event{
+			RunID:       b.RunID,
+			Name:        b.Package,
+			Version:     b.Version,
+			PythonTag:   b.PythonTag,
+			PlatformTag: b.PlatformTag,
+			Status:      "retry",
+			Detail:      detail,
+			Timestamp:   time.Now().Unix(),
+			Metadata: map[string]any{
+				"previous_status": b.PreviousStatus,
+				"stale_age_sec":   b.StaleAgeSec,
+			},
+		})
+	}
+	return stale, nil
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
@@ -1468,6 +1774,10 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, res)
 	case http.MethodPost:
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		var body struct {
 			RunID          string           `json:"run_id"`
 			Plan           []store.PlanNode `json:"plan"`
@@ -1517,7 +1827,7 @@ func (h *Handler) plans(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, list)
 	case http.MethodDelete:
-		if err := h.requireWorkerToken(r); err != nil {
+		if err := h.requireUIToken(r); err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1597,6 +1907,10 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, snap)
 	case http.MethodPost:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		if action != "enqueue-builds" && action != "enqueue-build" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action"})
 			return
@@ -1643,21 +1957,30 @@ func (h *Handler) planByID(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Package string `json:"package"`
 			Version string `json:"version"`
+			NodeID  string `json:"node_id,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 			return
 		}
+		nodeID := strings.TrimSpace(body.NodeID)
 		pkg := strings.TrimSpace(body.Package)
 		ver := strings.TrimSpace(body.Version)
-		if pkg == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package required"})
+		if nodeID == "" && pkg == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "package or node_id required"})
 			return
 		}
 		var target *store.PlanNode
 		ambiguous := false
 		for i, node := range snap.Plan {
 			if !strings.EqualFold(node.Action, "build") {
+				continue
+			}
+			if nodeID != "" {
+				if node.NodeID == nodeID {
+					target = &snap.Plan[i]
+					break
+				}
 				continue
 			}
 			if !strings.EqualFold(node.Name, pkg) {
@@ -1711,6 +2034,10 @@ func (h *Handler) manifest(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, res)
 	case http.MethodPost:
+		if err := h.requireWorkerToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		var entries []store.ManifestEntry
 		if err := json.NewDecoder(r.Body).Decode(&entries); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -1822,6 +2149,10 @@ func (h *Handler) logsIngest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if err := h.requireWorkerToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
 	if r.ContentLength > 1_000_000 {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "log too large"})
 		return
@@ -1840,7 +2171,54 @@ func (h *Handler) logsIngest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	h.maybeSweepLogs(r.Context())
 	writeJSON(w, http.StatusOK, map[string]string{"detail": "log saved"})
+}
+
+func (h *Handler) maybeSweepLogs(ctx context.Context) {
+	if h.Store == nil {
+		return
+	}
+	maxChunkAge := h.Config.LogChunkMaxAgeHours
+	maxLogAge := h.Config.LogEntryMaxAgeHours
+	eventDays := h.Config.EventRetentionDays
+	attemptDays := h.Config.AttemptRetentionDays
+	manifestDays := h.Config.ManifestRetentionDays
+	if maxChunkAge <= 0 && maxLogAge <= 0 && eventDays <= 0 && attemptDays <= 0 && manifestDays <= 0 {
+		return
+	}
+	intervalSec := h.Config.LogRetentionSweepSec
+	if intervalSec <= 0 {
+		intervalSec = 300
+	}
+	h.logRetentionMu.Lock()
+	if !h.lastLogRetentionSweep.IsZero() && time.Since(h.lastLogRetentionSweep) < time.Duration(intervalSec)*time.Second {
+		h.logRetentionMu.Unlock()
+		return
+	}
+	h.lastLogRetentionSweep = time.Now()
+	h.logRetentionMu.Unlock()
+	now := time.Now()
+	if maxChunkAge > 0 {
+		cutoff := now.Add(-time.Duration(maxChunkAge) * time.Hour)
+		_, _ = h.Store.TrimLogChunksBefore(ctx, cutoff)
+	}
+	if maxLogAge > 0 {
+		cutoff := now.Add(-time.Duration(maxLogAge) * time.Hour)
+		_, _ = h.Store.TrimLogsBefore(ctx, cutoff)
+	}
+	if eventDays > 0 {
+		cutoff := now.Add(-time.Duration(eventDays) * 24 * time.Hour)
+		_, _ = h.Store.TrimEventsBefore(ctx, cutoff)
+	}
+	if attemptDays > 0 {
+		cutoff := now.Add(-time.Duration(attemptDays) * 24 * time.Hour)
+		_, _ = h.Store.TrimBuildAttemptsBefore(ctx, cutoff)
+	}
+	if manifestDays > 0 {
+		cutoff := now.Add(-time.Duration(manifestDays) * 24 * time.Hour)
+		_, _ = h.Store.TrimManifestsBefore(ctx, cutoff)
+	}
 }
 
 func (h *Handler) queueList(w http.ResponseWriter, r *http.Request) {
@@ -1883,6 +2261,10 @@ func (h *Handler) queueEnqueue(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if err := h.requireUIToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
 	var req queue.Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -1904,6 +2286,10 @@ func (h *Handler) queueClear(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if err := h.requireUIToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
 	if err := h.Queue.Clear(r.Context()); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1916,7 +2302,7 @@ func (h *Handler) workerTrigger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if err := h.requireWorkerToken(r); err != nil {
+	if err := h.requireUIToken(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1969,6 +2355,8 @@ func (h *Handler) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		BuildPoolSize        int    `json:"build_pool_size,omitempty"`
 		PlanPoolSize         int    `json:"plan_pool_size,omitempty"`
 		HeartbeatIntervalSec int    `json:"heartbeat_interval_sec,omitempty"`
+		CASHits              int64  `json:"cas_hits,omitempty"`
+		CASMisses            int64  `json:"cas_misses,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
@@ -1989,6 +2377,8 @@ func (h *Handler) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		BuildPoolSize:        body.BuildPoolSize,
 		PlanPoolSize:         body.PlanPoolSize,
 		HeartbeatIntervalSec: body.HeartbeatIntervalSec,
+		CASHits:              body.CASHits,
+		CASMisses:            body.CASMisses,
 	}
 	if err := h.Store.UpsertWorkerStatus(r.Context(), status); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -2053,6 +2443,10 @@ func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, hints)
 	case http.MethodPost:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		var hint store.Hint
 		if err := json.NewDecoder(r.Body).Decode(&hint); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -2079,6 +2473,10 @@ func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) hintsBulk(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if err := h.requireUIToken(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
 	if h.Store == nil {
@@ -2163,6 +2561,10 @@ func (h *Handler) hintByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, hint)
 	case http.MethodPut:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		var hint store.Hint
 		if err := json.NewDecoder(r.Body).Decode(&hint); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -2183,6 +2585,10 @@ func (h *Handler) hintByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "updated"})
 	case http.MethodDelete:
+		if err := h.requireUIToken(r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+			return
+		}
 		if err := h.Store.DeleteHint(r.Context(), id); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -2250,15 +2656,17 @@ func (h *Handler) logsChunks(w http.ResponseWriter, r *http.Request) {
 	}
 	name, version := parts[3], parts[4]
 	after := parseInt64Default(r.URL.Query().Get("after"), 0)
+	afterSeq := parseInt64Default(r.URL.Query().Get("after_seq"), 0)
 	limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 2000)
+	attempt := parseIntDefault(r.URL.Query().Get("attempt"), 0, 1000)
 	tail := r.URL.Query().Get("tail")
 	tailOn := tail == "1" || strings.EqualFold(tail, "true")
 	var chunks []store.LogChunk
 	var err error
 	if tailOn {
-		chunks, err = h.Store.TailLogChunks(r.Context(), name, version, limit)
+		chunks, err = h.Store.TailLogChunks(r.Context(), name, version, attempt, limit)
 	} else {
-		chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+		chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, afterSeq, attempt, limit)
 	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -2286,7 +2694,7 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 		}
 		runID := r.URL.Query().Get("run_id")
 		attempt := parseIntDefault(r.URL.Query().Get("attempt"), 0, 1000)
-		key := logStreamKey(name, version)
+		key := logStreamKey(name, version, attempt)
 		seqFallback := int64(0)
 		trimEvery := 50
 		trimCounter := 0
@@ -2346,44 +2754,145 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 		if h.Config.LogChunkMax > 0 && trimCounter > 0 {
 			_, _ = h.Store.TrimLogChunks(r.Context(), name, version, h.Config.LogChunkMax)
 		}
+		h.maybeSweepLogs(r.Context())
 		writeJSON(w, http.StatusOK, map[string]string{"detail": "log stream ingested"})
 	case http.MethodGet:
 		after := parseInt64Default(r.URL.Query().Get("after"), 0)
+		afterSeq := parseInt64Default(r.URL.Query().Get("after_seq"), 0)
 		limit := parseIntDefault(r.URL.Query().Get("limit"), 200, 2000)
+		attempt := parseIntDefault(r.URL.Query().Get("attempt"), 0, 1000)
 		tail := r.URL.Query().Get("tail")
 		tailOn := tail == "1" || strings.EqualFold(tail, "true")
-		key := logStreamKey(name, version)
+		key := logStreamKey(name, version, attempt)
 		websocket.Handler(func(ws *websocket.Conn) {
 			defer ws.Close()
 			if h.Store != nil {
 				var chunks []store.LogChunk
 				var err error
 				if tailOn {
-					chunks, err = h.Store.TailLogChunks(r.Context(), name, version, limit)
+					chunks, err = h.Store.TailLogChunks(r.Context(), name, version, attempt, limit)
 				} else {
-					chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, limit)
+					chunks, err = h.Store.ListLogChunks(r.Context(), name, version, after, afterSeq, attempt, limit)
 				}
 				if err == nil {
 					for _, chunk := range chunks {
 						_ = websocket.JSON.Send(ws, chunk)
 						after = chunk.ID
+						if chunk.Seq > 0 {
+							afterSeq = chunk.Seq
+						}
 					}
 				}
 			}
 			ch, unsubscribe := h.getLogHub().subscribe(key)
 			defer unsubscribe()
 			for chunk := range ch {
-				if chunk.ID <= after {
+				if afterSeq > 0 {
+					if chunk.Seq > 0 && chunk.Seq <= afterSeq {
+						continue
+					}
+				} else if chunk.ID <= after {
+					continue
+				}
+				if attempt > 0 && chunk.Attempt != attempt {
 					continue
 				}
 				if err := websocket.JSON.Send(ws, chunk); err != nil {
 					return
+				}
+				after = chunk.ID
+				if chunk.Seq > 0 {
+					afterSeq = chunk.Seq
 				}
 			}
 		}).ServeHTTP(w, r)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+func (h *Handler) simpleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/simple")
+	path = strings.Trim(path, "/")
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 5000, 50000)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if path == "" {
+		names, err := h.Store.ManifestPackages(r.Context(), limit)
+		if err != nil {
+			writeHTML(w, http.StatusInternalServerError, "manifest query failed")
+			return
+		}
+		normalized := make([]string, 0, len(names))
+		seen := map[string]bool{}
+		for _, name := range names {
+			n := normalizeProjectName(name)
+			if n == "" || seen[n] {
+				continue
+			}
+			seen[n] = true
+			normalized = append(normalized, n)
+		}
+		sort.Strings(normalized)
+		var builder strings.Builder
+		builder.WriteString("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Wheelhouse</title></head><body>\n")
+		for _, name := range normalized {
+			builder.WriteString(fmt.Sprintf("<a href=\"/simple/%s/\">%s</a><br/>\n", name, name))
+		}
+		builder.WriteString("</body></html>")
+		writeHTML(w, http.StatusOK, builder.String())
+		return
+	}
+	if strings.Contains(path, "/") {
+		writeHTML(w, http.StatusNotFound, "not found")
+		return
+	}
+	normalized := normalizeProjectName(path)
+	if normalized == "" {
+		writeHTML(w, http.StatusNotFound, "not found")
+		return
+	}
+	entries, err := h.Store.ManifestByNormalizedName(r.Context(), normalized, limit)
+	if err != nil {
+		writeHTML(w, http.StatusInternalServerError, "manifest query failed")
+		return
+	}
+	if len(entries) == 0 {
+		writeHTML(w, http.StatusNotFound, "package not found")
+		return
+	}
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>%s</title></head><body>\n", normalized))
+	for _, entry := range entries {
+		href := entry.WheelURL
+		if href == "" {
+			href = entry.Wheel
+		}
+		if href == "" {
+			continue
+		}
+		label := pathBase(href)
+		builder.WriteString(fmt.Sprintf("<a href=\"%s\">%s</a><br/>\n", href, label))
+	}
+	builder.WriteString("</body></html>")
+	writeHTML(w, http.StatusOK, builder.String())
+}
+
+func normalizeProjectName(name string) string {
+	out := strings.ToLower(strings.TrimSpace(name))
+	out = regexp.MustCompile(`[-_.]+`).ReplaceAllString(out, "-")
+	return out
+}
+
+func pathBase(raw string) string {
+	u, err := url.Parse(raw)
+	if err == nil && u.Path != "" {
+		raw = u.Path
+	}
+	return path.Base(raw)
 }
 
 func parseIntDefault(val string, def int, max int) int {
@@ -2429,8 +2938,32 @@ func (h *Handler) requireWorkerToken(r *http.Request) error {
 	if tok == "" {
 		tok = r.URL.Query().Get("token")
 	}
+	if tok == "" {
+		if c, err := r.Cookie("worker_token"); err == nil {
+			tok = c.Value
+		}
+	}
 	if tok != h.Config.WorkerToken {
 		return fmt.Errorf("invalid worker token")
+	}
+	return nil
+}
+
+func (h *Handler) requireUIToken(r *http.Request) error {
+	if h.Config.UIToken == "" {
+		return nil
+	}
+	tok := r.Header.Get("X-UI-Token")
+	if tok == "" {
+		tok = r.URL.Query().Get("ui_token")
+	}
+	if tok == "" {
+		if c, err := r.Cookie("ui_token"); err == nil {
+			tok = c.Value
+		}
+	}
+	if tok != h.Config.UIToken {
+		return fmt.Errorf("invalid ui token")
 	}
 	return nil
 }
@@ -2499,6 +3032,12 @@ func (h *Handler) callWorkerPlan(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	return snap, nil
+}
+
+func writeHTML(w http.ResponseWriter, code int, body string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_, _ = io.WriteString(w, body)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -1,12 +1,17 @@
 flowchart TD
-    EVT[Build events\nreuse/build/fail] --> DB[History DB]
-    DB --> SUMMARY[Status counts\nfailures/slowest]
-    DB --> VARIANTS[Variant history\nper package]
-    DB --> LOGREFS[Log references]
+    EVT[Build events reuse build fail] --> DB[(History DB)]
+    LOGS[Log entries] --> DB
+    CHUNKS[Log chunks] --> DB
+    DB --> SUMMARY[Status counts failures slowest]
+    DB --> VARIANTS[Variant history per package]
     DB --> RECENT[Recent events]
     DB --> MANIFEST[Manifest writer]
     MANIFEST --> FILE[/manifest.json/]
+    DB --> LOGREPLAY[Log chunk replay]
+    LOGREPLAY --> API
     SUMMARY --> API
     RECENT --> API
     FILE --> API
     DB --> API
+    API --> HUB[Log hub]
+    HUB --> UI[UI live tail]

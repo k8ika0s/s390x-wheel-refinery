@@ -49,3 +49,9 @@ tree "$PACK_OUTPUT"
 - openblas
 - cpython310/cpython311/cpython312 (needs openssl + compression + ffi + sqlite)
 
+## Managed Python versions
+
+- Python versions are managed via `cpython*.sh` recipes (for example, `cpython311.sh` → Python 3.11).
+- The control-plane Settings page lists these versions and validates the default python version against the list.
+- To add a new version, create a `cpython<minor>.sh` recipe (or use the Settings editor) and update `versions.sh`
+  with the corresponding `PY<minor>_VERSION`, source URL, and SHA256 entries.

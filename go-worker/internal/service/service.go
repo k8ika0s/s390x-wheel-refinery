@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -52,6 +54,13 @@ func Run() error {
 	w.buildPoolSize = &buildPool
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go func() {
+		runCtx, stop := context.WithTimeout(ctx, 20*time.Second)
+		defer stop()
+		if err := requeueStaleBuilds(runCtx, cfg); err != nil {
+			log.Printf("stale requeue failed: %v", err)
+		}
+	}()
 	if cfg.PlanPollEnabled && cfg.ControlPlaneURL != "" {
 		popURL := cfg.PlanPopURL
 		if popURL == "" {
@@ -186,6 +195,38 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func requeueStaleBuilds(ctx context.Context, cfg Config) error {
+	if cfg.ControlPlaneURL == "" {
+		return nil
+	}
+	url := strings.TrimRight(cfg.ControlPlaneURL, "/") + "/api/build-queue/requeue-stale"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	if cfg.ControlPlaneToken != "" {
+		req.Header.Set("X-Worker-Token", cfg.ControlPlaneToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("stale requeue status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	var payload struct {
+		Count int `json:"count"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&payload)
+	if payload.Count > 0 {
+		log.Printf("stale requeue: %d build(s) reset to pending", payload.Count)
+	}
+	return nil
 }
 
 // pollSettings periodically refreshes pool sizes from control-plane settings.

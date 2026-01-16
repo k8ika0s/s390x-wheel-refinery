@@ -85,18 +85,20 @@ type PendingInput struct {
 
 // ManifestEntry tracks output wheel metadata.
 type ManifestEntry struct {
-	Name         string
-	Version      string
-	Wheel        string
-	WheelURL     string
-	RepairURL    string
-	RepairDigest string
-	RuntimeURL   string
-	PackURLs     []string
-	PythonTag    string
-	PlatformTag  string
-	Status       string
-	CreatedAt    int64
+	Name           string          `json:"name"`
+	Version        string          `json:"version"`
+	Wheel          string          `json:"wheel"`
+	WheelURL       string          `json:"wheel_url,omitempty"`
+	RepairURL      string          `json:"repair_url,omitempty"`
+	RepairDigest   string          `json:"repair_digest,omitempty"`
+	RuntimeURL     string          `json:"runtime_url,omitempty"`
+	PackURLs       []string        `json:"pack_urls,omitempty"`
+	PythonTag      string          `json:"python_tag,omitempty"`
+	PlatformTag    string          `json:"platform_tag,omitempty"`
+	Status         string          `json:"status,omitempty"`
+	ManifestDigest string          `json:"manifest_digest,omitempty"`
+	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt      int64           `json:"created_at,omitempty"`
 }
 
 // Artifact represents a downloadable/browsable build artifact.
@@ -126,6 +128,7 @@ type PlanRecipe struct {
 
 // PlanNode describes a unit in the build plan/graph.
 type PlanNode struct {
+	NodeID        string       `json:"node_id,omitempty"`
 	Name          string       `json:"name"`
 	Version       string       `json:"version"`
 	PythonVersion string       `json:"python_version,omitempty"`
@@ -158,15 +161,19 @@ type PlanSummary struct {
 // BuildStatus tracks a build job derived from a plan.
 type BuildStatus struct {
 	ID             int64    `json:"id"`
+	NodeID         string   `json:"node_id,omitempty"`
+	WorkerID       string   `json:"worker_id,omitempty"`
 	Package        string   `json:"package"`
 	Version        string   `json:"version"`
 	PythonTag      string   `json:"python_tag"`
 	PlatformTag    string   `json:"platform_tag"`
 	Status         string   `json:"status"`
+	PreviousStatus string   `json:"previous_status,omitempty"`
 	Attempts       int      `json:"attempts"`
 	LastError      string   `json:"last_error,omitempty"`
 	FailureSummary string   `json:"failure_summary,omitempty"`
 	OldestAgeSec   int64    `json:"oldest_age_seconds,omitempty"`
+	StaleAgeSec    int64    `json:"stale_age_seconds,omitempty"`
 	CreatedAt      int64    `json:"created_at"`
 	UpdatedAt      int64    `json:"updated_at"`
 	LeasedAt       int64    `json:"leased_at,omitempty"`
@@ -175,8 +182,38 @@ type BuildStatus struct {
 	RunID          string   `json:"run_id,omitempty"`
 	PlanID         int64    `json:"plan_id,omitempty"`
 	BackoffUntil   int64    `json:"backoff_until,omitempty"`
+	BackoffReason  string   `json:"backoff_reason,omitempty"`
+	BackoffSeconds int      `json:"backoff_seconds,omitempty"`
+	ReasonCode     string   `json:"reason_code,omitempty"`
+	ReasonDetail   string   `json:"reason_detail,omitempty"`
 	Recipes        []string `json:"recipes,omitempty"`
 	HintIDs        []string `json:"hint_ids,omitempty"`
+}
+
+// BuildAttempt captures per-attempt build history.
+type BuildAttempt struct {
+	ID             int64    `json:"id"`
+	NodeID         string   `json:"node_id,omitempty"`
+	Package        string   `json:"package"`
+	Version        string   `json:"version"`
+	Attempt        int      `json:"attempt"`
+	Status         string   `json:"status"`
+	LastError      string   `json:"last_error,omitempty"`
+	FailureSummary string   `json:"failure_summary,omitempty"`
+	BackoffUntil   int64    `json:"backoff_until,omitempty"`
+	BackoffReason  string   `json:"backoff_reason,omitempty"`
+	BackoffSeconds int      `json:"backoff_seconds,omitempty"`
+	DurationMS     int64    `json:"duration_ms,omitempty"`
+	Recipes        []string `json:"recipes,omitempty"`
+	HintIDs        []string `json:"hint_ids,omitempty"`
+	ReasonCode     string   `json:"reason_code,omitempty"`
+	ReasonDetail   string   `json:"reason_detail,omitempty"`
+	StartedAt      int64    `json:"started_at,omitempty"`
+	FinishedAt     int64    `json:"finished_at,omitempty"`
+	RunID          string   `json:"run_id,omitempty"`
+	PlanID         int64    `json:"plan_id,omitempty"`
+	CreatedAt      int64    `json:"created_at,omitempty"`
+	UpdatedAt      int64    `json:"updated_at,omitempty"`
 }
 
 // BuildQueueStats captures aggregate queue counts.
@@ -198,6 +235,8 @@ type WorkerStatus struct {
 	BuildPoolSize        int    `json:"build_pool_size"`
 	PlanPoolSize         int    `json:"plan_pool_size"`
 	HeartbeatIntervalSec int    `json:"heartbeat_interval_sec,omitempty"`
+	CASHits              int64  `json:"cas_hits,omitempty"`
+	CASMisses            int64  `json:"cas_misses,omitempty"`
 	CreatedAt            int64  `json:"created_at,omitempty"`
 	UpdatedAt            int64  `json:"updated_at,omitempty"`
 }
@@ -219,6 +258,21 @@ type Summary struct {
 type Stat struct {
 	Name  string  `json:"name"`
 	Value float64 `json:"value"`
+}
+
+// BuildAttemptStats summarizes attempts in a recent window.
+type BuildAttemptStats struct {
+	Total         int     `json:"total"`
+	Built         int     `json:"built"`
+	Failed        int     `json:"failed"`
+	Retry         int     `json:"retry"`
+	Quarantined   int     `json:"quarantined"`
+	AvgDurationMs float64 `json:"avg_duration_ms"`
+}
+
+// LogChunkStats summarizes streaming throughput.
+type LogChunkStats struct {
+	Total int `json:"total"`
 }
 
 // Store abstracts history, hints, logs, manifests.
@@ -246,9 +300,14 @@ type Store interface {
 	SearchLogs(ctx context.Context, q string, limit int) ([]LogEntry, error)
 	PutLog(ctx context.Context, entry LogEntry) error
 	PutLogChunk(ctx context.Context, chunk LogChunk) (int64, error)
-	ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]LogChunk, error)
-	TailLogChunks(ctx context.Context, name, version string, limit int) ([]LogChunk, error)
+	ListLogChunks(ctx context.Context, name, version string, afterID int64, afterSeq int64, attempt int, limit int) ([]LogChunk, error)
+	TailLogChunks(ctx context.Context, name, version string, attempt int, limit int) ([]LogChunk, error)
 	TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error)
+	TrimLogChunksBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	TrimLogsBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	TrimEventsBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	TrimBuildAttemptsBefore(ctx context.Context, cutoff time.Time) (int64, error)
+	TrimManifestsBefore(ctx context.Context, cutoff time.Time) (int64, error)
 
 	// Plan/Manifest/Artifacts
 	Plan(ctx context.Context) ([]PlanNode, error)
@@ -259,7 +318,11 @@ type Store interface {
 	DeletePlans(ctx context.Context, planID int64) (int64, error)
 	QueueBuildsFromPlan(ctx context.Context, runID string, planID int64, nodes []PlanNode) error
 	Manifest(ctx context.Context, limit int) ([]ManifestEntry, error)
+	ManifestPackages(ctx context.Context, limit int) ([]string, error)
+	ManifestByNormalizedName(ctx context.Context, normalized string, limit int) ([]ManifestEntry, error)
 	SaveManifest(ctx context.Context, entries []ManifestEntry) error
+	BuildAttemptStats(ctx context.Context, since time.Time) (BuildAttemptStats, error)
+	LogChunkStats(ctx context.Context, since time.Time) (LogChunkStats, error)
 	Artifacts(ctx context.Context, limit int) ([]Artifact, error)
 
 	// Pending inputs & planning
@@ -275,9 +338,11 @@ type Store interface {
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error)
 	BuildQueueStats(ctx context.Context) (BuildQueueStats, error)
-	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error
-	LeaseBuilds(ctx context.Context, max int) ([]BuildStatus, error)
-	RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int64, error)
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string, workerID string) error
+	UpsertBuildAttempt(ctx context.Context, attempt BuildAttempt) error
+	ListBuildAttempts(ctx context.Context, pkg, version string, limit int) ([]BuildAttempt, error)
+	LeaseBuilds(ctx context.Context, max int, workerID string) ([]BuildStatus, error)
+	RequeueStaleBuilds(ctx context.Context, leaseAgeSec int, buildAgeSec int) ([]BuildStatus, error)
 	DeleteBuilds(ctx context.Context, status string) (int64, error)
 
 	// Worker health

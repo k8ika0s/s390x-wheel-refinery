@@ -51,6 +51,8 @@ func heartbeatLoop(ctx context.Context, cfg Config, w *Worker, workerID, runID s
 			"build_pool_size":        buildPoolSize,
 			"plan_pool_size":         planPoolSize,
 			"heartbeat_interval_sec": intervalSec,
+			"cas_hits":               w.casHits.Load(),
+			"cas_misses":             w.casMisses.Load(),
 		}
 		if err := postHeartbeat(ctx, cfg, payload); err != nil {
 			log.Printf("heartbeat: %v", err)

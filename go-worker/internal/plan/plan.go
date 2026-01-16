@@ -24,6 +24,7 @@ import (
 
 // FlatNode represents a legacy plan entry.
 type FlatNode struct {
+	NodeID        string `json:"node_id,omitempty"`
 	Name          string `json:"name"`
 	Version       string `json:"version"`
 	PythonVersion string `json:"python_version,omitempty"`
@@ -387,13 +388,15 @@ func computeWithResolverInputs(reqs []DepSpec, wheels []WheelInput, pythonVersio
 		seen[key] = true
 		packDefs, packIDs, packDigests := selectPacks(name, opts.PackCatalog)
 		addPackNodes(packDefs)
+		nodeAction := "build"
 		nodes = append(nodes, FlatNode{
+			NodeID:        flatNodeID(name, version, pyTag, platformTag, nodeAction),
 			Name:          name,
 			Version:       version,
 			PythonVersion: pythonVersion,
 			PythonTag:     pyTag,
 			PlatformTag:   platformTag,
-			Action:        "build",
+			Action:        nodeAction,
 		})
 		wheelKey := artifact.WheelKey{
 			SourceDigest:  sourceDigest(name, version),
@@ -463,13 +466,15 @@ func computeWithResolverInputs(reqs []DepSpec, wheels []WheelInput, pythonVersio
 				seen[key] = true
 				packDefs, packIDs, packDigests := selectPacks(info.Name, opts.PackCatalog)
 				addPackNodes(packDefs)
+				nodeAction := "build"
 				nodes = append(nodes, FlatNode{
+					NodeID:        flatNodeID(info.Name, ver, pyTag, platformTag, nodeAction),
 					Name:          info.Name,
 					Version:       ver,
 					PythonVersion: pythonVersion,
 					PythonTag:     pyTag,
 					PlatformTag:   platformTag,
-					Action:        "build",
+					Action:        nodeAction,
 				})
 				wk := artifact.WheelKey{
 					SourceDigest:  sourceDigest(info.Name, ver),
@@ -515,13 +520,15 @@ func computeWithResolverInputs(reqs []DepSpec, wheels []WheelInput, pythonVersio
 		wk := artifact.WheelKey{SourceDigest: source, PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
 		wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
 		if isCompatible(info, pyTag, platformTag) {
+			nodeAction := "reuse"
 			nodes = append(nodes, FlatNode{
+				NodeID:        flatNodeID(info.Name, info.Version, pyTag, platformTag, nodeAction),
 				Name:          info.Name,
 				Version:       info.Version,
 				PythonVersion: pythonVersion,
 				PythonTag:     pyTag,
 				PlatformTag:   platformTag,
-				Action:        "reuse",
+				Action:        nodeAction,
 			})
 			wheelAction := "reuse"
 			if ok, _ := store.Has(ctx, wID); ok {
@@ -542,13 +549,15 @@ func computeWithResolverInputs(reqs []DepSpec, wheels []WheelInput, pythonVersio
 			})
 			addRepair(wID, map[string]any{"wheel_name": info.Name, "wheel_version": info.Version})
 		} else {
+			nodeAction := "build"
 			nodes = append(nodes, FlatNode{
+				NodeID:        flatNodeID(info.Name, info.Version, pyTag, platformTag, nodeAction),
 				Name:          info.Name,
 				Version:       info.Version,
 				PythonVersion: pythonVersion,
 				PythonTag:     pyTag,
 				PlatformTag:   platformTag,
-				Action:        "build",
+				Action:        nodeAction,
 			})
 			wheelAction := "build"
 			if ok, _ := store.Has(ctx, wID); ok {
@@ -607,13 +616,15 @@ func computeWithResolverInputs(reqs []DepSpec, wheels []WheelInput, pythonVersio
 		seen[key] = true
 		packDefs, packIDs, packDigests := selectPacks(dep, opts.PackCatalog)
 		addPackNodes(packDefs)
+		nodeAction := "build"
 		nodes = append(nodes, FlatNode{
+			NodeID:        flatNodeID(dep, version, pyTag, platformTag, nodeAction),
 			Name:          dep,
 			Version:       version,
 			PythonVersion: pythonVersion,
 			PythonTag:     pyTag,
 			PlatformTag:   platformTag,
-			Action:        "build",
+			Action:        nodeAction,
 		})
 		wk := artifact.WheelKey{SourceDigest: sourceDigest(dep, version), PyTag: pyTag, PlatformTag: platformTag, RuntimeDigest: rtID.Digest, PackDigests: packDigests}
 		wID := artifact.ID{Type: artifact.WheelType, Digest: wk.Digest()}
@@ -643,6 +654,19 @@ func computeWithResolverInputs(reqs []DepSpec, wheels []WheelInput, pythonVersio
 		return Snapshot{}, fmt.Errorf("dependency expansion exceeded MaxDeps (%d); increase MAX_DEPS or trim input", opts.MaxDeps)
 	}
 	return Snapshot{RunID: newRunID(), Plan: nodes, DAG: dagNodes}, nil
+}
+
+func flatNodeID(name, version, pythonTag, platformTag, action string) string {
+	if name == "" || version == "" {
+		return ""
+	}
+	key := strings.ToLower(strings.TrimSpace(name)) + "|" +
+		strings.TrimSpace(version) + "|" +
+		strings.ToLower(strings.TrimSpace(pythonTag)) + "|" +
+		strings.ToLower(strings.TrimSpace(platformTag)) + "|" +
+		strings.ToLower(strings.TrimSpace(action))
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
 }
 
 type wheelInfo struct {

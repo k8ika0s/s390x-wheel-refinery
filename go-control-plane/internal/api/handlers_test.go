@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
@@ -27,8 +30,30 @@ type fakeStore struct {
 		status string
 		errMsg string
 	}
-	restoredPendingID int64
-	queuedBuilds      []store.PlanNode
+	restoredPendingID     int64
+	queuedBuilds          []store.PlanNode
+	leaseBuildsMax        int
+	leaseBuildsWorkerID   string
+	leaseBuilds           []store.BuildStatus
+	requeueCalls          int
+	requeueLeaseAge       int
+	requeueBuildAge       int
+	requeueResp           []store.BuildStatus
+	lastBuildUpdatePlanID int64
+	lastBuildUpdateNodeID string
+	lastBuildUpdateWorker string
+	lastLogChunksAfterID  int64
+	lastLogChunksAfterSeq int64
+	lastLogChunksAttempt  int
+	lastLogChunksLimit    int
+	manifestPackages      []string
+	manifestByNormalized  map[string][]store.ManifestEntry
+	trimEventsCalls       int
+	trimAttemptsCalls     int
+	trimManifestsCalls    int
+	workers               []store.WorkerStatus
+	buildAttemptStats     store.BuildAttemptStats
+	logChunkStats         store.LogChunkStats
 }
 
 func (f *fakeStore) Recent(ctx context.Context, limit, offset int, pkg, status string) ([]store.Event, error) {
@@ -86,13 +111,37 @@ func (f *fakeStore) PutLog(ctx context.Context, entry store.LogEntry) error {
 func (f *fakeStore) PutLogChunk(ctx context.Context, chunk store.LogChunk) (int64, error) {
 	return 0, nil
 }
-func (f *fakeStore) ListLogChunks(ctx context.Context, name, version string, afterID int64, limit int) ([]store.LogChunk, error) {
+func (f *fakeStore) ListLogChunks(ctx context.Context, name, version string, afterID int64, afterSeq int64, attempt int, limit int) ([]store.LogChunk, error) {
+	f.lastLogChunksAfterID = afterID
+	f.lastLogChunksAfterSeq = afterSeq
+	f.lastLogChunksAttempt = attempt
+	f.lastLogChunksLimit = limit
 	return nil, nil
 }
-func (f *fakeStore) TailLogChunks(ctx context.Context, name, version string, limit int) ([]store.LogChunk, error) {
+func (f *fakeStore) TailLogChunks(ctx context.Context, name, version string, attempt int, limit int) ([]store.LogChunk, error) {
+	f.lastLogChunksAttempt = attempt
+	f.lastLogChunksLimit = limit
 	return nil, nil
 }
 func (f *fakeStore) TrimLogChunks(ctx context.Context, name, version string, max int) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) TrimLogChunksBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) TrimLogsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	return 0, nil
+}
+func (f *fakeStore) TrimEventsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	f.trimEventsCalls++
+	return 0, nil
+}
+func (f *fakeStore) TrimBuildAttemptsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	f.trimAttemptsCalls++
+	return 0, nil
+}
+func (f *fakeStore) TrimManifestsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	f.trimManifestsCalls++
 	return 0, nil
 }
 func (f *fakeStore) Plan(ctx context.Context) ([]store.PlanNode, error) {
@@ -121,8 +170,23 @@ func (f *fakeStore) QueueBuildsFromPlan(ctx context.Context, runID string, planI
 func (f *fakeStore) Manifest(ctx context.Context, limit int) ([]store.ManifestEntry, error) {
 	return nil, nil
 }
+func (f *fakeStore) ManifestPackages(ctx context.Context, limit int) ([]string, error) {
+	return f.manifestPackages, nil
+}
+func (f *fakeStore) ManifestByNormalizedName(ctx context.Context, normalized string, limit int) ([]store.ManifestEntry, error) {
+	if f.manifestByNormalized == nil {
+		return nil, nil
+	}
+	return f.manifestByNormalized[normalized], nil
+}
 func (f *fakeStore) SaveManifest(ctx context.Context, entries []store.ManifestEntry) error {
 	return nil
+}
+func (f *fakeStore) BuildAttemptStats(ctx context.Context, since time.Time) (store.BuildAttemptStats, error) {
+	return f.buildAttemptStats, nil
+}
+func (f *fakeStore) LogChunkStats(ctx context.Context, since time.Time) (store.LogChunkStats, error) {
+	return f.logChunkStats, nil
 }
 func (f *fakeStore) Artifacts(ctx context.Context, limit int) ([]store.Artifact, error) {
 	return nil, nil
@@ -169,14 +233,28 @@ func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int, pl
 func (f *fakeStore) BuildQueueStats(ctx context.Context) (store.BuildQueueStats, error) {
 	return store.BuildQueueStats{}, nil
 }
-func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, recipes []string, hintIDs []string) error {
+func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string, workerID string) error {
+	f.lastBuildUpdatePlanID = planID
+	f.lastBuildUpdateNodeID = nodeID
+	f.lastBuildUpdateWorker = workerID
 	return nil
 }
-func (f *fakeStore) LeaseBuilds(ctx context.Context, max int) ([]store.BuildStatus, error) {
+func (f *fakeStore) UpsertBuildAttempt(ctx context.Context, attempt store.BuildAttempt) error {
+	return nil
+}
+func (f *fakeStore) ListBuildAttempts(ctx context.Context, pkg, version string, limit int) ([]store.BuildAttempt, error) {
 	return nil, nil
 }
-func (f *fakeStore) RequeueStaleLeases(ctx context.Context, maxAgeSec int) (int64, error) {
-	return 0, nil
+func (f *fakeStore) LeaseBuilds(ctx context.Context, max int, workerID string) ([]store.BuildStatus, error) {
+	f.leaseBuildsMax = max
+	f.leaseBuildsWorkerID = workerID
+	return f.leaseBuilds, nil
+}
+func (f *fakeStore) RequeueStaleBuilds(ctx context.Context, leaseAgeSec int, buildAgeSec int) ([]store.BuildStatus, error) {
+	f.requeueCalls++
+	f.requeueLeaseAge = leaseAgeSec
+	f.requeueBuildAge = buildAgeSec
+	return f.requeueResp, nil
 }
 func (f *fakeStore) DeleteBuilds(ctx context.Context, status string) (int64, error) {
 	return 0, nil
@@ -185,7 +263,7 @@ func (f *fakeStore) UpsertWorkerStatus(ctx context.Context, status store.WorkerS
 	return nil
 }
 func (f *fakeStore) ListWorkers(ctx context.Context) ([]store.WorkerStatus, error) {
-	return nil, nil
+	return f.workers, nil
 }
 func (f *fakeStore) GetSettings(ctx context.Context) (settings.Settings, error) {
 	return settings.ApplyDefaults(settings.Settings{}), nil
@@ -529,5 +607,297 @@ func TestRequirementsUploadAutoEnqueue(t *testing.T) {
 	}
 	if fs.lastPending.SourceType != "requirements" {
 		t.Fatalf("expected requirements source_type, got %q", fs.lastPending.SourceType)
+	}
+}
+
+func TestBuildQueuePopRequeuesStale(t *testing.T) {
+	fs := &fakeStore{
+		leaseBuilds: []store.BuildStatus{
+			{Package: "pkg", Version: "1.0", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Attempts: 2, NodeID: "node-1"},
+		},
+	}
+	h := &Handler{
+		Store: fs,
+		Config: config.Config{
+			WorkerToken:       "token",
+			BuildLeaseTimeout: 120,
+			BuildStallTimeout: 300,
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/build-queue/pop?max=7", nil)
+	req.Header.Set("X-Worker-Token", "token")
+	req.Header.Set("X-Worker-Id", "worker-1")
+	rec := httptest.NewRecorder()
+	h.buildQueuePop(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if fs.requeueCalls != 1 {
+		t.Fatalf("expected requeue call, got %d", fs.requeueCalls)
+	}
+	if fs.requeueLeaseAge != 120 || fs.requeueBuildAge != 300 {
+		t.Fatalf("unexpected requeue args: lease=%d build=%d", fs.requeueLeaseAge, fs.requeueBuildAge)
+	}
+	if fs.leaseBuildsMax != 7 {
+		t.Fatalf("expected lease max 7, got %d", fs.leaseBuildsMax)
+	}
+	if fs.leaseBuildsWorkerID != "worker-1" {
+		t.Fatalf("expected worker_id worker-1, got %q", fs.leaseBuildsWorkerID)
+	}
+
+	var payload struct {
+		Builds []map[string]any `json:"builds"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Builds) != 1 {
+		t.Fatalf("expected 1 build, got %d", len(payload.Builds))
+	}
+	if payload.Builds[0]["node_id"] != "node-1" {
+		t.Fatalf("expected node_id node-1, got %v", payload.Builds[0]["node_id"])
+	}
+}
+
+func TestBuildStatusUpdateCapturesNodeID(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{
+		Store: fs,
+		Config: config.Config{
+			WorkerToken: "token",
+		},
+	}
+	body := map[string]any{
+		"package":  "demo",
+		"version":  "1.0.0",
+		"status":   "building",
+		"attempts": 1,
+		"plan_id":  12,
+		"node_id":  "node-abc",
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/builds/status", bytes.NewReader(payload))
+	req.Header.Set("X-Worker-Token", "token")
+	req.Header.Set("X-Worker-Id", "worker-9")
+	rec := httptest.NewRecorder()
+	h.buildStatusUpdate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if fs.lastBuildUpdatePlanID != 12 {
+		t.Fatalf("expected plan_id 12, got %d", fs.lastBuildUpdatePlanID)
+	}
+	if fs.lastBuildUpdateNodeID != "node-abc" {
+		t.Fatalf("expected node_id node-abc, got %q", fs.lastBuildUpdateNodeID)
+	}
+	if fs.lastBuildUpdateWorker != "worker-9" {
+		t.Fatalf("expected worker_id worker-9, got %q", fs.lastBuildUpdateWorker)
+	}
+	if fs.lastEvent.Metadata == nil {
+		t.Fatalf("expected event metadata")
+	}
+	if fs.lastEvent.Metadata["node_id"] != "node-abc" {
+		t.Fatalf("expected event node_id node-abc, got %v", fs.lastEvent.Metadata["node_id"])
+	}
+	if got := fs.lastEvent.Metadata["plan_id"]; got != int64(12) && got != float64(12) && got != int(12) {
+		t.Fatalf("expected event plan_id 12, got %v", got)
+	}
+}
+
+func TestLogsChunksHonorsAttemptAndSeq(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{Store: fs}
+	req := httptest.NewRequest(http.MethodGet, "/api/logs/chunks/demo/1.0?attempt=2&after_seq=10&limit=12", nil)
+	rec := httptest.NewRecorder()
+	h.logsChunks(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if fs.lastLogChunksAttempt != 2 {
+		t.Fatalf("expected attempt 2, got %d", fs.lastLogChunksAttempt)
+	}
+	if fs.lastLogChunksAfterSeq != 10 {
+		t.Fatalf("expected after_seq 10, got %d", fs.lastLogChunksAfterSeq)
+	}
+	if fs.lastLogChunksLimit != 12 {
+		t.Fatalf("expected limit 12, got %d", fs.lastLogChunksLimit)
+	}
+}
+
+func TestSimpleIndexRoot(t *testing.T) {
+	fs := &fakeStore{
+		manifestPackages: []string{"NumPy", "requests"},
+	}
+	h := &Handler{Store: fs}
+	req := httptest.NewRequest(http.MethodGet, "/simple", nil)
+	rec := httptest.NewRecorder()
+	h.simpleIndex(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "/simple/numpy/") || !strings.Contains(body, "/simple/requests/") {
+		t.Fatalf("expected simple index entries, got %s", body)
+	}
+}
+
+func TestSimpleIndexPackage(t *testing.T) {
+	fs := &fakeStore{
+		manifestByNormalized: map[string][]store.ManifestEntry{
+			"numpy": {
+				{Name: "NumPy", Version: "1.0.0", WheelURL: "https://example.com/numpy-1.0.0.whl"},
+			},
+		},
+	}
+	h := &Handler{Store: fs}
+	req := httptest.NewRequest(http.MethodGet, "/simple/numpy/", nil)
+	rec := httptest.NewRecorder()
+	h.simpleIndex(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "numpy-1.0.0.whl") || !strings.Contains(body, "https://example.com/numpy-1.0.0.whl") {
+		t.Fatalf("expected wheel link, got %s", body)
+	}
+}
+
+func TestMaybeSweepRetention(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{
+		Store: fs,
+		Config: config.Config{
+			EventRetentionDays:    1,
+			AttemptRetentionDays:  1,
+			ManifestRetentionDays: 1,
+			LogRetentionSweepSec:  1,
+		},
+	}
+	h.maybeSweepLogs(context.Background())
+	if fs.trimEventsCalls != 1 {
+		t.Fatalf("expected events trim call, got %d", fs.trimEventsCalls)
+	}
+	if fs.trimAttemptsCalls != 1 {
+		t.Fatalf("expected attempts trim call, got %d", fs.trimAttemptsCalls)
+	}
+	if fs.trimManifestsCalls != 1 {
+		t.Fatalf("expected manifests trim call, got %d", fs.trimManifestsCalls)
+	}
+}
+
+func TestMetricsIncludesAttemptsAndLogs(t *testing.T) {
+	fs := &fakeStore{
+		buildAttemptStats: store.BuildAttemptStats{
+			Total:         4,
+			Built:         2,
+			Failed:        1,
+			Retry:         1,
+			Quarantined:   0,
+			AvgDurationMs: 2500,
+		},
+		logChunkStats: store.LogChunkStats{Total: 120},
+		workers: []store.WorkerStatus{
+			{
+				WorkerID:             "w1",
+				LastSeen:             time.Now().Unix(),
+				HeartbeatIntervalSec: 15,
+				CASHits:              5,
+				CASMisses:            15,
+			},
+		},
+	}
+	h := &Handler{
+		Store:  fs,
+		Queue:  &fakeQueue{},
+		Config: config.Config{MetricsWindowMin: 60},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics", nil)
+	rec := httptest.NewRecorder()
+	h.metrics(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	attempts, ok := payload["attempts"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attempts object")
+	}
+	if attempts["total"] != float64(4) {
+		t.Fatalf("expected attempts total 4, got %v", attempts["total"])
+	}
+	if attempts["retry"] != float64(1) {
+		t.Fatalf("expected attempts retry 1, got %v", attempts["retry"])
+	}
+	if rc, ok := attempts["retry_churn"].(float64); !ok || math.Abs(rc-0.25) > 0.001 {
+		t.Fatalf("expected retry_churn 0.25, got %v", attempts["retry_churn"])
+	}
+	logs, ok := payload["logs"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected logs object")
+	}
+	if logs["recent_chunks"] != float64(120) {
+		t.Fatalf("expected recent_chunks 120, got %v", logs["recent_chunks"])
+	}
+	if cpm, ok := logs["chunks_per_min"].(float64); !ok || math.Abs(cpm-2.0) > 0.001 {
+		t.Fatalf("expected chunks_per_min 2.0, got %v", logs["chunks_per_min"])
+	}
+	workers, ok := payload["workers"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected workers object")
+	}
+	if workers["cas_hits"] != float64(5) {
+		t.Fatalf("expected cas_hits 5, got %v", workers["cas_hits"])
+	}
+	if workers["cas_misses"] != float64(15) {
+		t.Fatalf("expected cas_misses 15, got %v", workers["cas_misses"])
+	}
+}
+
+func TestTokenScopes(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{
+		Store:  fs,
+		Queue:  &fakeQueue{},
+		Config: config.Config{UIToken: "ui123", WorkerToken: "w123"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/queue/clear", nil)
+	rec := httptest.NewRecorder()
+	h.queueClear(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for missing ui token, got %d", rec.Code)
+	}
+	reqOK := httptest.NewRequest(http.MethodPost, "/api/queue/clear", nil)
+	reqOK.Header.Set("X-UI-Token", "ui123")
+	recOK := httptest.NewRecorder()
+	h.queueClear(recOK, reqOK)
+	if recOK.Code != http.StatusOK {
+		t.Fatalf("expected 200 with ui token, got %d", recOK.Code)
+	}
+
+	body := bytes.NewBufferString(`{"name":"demo","version":"1.0.0","content":"hi"}`)
+	reqLog := httptest.NewRequest(http.MethodPost, "/api/logs", body)
+	recLog := httptest.NewRecorder()
+	h.logsIngest(recLog, reqLog)
+	if recLog.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for missing worker token, got %d", recLog.Code)
+	}
+	reqLogOK := httptest.NewRequest(http.MethodPost, "/api/logs", bytes.NewBufferString(`{"name":"demo","version":"1.0.0","content":"hi"}`))
+	reqLogOK.Header.Set("X-Worker-Token", "w123")
+	recLogOK := httptest.NewRecorder()
+	h.logsIngest(recLogOK, reqLogOK)
+	if recLogOK.Code != http.StatusOK {
+		t.Fatalf("expected 200 with worker token, got %d", recLogOK.Code)
 	}
 }

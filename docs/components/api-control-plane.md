@@ -17,7 +17,7 @@ The API/control plane is the refinery’s “traffic controller.” It exposes H
 **Current status**
 - Go HTTP service with CORS enabled; Postgres-backed history/logs/manifest/plan; queue backends (file/Redis/Kafka) selected via config.
 - Endpoints: summary/recent/history slices (failures/variants/package), logs (get/search/stream), plan (get/save/compute via worker), manifest/artifacts, queue (list/stats/enqueue/clear), worker trigger/smoke, metrics stub, session token helper.
-- Auth via worker token header/query/cookie for write/queue actions.
+- Auth via UI token for user-initiated writes/queue actions and worker token for worker posts.
 
 **Next steps / gaps**
 - Improve metrics (Prometheus), pagination/search UX, and cache/worker insight endpoints.
