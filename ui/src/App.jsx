@@ -171,12 +171,19 @@ const buildStatusChipClass = (status) => {
   if (value === "built") return "bg-emerald-500/20 text-emerald-200 border-emerald-500/40";
   if (value === "building") return "bg-sky-500/20 text-sky-200 border-sky-500/40";
   if (value === "leased") return "bg-indigo-500/20 text-indigo-200 border-indigo-500/40";
+  if (value === "repairing" || value === "repair") return "bg-purple-500/20 text-purple-200 border-purple-500/40";
   if (value === "retry") return "bg-amber-500/20 text-amber-200 border-amber-500/40";
   if (value === "failed") return "bg-red-500/20 text-red-200 border-red-500/40";
   if (value === "quarantined") return "bg-fuchsia-500/20 text-fuchsia-200 border-fuchsia-500/40";
   if (value === "pending") return "bg-slate-700/30 text-slate-200 border-slate-600/50";
   return "";
 };
+const buildProgressSteps = [
+  { key: "queued", label: "Queued", statuses: ["pending", "retry", "queued"] },
+  { key: "leased", label: "Leased", statuses: ["leased"] },
+  { key: "building", label: "Building", statuses: ["building"] },
+  { key: "repairing", label: "Repairing", statuses: ["repairing", "repair"] },
+];
 const workerHeartbeatThreshold = (worker) => {
   const interval = Number(worker?.heartbeat_interval_sec) || 15;
   return Math.max(interval * 2, 30);
@@ -1394,6 +1401,10 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const failureSummary = buildStatus?.failure_summary || "";
   const logTailLabel = logStreamStatus === "replay" ? "replay" : logStreamStatus;
   const overviewGridClass = buildStatus ? "grid grid-cols-1 md:grid-cols-3 gap-4" : "grid grid-cols-1 md:grid-cols-2 gap-4";
+  const statusValue = (buildStatus?.status || "").toLowerCase();
+  const progressIndex = buildProgressSteps.findIndex((step) => step.statuses.includes(statusValue));
+  const progressComplete = ["built", "failed", "quarantined"].includes(statusValue);
+  const progressActiveIndex = progressIndex >= 0 ? progressIndex : 0;
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-4">
@@ -1405,6 +1416,38 @@ function PackageDetail({ token, pushToast, apiBase }) {
         </div>
         <button className="btn btn-secondary" onClick={() => navigate(backTarget)}>Back</button>
       </div>
+      {buildStatus && (
+        <div className="glass subtle px-4 py-3 rounded-lg border border-border space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-200">
+            <div className="font-semibold">Build progress</div>
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <span className={`chip ${buildStatusChipClass(buildStatus.status)}`}>{buildStatus.status}</span>
+              <span>in state {buildAgeLabel}</span>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {buildProgressSteps.map((step, idx) => {
+              const isDone = progressComplete || idx < progressActiveIndex;
+              const isActive = !progressComplete && idx === progressActiveIndex;
+              const className = isActive
+                ? "chip chip-animated bg-sky-900/60 border-sky-500/60 text-sky-100"
+                : isDone
+                  ? "chip bg-emerald-900/60 border-emerald-500/60 text-emerald-100"
+                  : "chip text-slate-500 border-slate-700/60";
+              return (
+                <span key={step.key} className={className}>
+                  {step.label}
+                </span>
+              );
+            })}
+          </div>
+          {progressComplete && (
+            <div className="text-xs text-slate-400">
+              Outcome: <span className={`chip ${buildStatusChipClass(buildStatus.status)}`}>{buildStatus.status}</span>
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex gap-2">
         {["overview", "events", "hints"].map((t) => (
           <button
