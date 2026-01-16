@@ -625,7 +625,12 @@ function Skeleton({ className = "" }) {
   return <div className={`skeleton ${className}`} />;
 }
 
-function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, icon = "🫗" }) {
+function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, actions, icon = "🫗" }) {
+  const actionItems = Array.isArray(actions) && actions.length
+    ? actions
+    : actionLabel && onAction
+      ? [{ label: actionLabel, onAction }]
+      : [];
   return (
     <div className="glass p-4 text-slate-300 text-sm space-y-2 border-dashed border border-border">
       <div className="flex items-center gap-2 font-semibold">
@@ -633,8 +638,32 @@ function EmptyState({ title = "Nothing here", detail, actionLabel, onAction, ico
         <span>{title}</span>
       </div>
       {detail && <div className="text-slate-500">{detail}</div>}
-      {actionLabel && onAction && (
-        <button className="btn btn-secondary px-2 py-1 text-xs" onClick={onAction}>{actionLabel}</button>
+      {actionItems.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {actionItems.map((action, idx) => {
+            const label = action?.label || action?.text || "Action";
+            const className = action?.variant === "primary"
+              ? "btn btn-primary px-2 py-1 text-xs"
+              : "btn btn-secondary px-2 py-1 text-xs";
+            if (action?.to) {
+              return (
+                <Link key={`${label}-${idx}`} className={className} to={action.to}>
+                  {label}
+                </Link>
+              );
+            }
+            return (
+              <button
+                key={`${label}-${idx}`}
+                className={className}
+                onClick={action?.onAction}
+                disabled={action?.disabled}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -2514,6 +2543,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     }
   };
 
+  const focusRetryInput = () => {
+    if (retryPkgRef.current) {
+      retryPkgRef.current.focus();
+      retryPkgRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  };
+
   const handleRetry = async () => {
     setMessage("");
     if (!retryPkg) {
@@ -2838,6 +2874,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
 
   const reqInputRef = useRef(null);
   const wheelInputRef = useRef(null);
+  const retryPkgRef = useRef(null);
 
   const hashFile = async (file) => {
     const buf = await file.arrayBuffer();
@@ -3021,6 +3058,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     const plat = q.platform_tag || "-";
     return `${pkg}::${ver}::${py}::${plat}`;
   };
+  const hasBuildFilters = Boolean(pkgFilter || statusFilter || buildStatusFilter);
   const hints = toArray(hintsState);
   const metrics = dashboard?.metrics;
   const buildStatusCounts = builds.reduce(
@@ -3959,7 +3997,15 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
             </div>
           )}
           {visiblePendingInputs.length === 0 ? (
-            <EmptyState title="No pending uploads" detail="New uploads will appear here until planned." icon="✅" />
+            <EmptyState
+              title="No pending uploads"
+              detail="Upload requirements or wheel files to generate plans."
+              icon="✅"
+              actions={[
+                { label: "Upload requirements", variant: "primary", onAction: () => reqInputRef.current?.click() },
+                { label: "Upload wheel", onAction: () => wheelInputRef.current?.click() },
+              ]}
+            />
           ) : (
             <div className="flex flex-col gap-2 text-sm text-slate-200">
               {visiblePendingInputs.map((pi) => (
@@ -4086,7 +4132,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               <span className="chip text-xs">⏩</span>
             </div>
             <div className="flex flex-col gap-3">
-              <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
+              <input
+                ref={retryPkgRef}
+                className="input"
+                placeholder="package name"
+                value={retryPkg}
+                onChange={(e) => setRetryPkg(e.target.value)}
+              />
               <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
               <button className="btn btn-primary" onClick={handleRetry}>Enqueue</button>
             </div>
@@ -4136,7 +4188,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               </table>
             </div>
           ) : (
-            <EmptyState title="Queue is empty" detail="No retry requests pending." actionLabel="Refresh" onAction={() => load({ packageFilter: pkgFilter, statusFilter })} />
+            <EmptyState
+              title="Queue is empty"
+              detail="No retry requests pending."
+              actions={[
+                { label: "Enqueue retry", variant: "primary", onAction: focusRetryInput },
+                { label: "Refresh", onAction: () => load({ packageFilter: pkgFilter, statusFilter }) },
+              ]}
+            />
           )}
         </div>
       </div>
@@ -4173,7 +4232,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           <div className="text-xs text-slate-400">
             Plan queue: {planQueueLength}. Auto-build is {settingsData?.auto_build ? "on" : "off"}.
           </div>
-            {renderPollingMeta(updatedPlansLabel)}
+          {renderPollingMeta(updatedPlansLabel)}
           {planListLoading ? (
             <div className="text-xs text-slate-500">Loading plans…</div>
           ) : planList.length ? (
@@ -4208,7 +4267,14 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
               })}
             </div>
           ) : (
-            <div className="text-xs text-slate-500">No plans available yet.</div>
+            <EmptyState
+              title="No plans yet"
+              detail="Upload inputs and enqueue planning to create your first plan."
+              actions={[
+                { label: "Open inputs", variant: "primary", onAction: () => navigate("/inputs") },
+                { label: "Refresh", onAction: loadPlanList },
+              ]}
+            />
           )}
           {planListError && <div className="text-xs text-amber-200">{planListError}</div>}
         </div>
@@ -4733,8 +4799,26 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                       })
                     : !buildsLoading && (
                         <tr>
-                          <td className="px-2 py-3 text-slate-400 text-center" colSpan="10">
-                            No builds found
+                          <td className="px-2 py-3" colSpan="10">
+                            <EmptyState
+                              title="No builds found"
+                              detail={hasBuildFilters ? "Clear filters to see more builds." : "Enqueue builds from a plan to get started."}
+                              actions={[
+                                ...(hasBuildFilters
+                                  ? [{
+                                      label: "Clear filters",
+                                      onAction: () => {
+                                        setPkgFilter("");
+                                        setSearch("");
+                                        setStatusFilter("");
+                                        setBuildStatusFilter("");
+                                        load({ packageFilter: "", statusFilter: "", buildStatusFilter: "" });
+                                      },
+                                    }]
+                                  : []),
+                                { label: "Open plans", onAction: () => navigate("/plans") },
+                              ]}
+                            />
                           </td>
                         </tr>
                       )}
@@ -4818,13 +4902,27 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                     </table>
                   </div>
                 ) : (
-                  <EmptyState title="Retry queue is empty" detail="No retry requests pending." icon="✅" />
+                  <EmptyState
+                    title="Retry queue is empty"
+                    detail="No retry requests pending."
+                    icon="✅"
+                    actions={[
+                      { label: "Enqueue retry", variant: "primary", onAction: focusRetryInput },
+                      { label: "Refresh list", onAction: () => load({ packageFilter: pkgFilter, statusFilter }) },
+                    ]}
+                  />
                 )}
               </div>
               <div className="space-y-3">
                 <div className="glass subtle p-3 space-y-2">
                   <div className="text-xs text-slate-400">Enqueue retry</div>
-                  <input className="input" placeholder="package name" value={retryPkg} onChange={(e) => setRetryPkg(e.target.value)} />
+                  <input
+                    ref={retryPkgRef}
+                    className="input"
+                    placeholder="package name"
+                    value={retryPkg}
+                    onChange={(e) => setRetryPkg(e.target.value)}
+                  />
                   <input className="input" placeholder="version (or latest)" value={retryVersion} onChange={(e) => setRetryVersion(e.target.value)} />
                   <button className="btn btn-primary w-full" onClick={handleRetry}>Enqueue</button>
                   <div className="text-slate-500 text-xs">Uses API: POST /package/&lt;name&gt;/retry</div>
@@ -5239,7 +5337,24 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                 <div className="font-semibold text-slate-100">{h.id}</div>
                 <div className="text-xs text-slate-400 truncate">{h.pattern}</div>
               </button>
-            )) : <EmptyState title="No hints" detail="No hints match your search." />}
+            )) : (
+              <EmptyState
+                title="No hints"
+                detail="No hints match your search."
+                actions={[
+                  { label: "Clear search", onAction: () => loadHints({ page: 1, query: "" }) },
+                  {
+                    label: "New hint",
+                    variant: "primary",
+                    onAction: () => {
+                      setSelectedHintId("");
+                      setHintForm(normalizeHintForm({}));
+                      setHintFormError("");
+                    },
+                  },
+                ]}
+              />
+            )}
           </div>
         </div>
         <div className="glass p-4 space-y-3 flex flex-col min-h-[520px]">
@@ -5254,7 +5369,21 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
           </div>
           {!hintForm ? (
             <div className="flex-1 min-h-0 flex items-center">
-              <EmptyState title="Select a hint" detail="Pick a hint from the list to edit or create a new one." />
+              <EmptyState
+                title="Select a hint"
+                detail="Pick a hint from the list to edit or create a new one."
+                actions={[
+                  {
+                    label: "New hint",
+                    variant: "primary",
+                    onAction: () => {
+                      setSelectedHintId("");
+                      setHintForm(normalizeHintForm({}));
+                      setHintFormError("");
+                    },
+                  },
+                ]}
+              />
             </div>
           ) : (
             <div className="space-y-3 text-sm text-slate-200 flex-1 min-h-0 overflow-auto pr-1">
