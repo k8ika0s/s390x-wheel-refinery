@@ -1,0 +1,76 @@
+# AGENTS.md
+
+This file is for Codex agents and human collaborators. Keep it updated when
+workflow, architecture, or operational steps change. The goal is for any agent
+to pick up work without losing context.
+
+## Project overview
+s390x Wheel Refinery is an end-to-end pipeline for building s390x-native Python
+wheels. Inputs (requirements.txt or wheel files) are planned into a DAG and
+built in a containerized worker, with automated fixes via hints/recipes, live
+log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
+
+## Architecture (current)
+- Control-plane (Go): API + Postgres store for plans, pending inputs, build
+  status, events, hints, logs, and log chunks.
+- Worker (Go): polls plan/build queues, runs builds via Podman inside the
+  builder image, streams logs live, and posts status/events/logs.
+- Builder image: contains toolchains and recipes for packs/runtimes/repair.
+- UI (React/Vite): Inputs, Plans, Builds, Hints, Settings, log viewer, and DAG
+  graph visualization.
+- Storage: Zot for CAS (packs/runtimes/wheels/repairs), MinIO for inputs and
+  output wheelhouse, local /cache for staging/pip cache.
+
+## Repo map
+- go-control-plane/: API + store + migrations + WebSocket log hub
+- go-worker/: queue loops + runner + auto-fix + log streaming sender
+- ui/: React UI
+- recipes/: pack/runtime/repair scripts
+- containers/: Containerfiles for builder/control-plane/worker/ui
+- docs/: user guide, automation details, queue model, diagrams
+- podman-compose.yml: local/remote stack
+- scripts/: seed and helper scripts
+
+## Common commands (local)
+- Start stack: podman compose -f podman-compose.yml up
+- Build builder image: podman build -f containers/refinery-builder/Containerfile -t refinery-builder:latest .
+- Tests:
+  - go-control-plane: (cd go-control-plane && go test ./...)
+  - go-worker: (cd go-worker && go test ./...)
+  - UI: (cd ui && npm test)
+- UI dev:
+  - VITE_API_BASE=http://localhost:8080 npm run dev -- --port 3005
+
+## Remote workflow (kdz)
+- SSH alias: kdz
+- Tmux session: kd1 (always use tmux; use mcp-tmux tools for remote commands)
+- Remote root: /src/s390x-wheel-refinery (rsync-only; do not use git on host)
+- Build + run (no-cache when requested):
+  1) make prep-dirs
+  2) podman build --no-cache -f containers/refinery-builder/Containerfile -t refinery-builder:latest .
+  3) podman compose build --no-cache
+  4) podman compose down --remove-orphans
+  5) podman compose up -d --force-recreate
+  6) podman compose ps
+
+## Operational notes / gotchas
+- /cache is required; make prep-dirs creates cache/cas/pip/plans.
+- Worker container uses Podman and must be privileged.
+- Recipes must be available in the worker container (/app/recipes). Compose
+  mounts ./recipes to /app/recipes.
+- Build status uses leased vs building; UI should reflect this distinction.
+- Auto-build requires both control-plane AUTO_BUILD and worker AUTO_BUILD.
+- UI uses cache-busting index + immutable assets; hard refresh should update.
+
+## Collaboration expectations
+- Commit after each change chunk with clear message (user preference).
+- Use mcp-tmux for remote actions and keep work visible in kd1.
+- Avoid destructive git commands unless explicitly requested.
+- Update CONTEXT.md when architecture/workflow or key decisions change.
+
+## Primary docs to read first
+- README.md (system overview)
+- docs/user-guide.md (ops flow)
+- docs/automatic-build-repair-system.md (automation + logs)
+- docs/plan-build-queues.md (queue model)
+- docs/diagrams/ (Mermaid diagrams)
