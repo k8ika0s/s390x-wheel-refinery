@@ -2243,7 +2243,9 @@ func (p *PostgresStore) QueueBuildsFromPlan(ctx context.Context, runID string, p
 		    backoff_seconds = NULL,
 		    last_error = '',
 		    failure_summary = NULL,
-		    recipes = COALESCE(EXCLUDED.recipes, build_status.recipes)
+		    recipes = COALESCE(EXCLUDED.recipes, build_status.recipes),
+		    updated_at = NOW()
+		WHERE build_status.status IN ('built','failed','quarantined')
 	`
 	for _, n := range nodes {
 		if strings.ToLower(n.Action) != "build" || n.Name == "" || n.Version == "" {
