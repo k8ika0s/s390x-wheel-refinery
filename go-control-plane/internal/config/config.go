@@ -38,6 +38,7 @@ type Config struct {
 	ManifestRetentionDays int
 	HintsDir              string
 	PythonRecipesDir      string
+	PackCatalogPath       string
 	SeedHints             bool
 	ObjectStoreEndpoint   string
 	ObjectStoreBucket     string
@@ -85,6 +86,7 @@ func FromEnv() Config {
 		ManifestRetentionDays: getenvInt("MANIFEST_RETENTION_DAYS", 0),
 		HintsDir:              getenv("HINTS_DIR", "/hints"),
 		PythonRecipesDir:      getenv("PYTHON_RECIPES_DIR", "/recipes"),
+		PackCatalogPath:       getenv("PACK_CATALOG_PATH", "data/pack-catalog.yaml"),
 		SeedHints:             getenv("HINTS_SEED", "1") != "0",
 		ObjectStoreEndpoint:   getenv("OBJECT_STORE_ENDPOINT", ""),
 		ObjectStoreBucket:     getenv("OBJECT_STORE_BUCKET", ""),

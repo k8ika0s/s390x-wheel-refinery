@@ -1,0 +1,237 @@
+# Pack Catalog
+# Defines available packs and their dependencies for the s390x Wheel Refinery
+
+version: "1.0"
+updated: "2026-01-19"
+
+# Pack definitions with dependencies
+packs:
+  zlib:
+    name: zlib
+    version: "1.3.1"
+    description: "Compression library"
+    recipe: "zlib.sh"
+    dependencies: []
+    
+  bzip2:
+    name: bzip2
+    version: "1.0.8"
+    description: "Block-sorting file compressor"
+    recipe: "bzip2.sh"
+    dependencies: []
+    
+  xz:
+    name: xz
+    version: "5.4.5"
+    description: "XZ Utils compression library"
+    recipe: "xz.sh"
+    dependencies: []
+    
+  zstd:
+    name: zstd
+    version: "1.5.5"
+    description: "Zstandard compression"
+    recipe: "zstd.sh"
+    dependencies: []
+    
+  libffi:
+    name: libffi
+    version: "3.4.4"
+    description: "Foreign function interface library"
+    recipe: "libffi.sh"
+    dependencies: []
+    
+  openssl:
+    name: openssl
+    version: "3.2.0"
+    description: "Cryptography and SSL/TLS toolkit"
+    recipe: "openssl.sh"
+    dependencies:
+      - zlib
+      
+  sqlite:
+    name: sqlite
+    version: "3.44.2"
+    description: "SQL database engine"
+    recipe: "sqlite.sh"
+    dependencies: []
+    
+  pkgconf:
+    name: pkgconf
+    version: "2.1.0"
+    description: "Package compiler and linker metadata toolkit"
+    recipe: "pkgconf.sh"
+    dependencies: []
+    
+  libxml2:
+    name: libxml2
+    version: "2.12.3"
+    description: "XML C parser and toolkit"
+    recipe: "libxml2.sh"
+    dependencies:
+      - zlib
+      
+  libxslt:
+    name: libxslt
+    version: "1.1.39"
+    description: "XSLT C library"
+    recipe: "libxslt.sh"
+    dependencies:
+      - libxml2
+      
+  jpeg:
+    name: jpeg
+    version: "9f"
+    description: "JPEG image codec library"
+    recipe: "jpeg.sh"
+    dependencies: []
+    
+  libpng:
+    name: libpng
+    version: "1.6.40"
+    description: "PNG reference library"
+    recipe: "libpng.sh"
+    dependencies:
+      - zlib
+      
+  freetype:
+    name: freetype
+    version: "2.13.2"
+    description: "Font rendering library"
+    recipe: "freetype.sh"
+    dependencies:
+      - libpng
+      - jpeg
+      
+  openblas:
+    name: openblas
+    version: "0.3.25"
+    description: "Optimized BLAS library"
+    recipe: "openblas.sh"
+    dependencies: []
+    
+  cmake:
+    name: cmake
+    version: "3.28.1"
+    description: "Cross-platform build system"
+    recipe: "cmake.sh"
+    dependencies:
+      - openssl
+      
+  ninja:
+    name: ninja
+    version: "1.11.1"
+    description: "Small build system with focus on speed"
+    recipe: "ninja.sh"
+    dependencies: []
+    
+  rust:
+    name: rust
+    version: "1.75.0"
+    description: "Rust programming language toolchain"
+    recipe: "rust.sh"
+    dependencies: []
+
+# Runtime definitions (CPython interpreters)
+runtimes:
+  cpython3.10:
+    name: cpython3.10
+    version: "3.10.13"
+    python_version: "3.10"
+    description: "CPython 3.10 interpreter"
+    recipe: "cpython310.sh"
+    dependencies:
+      - openssl
+      - libffi
+      - zlib
+      - xz
+      - bzip2
+      - sqlite
+      
+  cpython3.11:
+    name: cpython3.11
+    version: "3.11.7"
+    python_version: "3.11"
+    description: "CPython 3.11 interpreter"
+    recipe: "cpython311.sh"
+    dependencies:
+      - openssl
+      - libffi
+      - zlib
+      - xz
+      - bzip2
+      - sqlite
+      
+  cpython3.12:
+    name: cpython3.12
+    version: "3.12.1"
+    python_version: "3.12"
+    description: "CPython 3.12 interpreter"
+    recipe: "cpython312.sh"
+    dependencies:
+      - openssl
+      - libffi
+      - zlib
+      - xz
+      - bzip2
+      - sqlite
+
+# Selection rules for automatic pack attachment
+rules:
+  - name: "cryptography-packages"
+    description: "Packages requiring OpenSSL"
+    package_patterns:
+      - "cryptography"
+      - "pyopenssl"
+      - "paramiko"
+      - "twisted"
+    packs:
+      - openssl
+      - libffi
+      
+  - name: "imaging-packages"
+    description: "Packages requiring image libraries"
+    package_patterns:
+      - "pillow"
+      - "pil"
+      - "imageio"
+    packs:
+      - jpeg
+      - libpng
+      - freetype
+      - zlib
+      
+  - name: "xml-packages"
+    description: "Packages requiring XML libraries"
+    package_patterns:
+      - "lxml"
+      - "libxml"
+      - "libxslt"
+    packs:
+      - libxml2
+      - libxslt
+      - zlib
+      
+  - name: "numpy-scipy"
+    description: "Scientific computing packages"
+    package_patterns:
+      - "numpy"
+      - "scipy"
+      - "pandas"
+    packs:
+      - openblas
+      - zlib
+      
+  - name: "compression-packages"
+    description: "Packages requiring compression libraries"
+    package_patterns:
+      - "zstandard"
+      - "python-zstandard"
+      - "brotli"
+    packs:
+      - zstd
+      - zlib
+      - bzip2
+      - xz
+
+# Made with Bob
