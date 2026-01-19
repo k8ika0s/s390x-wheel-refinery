@@ -14,6 +14,7 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
 	_ "github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Service wires config, backends, and HTTP server.
@@ -110,6 +111,9 @@ func (s *Service) routes() {
 		PackCatalog: packCat,
 	}
 	h.Routes(s.mux)
+
+	// Add Prometheus metrics endpoint
+	s.mux.Handle("/metrics", promhttp.Handler())
 }
 
 // Start runs the HTTP server.

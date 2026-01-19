@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Run starts the worker HTTP server (stub for now).
@@ -182,6 +183,10 @@ func Run() error {
 			wr.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
+
+	// Add Prometheus metrics endpoint
+	mux.Handle("/metrics", promhttp.Handler())
+
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: mux}
 	go func() {
 		<-context.Background().Done()
