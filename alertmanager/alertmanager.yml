@@ -1,0 +1,117 @@
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: 'localhost:25'
+  smtp_from: 'alertmanager@refinery.local'
+  smtp_require_tls: false
+
+# Templates for notifications
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Route tree for alerts
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: 'default'
+  
+  routes:
+    # Critical alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical'
+      group_wait: 0s
+      repeat_interval: 5m
+    
+    # Warning alerts - grouped notification
+    - match:
+        severity: warning
+      receiver: 'warning'
+      group_wait: 30s
+      repeat_interval: 1h
+    
+    # Storage alerts
+    - match:
+        component: storage
+      receiver: 'storage-team'
+      group_by: ['alertname', 'component']
+    
+    # Worker alerts
+    - match:
+        component: worker
+      receiver: 'worker-team'
+      group_by: ['alertname', 'worker_id']
+    
+    # Database alerts
+    - match:
+        component: database
+      receiver: 'database-team'
+
+# Inhibition rules - suppress certain alerts when others are firing
+inhibit_rules:
+  # Inhibit warning if critical is firing for same alert
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'cluster', 'service']
+  
+  # Inhibit individual worker alerts if no workers available
+  - source_match:
+      alertname: 'NoWorkersAvailable'
+    target_match:
+      alertname: 'WorkerDown'
+    equal: ['cluster']
+
+# Receivers - notification destinations
+receivers:
+  - name: 'default'
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook'
+        send_resolved: true
+
+  - name: 'critical'
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook/critical'
+        send_resolved: true
+    # Uncomment and configure for production:
+    # slack_configs:
+    #   - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+    #     channel: '#refinery-critical'
+    #     title: 'Critical Alert: {{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    # pagerduty_configs:
+    #   - service_key: 'YOUR_PAGERDUTY_KEY'
+
+  - name: 'warning'
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook/warning'
+        send_resolved: true
+    # Uncomment and configure for production:
+    # slack_configs:
+    #   - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+    #     channel: '#refinery-warnings'
+
+  - name: 'storage-team'
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook/storage'
+        send_resolved: true
+    # email_configs:
+    #   - to: 'storage-team@example.com'
+
+  - name: 'worker-team'
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook/worker'
+        send_resolved: true
+    # email_configs:
+    #   - to: 'worker-team@example.com'
+
+  - name: 'database-team'
+    webhook_configs:
+      - url: 'http://localhost:5001/webhook/database'
+        send_resolved: true
+    # email_configs:
+    #   - to: 'database-team@example.com'
+
+# Made with Bob

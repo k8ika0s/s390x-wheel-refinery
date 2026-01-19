@@ -1,0 +1,322 @@
+groups:
+  - name: refinery_build_alerts
+    interval: 30s
+    rules:
+      # Build queue backlog alert
+      - alert: BuildQueueBacklog
+        expr: refinery_queue_depth{queue="build"} > 100
+        for: 5m
+        labels:
+          severity: warning
+          component: queue
+        annotations:
+          summary: "Build queue backlog detected"
+          description: "Build queue depth is {{ $value }}, exceeding threshold of 100 for 5 minutes"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#buildqueuebacklog"
+
+      - alert: BuildQueueBacklogCritical
+        expr: refinery_queue_depth{queue="build"} > 500
+        for: 10m
+        labels:
+          severity: critical
+          component: queue
+        annotations:
+          summary: "Critical build queue backlog"
+          description: "Build queue depth is {{ $value }}, exceeding critical threshold of 500 for 10 minutes"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#buildqueuebacklog"
+
+      # Build failure rate alert
+      - alert: HighBuildFailureRate
+        expr: |
+          (
+            rate(refinery_builds_failed_total[15m]) 
+            / 
+            rate(refinery_builds_total[15m])
+          ) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+          component: builder
+        annotations:
+          summary: "High build failure rate detected"
+          description: "Build failure rate is {{ $value | humanizePercentage }}, exceeding 30% threshold"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#highbuildfailurerate"
+
+      - alert: CriticalBuildFailureRate
+        expr: |
+          (
+            rate(refinery_builds_failed_total[15m]) 
+            / 
+            rate(refinery_builds_total[15m])
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+          component: builder
+        annotations:
+          summary: "Critical build failure rate"
+          description: "Build failure rate is {{ $value | humanizePercentage }}, exceeding 50% threshold"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#highbuildfailurerate"
+
+      # Build duration alert
+      - alert: SlowBuilds
+        expr: |
+          histogram_quantile(0.95, 
+            rate(refinery_build_duration_seconds_bucket[15m])
+          ) > 1800
+        for: 15m
+        labels:
+          severity: warning
+          component: builder
+        annotations:
+          summary: "Slow build performance detected"
+          description: "95th percentile build duration is {{ $value }}s, exceeding 30 minute threshold"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#slowbuilds"
+
+  - name: refinery_worker_alerts
+    interval: 30s
+    rules:
+      # Worker health alerts
+      - alert: WorkerDown
+        expr: refinery_worker_online == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: worker
+        annotations:
+          summary: "Worker {{ $labels.worker_id }} is down"
+          description: "Worker {{ $labels.worker_id }} has been offline for 2 minutes"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#workerdown"
+
+      - alert: NoWorkersAvailable
+        expr: sum(refinery_worker_online) == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: worker
+        annotations:
+          summary: "No workers available"
+          description: "All workers are offline - build processing has stopped"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#noworkersavailable"
+
+      # Worker resource alerts
+      - alert: WorkerHighCPU
+        expr: |
+          (
+            refinery_worker_cpu_usage_seconds 
+            / 
+            refinery_worker_cpu_limit_seconds
+          ) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "Worker {{ $labels.worker_id }} high CPU usage"
+          description: "Worker {{ $labels.worker_id }} CPU usage is {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#workerhighcpu"
+
+      - alert: WorkerHighMemory
+        expr: |
+          (
+            refinery_worker_memory_usage_bytes 
+            / 
+            refinery_worker_memory_limit_bytes
+          ) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "Worker {{ $labels.worker_id }} high memory usage"
+          description: "Worker {{ $labels.worker_id }} memory usage is {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#workerhighmemory"
+
+      # Worker error rate
+      - alert: WorkerHighErrorRate
+        expr: rate(refinery_worker_errors_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "Worker {{ $labels.worker_id }} high error rate"
+          description: "Worker {{ $labels.worker_id }} error rate is {{ $value }} errors/sec for {{ $labels.error_type }}"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#workerhigherrorrate"
+
+      # Worker heartbeat
+      - alert: WorkerMissedHeartbeat
+        expr: (time() - refinery_worker_last_heartbeat_timestamp) > 120
+        for: 2m
+        labels:
+          severity: warning
+          component: worker
+        annotations:
+          summary: "Worker {{ $labels.worker_id }} missed heartbeat"
+          description: "Worker {{ $labels.worker_id }} last heartbeat was {{ $value }}s ago"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#workermissedheartbeat"
+
+  - name: refinery_storage_alerts
+    interval: 30s
+    rules:
+      # CAS storage alerts
+      - alert: CASStorageHighUsage
+        expr: |
+          (
+            refinery_cas_storage_used_bytes 
+            / 
+            refinery_cas_storage_total_bytes
+          ) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "CAS storage usage high"
+          description: "CAS storage usage is {{ $value | humanizePercentage }}, exceeding 80% threshold"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#casstorgehighusage"
+
+      - alert: CASStorageCritical
+        expr: |
+          (
+            refinery_cas_storage_used_bytes 
+            / 
+            refinery_cas_storage_total_bytes
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          component: storage
+        annotations:
+          summary: "CAS storage critically full"
+          description: "CAS storage usage is {{ $value | humanizePercentage }}, exceeding 90% threshold"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#casstorgehighusage"
+
+      # MinIO storage alerts
+      - alert: MinIOStorageHighUsage
+        expr: |
+          (
+            refinery_minio_storage_used_bytes 
+            / 
+            refinery_minio_storage_total_bytes
+          ) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "MinIO storage usage high"
+          description: "MinIO storage usage is {{ $value | humanizePercentage }}, exceeding 80% threshold"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#miniostorgehighusage"
+
+      - alert: MinIOStorageCritical
+        expr: |
+          (
+            refinery_minio_storage_used_bytes 
+            / 
+            refinery_minio_storage_total_bytes
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          component: storage
+        annotations:
+          summary: "MinIO storage critically full"
+          description: "MinIO storage usage is {{ $value | humanizePercentage }}, exceeding 90% threshold"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#miniostorgehighusage"
+
+      # CAS performance alerts
+      - alert: CASHighLatency
+        expr: |
+          histogram_quantile(0.95, 
+            rate(refinery_cas_operation_duration_seconds_bucket[5m])
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "CAS high latency detected"
+          description: "CAS {{ $labels.operation }} p95 latency is {{ $value }}s, exceeding 5s threshold"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#cashighlatency"
+
+      # CAS error rate
+      - alert: CASHighErrorRate
+        expr: rate(refinery_cas_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "CAS high error rate"
+          description: "CAS error rate is {{ $value }} errors/sec for {{ $labels.error_type }}"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#cashigherrorrate"
+
+  - name: refinery_database_alerts
+    interval: 30s
+    rules:
+      # Database connection alerts
+      - alert: DatabaseConnectionPoolExhausted
+        expr: |
+          (
+            pg_stat_database_numbackends 
+            / 
+            pg_settings_max_connections
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "Database connection usage is {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#databaseconnectionpoolexhausted"
+
+      # Database performance
+      - alert: DatabaseSlowQueries
+        expr: rate(pg_stat_statements_mean_exec_time[5m]) > 1000
+        for: 10m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Database slow queries detected"
+          description: "Average query execution time is {{ $value }}ms"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#databaseslowqueries"
+
+  - name: refinery_system_alerts
+    interval: 30s
+    rules:
+      # Queue wait time
+      - alert: HighQueueWaitTime
+        expr: |
+          histogram_quantile(0.95, 
+            rate(refinery_queue_wait_duration_seconds_bucket[15m])
+          ) > 300
+        for: 10m
+        labels:
+          severity: warning
+          component: queue
+        annotations:
+          summary: "High queue wait time for {{ $labels.queue }}"
+          description: "95th percentile wait time for {{ $labels.queue }} queue is {{ $value }}s"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#highqueuewaittime"
+
+      # Hint effectiveness
+      - alert: LowHintSuccessRate
+        expr: |
+          (
+            rate(refinery_hint_success_total[1h]) 
+            / 
+            rate(refinery_hint_applied_total[1h])
+          ) < 0.5
+        for: 30m
+        labels:
+          severity: warning
+          component: hints
+        annotations:
+          summary: "Low hint success rate for {{ $labels.hint_type }}"
+          description: "Hint success rate for {{ $labels.hint_type }} is {{ $value | humanizePercentage }}"
+          runbook_url: "https://github.com/k8ika0s/s390x-wheel-refinery/blob/main/docs/alerts-runbooks.md#lowhintsuccessrate"
+
+# Made with Bob
