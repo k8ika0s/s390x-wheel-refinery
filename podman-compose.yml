@@ -93,12 +93,14 @@ services:
       HINTS_DIR: /hints
       HINTS_SEED: "1"
       PYTHON_RECIPES_DIR: /recipes
+      PACK_CATALOG_PATH: /data/pack-catalog.yaml
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
     ports:
       - "8080:8080"
     volumes:
       - ./hints:/hints:ro
       - ./recipes:/recipes:rw
+      - ./data:/data:ro
 
   ui:
     build:

@@ -1,0 +1,193 @@
+name: Build and Publish Builder Image
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'containers/refinery-builder/**'
+      - 'recipes/**'
+      - '.github/workflows/builder-image.yml'
+  pull_request:
+    paths:
+      - 'containers/refinery-builder/**'
+      - 'recipes/**'
+      - '.github/workflows/builder-image.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Custom tag for the image'
+        required: false
+        default: 'latest'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/refinery-builder
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/s390x,linux/amd64,linux/arm64
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./containers/refinery-builder/Containerfile
+          platforms: linux/s390x,linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+      
+      - name: Generate SBOM
+        if: github.event_name != 'pull_request'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: spdx-json
+          output-file: sbom-builder-image.spdx.json
+      
+      - name: Upload SBOM artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-builder-image
+          path: sbom-builder-image.spdx.json
+          retention-days: 90
+      
+      - name: Scan image for vulnerabilities
+        if: github.event_name != 'pull_request'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      
+      - name: Upload Trivy results to GitHub Security
+        if: github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+      
+      - name: Create release notes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          cat > release-notes.md << 'EOF'
+          # Builder Image Release
+          
+          ## Image Details
+          - **Registry**: ${{ env.REGISTRY }}
+          - **Image**: ${{ env.IMAGE_NAME }}
+          - **Tags**: ${{ steps.meta.outputs.tags }}
+          - **Commit**: ${{ github.sha }}
+          - **Build Date**: ${{ github.event.head_commit.timestamp }}
+          
+          ## Included Components
+          - Base: UBI 8.9
+          - Toolchains: gcc, g++, make, cmake, ninja
+          - Python: 3.x with pip, virtualenv
+          - Build tools: auditwheel, patchelf
+          - Recipes: 18 packs + 3 CPython runtimes
+          
+          ## Platforms
+          - linux/s390x (primary)
+          - linux/amd64
+          - linux/arm64
+          
+          ## Usage
+          ```bash
+          podman pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          ```
+          
+          ## Changes
+          ${{ github.event.head_commit.message }}
+          EOF
+      
+      - name: Upload release notes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          retention-days: 90
+
+  test-image:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Pull and test image
+        run: |
+          # Pull the image
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          
+          # Test basic functionality
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest -c "gcc --version"
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest -c "python3 --version"
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest -c "auditwheel --version"
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest -c "ls -la /app/recipes"
+          
+          # Verify recipes are present
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest -c "test -f /app/recipes/zlib.sh && echo 'Recipes OK'"
+          
+          echo "✅ Image tests passed"
+
+# Made with Bob
