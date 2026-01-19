@@ -25,6 +25,7 @@ import (
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/objectstore"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/packcatalog"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
@@ -38,6 +39,7 @@ type Handler struct {
 	Queue                 queue.Backend
 	PlanQ                 queue.PlanQueueBackend
 	InputStore            objectstore.Store
+	PackCatalog           *packcatalog.Catalog
 	Config                config.Config
 	logHubOnce            sync.Once
 	logHub                *logHub
@@ -103,6 +105,13 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/worker/heartbeat", h.workerHeartbeat)
 	mux.HandleFunc("/api/worker/trigger", h.workerTrigger)
 	mux.HandleFunc("/api/worker/smoke", h.workerSmoke)
+	mux.HandleFunc("/api/pack-catalog", h.packCatalog)
+	mux.HandleFunc("/api/pack-catalog/packs", h.packCatalogPacks)
+	mux.HandleFunc("/api/pack-catalog/packs/", h.packCatalogPackByName)
+	mux.HandleFunc("/api/pack-catalog/runtimes", h.packCatalogRuntimes)
+	mux.HandleFunc("/api/pack-catalog/runtimes/", h.packCatalogRuntimeByName)
+	mux.HandleFunc("/api/pack-catalog/select", h.packCatalogSelect)
+	mux.HandleFunc("/api/pack-catalog/dependencies/", h.packCatalogDependencies)
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {

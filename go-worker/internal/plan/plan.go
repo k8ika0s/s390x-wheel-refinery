@@ -8,9 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
-	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
-	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 	"log"
 	"math/rand"
 	"os"
@@ -20,17 +17,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 )
 
 // FlatNode represents a legacy plan entry.
 type FlatNode struct {
-	NodeID        string `json:"node_id,omitempty"`
-	Name          string `json:"name"`
-	Version       string `json:"version"`
-	PythonVersion string `json:"python_version,omitempty"`
-	PythonTag     string `json:"python_tag"`
-	PlatformTag   string `json:"platform_tag"`
-	Action        string `json:"action"`
+	NodeID        string        `json:"node_id,omitempty"`
+	Name          string        `json:"name"`
+	Version       string        `json:"version"`
+	PythonVersion string        `json:"python_version,omitempty"`
+	PythonTag     string        `json:"python_tag"`
+	PlatformTag   string        `json:"platform_tag"`
+	Action        string        `json:"action"`
 	Hints         []HintMatch   `json:"hints,omitempty"`
 	Recipes       []RecipeMatch `json:"recipes,omitempty"`
 }
@@ -993,6 +994,8 @@ func selectPacks(pkg string, catalog *pack.Catalog) ([]pack.PackDef, []artifact.
 }
 
 // packDependencies declares manual pack dependency edges to enforce ordering.
+// This function is deprecated in favor of using the pack catalog.
+// It remains for backward compatibility when catalog is not available.
 func packDependencies(name string) []string {
 	deps := map[string][]string{
 		"openssl":       {"zlib"},
@@ -1008,4 +1011,16 @@ func packDependencies(name string) []string {
 		"libjpeg-turbo": {},
 	}
 	return deps[strings.ToLower(name)]
+}
+
+// packDependenciesFromCatalog retrieves pack dependencies from the catalog.
+// Falls back to hardcoded dependencies if catalog is not available.
+func packDependenciesFromCatalog(name string, catalogDeps map[string][]string) []string {
+	if catalogDeps == nil {
+		return packDependencies(name)
+	}
+	if deps, ok := catalogDeps[strings.ToLower(name)]; ok {
+		return deps
+	}
+	return packDependencies(name)
 }

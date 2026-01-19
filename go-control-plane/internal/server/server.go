@@ -9,6 +9,7 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/api"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/objectstore"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/packcatalog"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/settings"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/store"
@@ -85,7 +86,29 @@ func (s *Service) routes() {
 			inputStore = storeClient
 		}
 	}
-	h := &api.Handler{Store: st, Queue: q, PlanQ: planQ, Config: s.cfg, InputStore: inputStore}
+
+	// Load pack catalog
+	var packCat *packcatalog.Catalog
+	catalogPath := s.cfg.PackCatalogPath
+	if catalogPath == "" {
+		catalogPath = "data/pack-catalog.yaml"
+	}
+	if cat, err := packcatalog.Load(catalogPath); err != nil {
+		log.Printf("warning: pack catalog load failed: %v", err)
+	} else {
+		packCat = cat
+		log.Printf("pack catalog loaded: %d packs, %d runtimes, %d rules",
+			len(cat.Packs), len(cat.Runtimes), len(cat.Rules))
+	}
+
+	h := &api.Handler{
+		Store:       st,
+		Queue:       q,
+		PlanQ:       planQ,
+		Config:      s.cfg,
+		InputStore:  inputStore,
+		PackCatalog: packCat,
+	}
 	h.Routes(s.mux)
 }
 
