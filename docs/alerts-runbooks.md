@@ -111,3 +111,20 @@ Runbook
 
 Import `docs/alerts-prometheus.yml` into your Prometheus instance or use it as a
 starting point for an Alertmanager configuration.
+
+## Log analysis (quick queries)
+
+```bash
+# Recent errors (control-plane)
+podman logs go-control-plane 2>&1 | jq 'select(.level == "error")'
+
+# Worker build failures
+podman logs go-worker 2>&1 | jq 'select(.message | contains("Build failed"))'
+
+# Correlation trace
+CORR_ID="<uuid>"
+podman logs go-control-plane 2>&1 | jq "select(.correlation_id == \"$CORR_ID\")"
+
+# Slow requests (>5s)
+podman logs go-control-plane 2>&1 | jq 'select(.fields.duration > 5)'
+```

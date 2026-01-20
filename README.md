@@ -130,7 +130,8 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
   ```
 
 ## Docs and diagrams
-- Architecture snapshot: `docs/overview.md`.
+- System architecture + automation: `docs/automatic-build-repair-system.md`.
+- Queue model: `docs/plan-build-queues.md`.
 - Production deployment guide: `docs/production-deployment-guide.md`.
 - User guide: `docs/user-guide.md`.
 - System diagram (Mermaid): `docs/diagrams/overall-system.mmd`.
