@@ -63,6 +63,11 @@ Keep in mind:
   - Purpose: object storage access for artifacts and inputs.
   - Where: worker env.
 
+- INFER_TOKEN
+  - Purpose: bearer token for the external inference API (LLM suggestions).
+  - Where: worker env; sent as Authorization: Bearer.
+  - Notes: if your inference URL embeds credentials, treat `INFER_URL` as secret too.
+
 ## Optional infrastructure credentials
 
 These are not required for local/dev but should be handled as secrets if used:

@@ -58,6 +58,12 @@ type Config struct {
 	AutoFixMinConfidence    string
 	AutoFixRateLimitMin     int
 	AutoHintRateLimitMin    int
+	InferEnabled            bool
+	InferURL                string
+	InferToken              string
+	InferModel              string
+	InferTimeoutSec         int
+	InferMaxRetries         int
 	AutorunInterval         int
 	BatchSize               int
 	RunCmd                  []string
@@ -144,6 +150,12 @@ func fromEnv() Config {
 		AutoFixMinConfidence:    getenv("AUTO_FIX_MIN_CONFIDENCE", "low"),
 		AutoFixRateLimitMin:     getenvInt("AUTO_FIX_RATE_LIMIT_MINUTES", 15),
 		AutoHintRateLimitMin:    getenvInt("AUTO_HINT_RATE_LIMIT_MINUTES", 60),
+		InferEnabled:            getenvBool("INFER_ENABLED", true),
+		InferURL:                getenv("INFER_URL", ""),
+		InferToken:              getenv("INFER_TOKEN", ""),
+		InferModel:              getenv("INFER_MODEL", ""),
+		InferTimeoutSec:         getenvInt("INFER_TIMEOUT_SEC", 20),
+		InferMaxRetries:         getenvInt("INFER_MAX_RETRIES", 1),
 		BatchSize:               getenvInt("BATCH_SIZE", 50),
 		RunCmd:                  parseCmd(getenv("WORKER_RUN_CMD", "")),
 		IndexURL:                getenv("INDEX_URL", ""),

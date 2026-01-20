@@ -58,6 +58,68 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 	var matchedIDs []string
 	var blocked []string
 	var recipes []string
+	var saved []string
+	var reason string
+	applyInferred := func(hint plan.Hint, hintRecipes []string, note string, source string) (bool, *autoFixResult) {
+		addTrace("%s inferred hint pattern %s", source, hint.Pattern)
+		if hint.ID == "" {
+			hint.ID = autoHintID(hint, ctxHint)
+		}
+		if confidenceScore(hint.Confidence) < threshold {
+			addTrace("blocked inferred hint %s (confidence %s < %.2f)", hint.ID, hint.Confidence, threshold)
+			log.Printf("auto-fix: %s@%s skip inferred hint confidence=%s", job.Name, job.Version, hint.Confidence)
+			blocked = append(blocked, hint.ID)
+			return true, &autoFixResult{
+				BlockedReason: "confidence below threshold",
+				BlockedHints:  dedupeStrings(blocked),
+				DecisionTrace: trace,
+			}
+		}
+		if existing, merged, ok := findSimilarHint(hints, hint); ok {
+			hint = existing
+			if merged {
+				addTrace("merged inferred hint into %s", hint.ID)
+				if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
+					if err := upsertHint(ctx, nil, w.Cfg, hint); err != nil {
+						log.Printf("auto-fix: hint merge save failed for %s: %v", hint.ID, err)
+					} else {
+						saved = append(saved, hint.ID)
+					}
+				}
+			}
+		}
+		if hint.ID == "" {
+			hint.ID = autoHintID(hint, ctxHint)
+		}
+		if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
+			if w.canSaveAutoHint(job.Name) && (knownHints == nil || !knownHints[hint.ID]) {
+				if err := upsertHint(ctx, nil, w.Cfg, hint); err != nil {
+					log.Printf("auto-fix: hint save failed for %s: %v", hint.ID, err)
+					addTrace("hint save failed: %s", hint.ID)
+				} else {
+					knownHints[hint.ID] = true
+					w.markAutoHintSaved(job.Name)
+					saved = append(saved, hint.ID)
+					addTrace("saved inferred hint %s", hint.ID)
+				}
+			} else if !w.canSaveAutoHint(job.Name) {
+				log.Printf("auto-fix: rate limit hit for %s; hint not saved", job.Name)
+				if reason == "" {
+					reason = "rate limit: hint not saved"
+				}
+				addTrace("rate limit hit: hint not saved")
+			}
+		}
+		matchedIDs = append(matchedIDs, hint.ID)
+		recipes = append(recipes, hintRecipes...)
+		if reason == "" {
+			reason = note
+		}
+		if len(hintRecipes) > 0 {
+			addTrace("inferred recipes: %s", strings.Join(hintRecipes, ", "))
+		}
+		return false, nil
+	}
 	for _, h := range hints {
 		_, recs, ok := plan.MatchHintForLog(h, ctxHint, logScan)
 		if !ok {
@@ -80,65 +142,23 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		}
 	}
 
-	var saved []string
-	var reason string
 	if len(recipes) == 0 {
 		if hint, hintRecipes, note, ok := inferHintFromLog(logScan, ctxHint); ok {
-			addTrace("inferred hint pattern %s", hint.Pattern)
-			if hint.ID == "" {
-				hint.ID = autoHintID(hint, ctxHint)
+			if done, result := applyInferred(hint, hintRecipes, note, "heuristic"); done {
+				return *result
 			}
-			if confidenceScore(hint.Confidence) < threshold {
-				addTrace("blocked inferred hint %s (confidence %s < %.2f)", hint.ID, hint.Confidence, threshold)
-				log.Printf("auto-fix: %s@%s skip inferred hint confidence=%s", job.Name, job.Version, hint.Confidence)
-				blocked = append(blocked, hint.ID)
-				return autoFixResult{
-					BlockedReason: "confidence below threshold",
-					BlockedHints:  dedupeStrings(blocked),
-					DecisionTrace: trace,
-				}
+		}
+	}
+	if len(recipes) == 0 {
+		if hint, hintRecipes, note, ok, llmTrace := w.inferHintFromLLM(ctx, logScan, ctxHint, job.Recipes); ok {
+			if len(llmTrace) > 0 {
+				trace = append(trace, llmTrace...)
 			}
-			if existing, merged, ok := findSimilarHint(hints, hint); ok {
-				hint = existing
-				if merged {
-					addTrace("merged inferred hint into %s", hint.ID)
-					if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
-						if err := upsertHint(ctx, nil, w.Cfg, hint); err != nil {
-							log.Printf("auto-fix: hint merge save failed for %s: %v", hint.ID, err)
-						} else {
-							saved = append(saved, hint.ID)
-						}
-					}
-				}
+			if done, result := applyInferred(hint, hintRecipes, note, "llm"); done {
+				return *result
 			}
-			if hint.ID == "" {
-				hint.ID = autoHintID(hint, ctxHint)
-			}
-			if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
-				if w.canSaveAutoHint(job.Name) && (knownHints == nil || !knownHints[hint.ID]) {
-					if err := upsertHint(ctx, nil, w.Cfg, hint); err != nil {
-						log.Printf("auto-fix: hint save failed for %s: %v", hint.ID, err)
-						addTrace("hint save failed: %s", hint.ID)
-					} else {
-						knownHints[hint.ID] = true
-						w.markAutoHintSaved(job.Name)
-						saved = append(saved, hint.ID)
-						addTrace("saved inferred hint %s", hint.ID)
-					}
-				} else if !w.canSaveAutoHint(job.Name) {
-					log.Printf("auto-fix: rate limit hit for %s; hint not saved", job.Name)
-					if reason == "" {
-						reason = "rate limit: hint not saved"
-					}
-					addTrace("rate limit hit: hint not saved")
-				}
-			}
-			matchedIDs = append(matchedIDs, hint.ID)
-			recipes = append(recipes, hintRecipes...)
-			reason = note
-			if len(hintRecipes) > 0 {
-				addTrace("inferred recipes: %s", strings.Join(hintRecipes, ", "))
-			}
+		} else if len(llmTrace) > 0 {
+			trace = append(trace, llmTrace...)
 		}
 	}
 
@@ -177,15 +197,15 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		}
 	}
 	return autoFixResult{
-		Applied:      applied,
-		Recipes:      merged,
-		HintIDs:      dedupeStrings(matchedIDs),
-		SavedHintIDs: dedupeStrings(saved),
-		Reason:       reason,
+		Applied:       applied,
+		Recipes:       merged,
+		HintIDs:       dedupeStrings(matchedIDs),
+		SavedHintIDs:  dedupeStrings(saved),
+		Reason:        reason,
 		BlockedReason: blockedReason,
-		BlockedHints: dedupeStrings(blocked),
-		Impact:       impact,
-		ImpactReason: impactReason,
+		BlockedHints:  dedupeStrings(blocked),
+		Impact:        impact,
+		ImpactReason:  impactReason,
 		DecisionTrace: compactTrace(trace),
 	}
 }

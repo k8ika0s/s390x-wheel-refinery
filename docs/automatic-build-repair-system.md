@@ -206,6 +206,25 @@ When inference succeeds:
 - It is only applied if confidence meets the threshold.
 - The hint can be auto-saved (see below).
 
+### LLM-backed inference (optional)
+When `INFER_URL` is configured, the worker can call an external inference API to propose recipes. The app treats this as a
+provider-agnostic black box: it sends a structured prompt and expects a strict JSON response (pattern, confidence, recipes).
+
+Why this exists:
+- The heuristic patterns cover common cases, but the long tail of build errors benefits from broader reasoning.
+- External inference can translate unfamiliar errors into concrete package fixes without baking new heuristics into the worker.
+
+Safety defaults:
+- If inference is not configured or fails, the worker proceeds without it.
+- Confidence gating still applies; low-confidence suggestions are blocked and recorded.
+- Suggested hints are tagged (`llm`, `suggested`) so they are easy to audit.
+
+Relevant settings:
+- `INFER_ENABLED` (default true; ignored if `INFER_URL` is empty)
+- `INFER_URL` / `INFER_TOKEN` / `INFER_MODEL`
+- `INFER_TIMEOUT_SEC`, `INFER_MAX_RETRIES`
+See `docs/llm-inference-brief.md` for model guidance and prompt expectations.
+
 ### Auto-save and dedupe
 When `AUTO_SAVE_HINTS=true`:
 - Inferred hints are saved to the control-plane catalog.
@@ -313,6 +332,9 @@ Key environment variables for automation:
 - `PLAN_POLL_ENABLED` / `PLAN_POLL_INTERVAL_SEC` (worker plan polling cadence)
 - `BUILD_POOL_SIZE` / `PLAN_POOL_SIZE` (worker concurrency)
 - `LOG_CHUNK_MAX` (max log chunks to retain per build)
+- `INFER_ENABLED` (default: true; enables optional inference)
+- `INFER_URL` / `INFER_TOKEN` / `INFER_MODEL` (inference endpoint config)
+- `INFER_TIMEOUT_SEC`, `INFER_MAX_RETRIES` (inference request tuning)
 - `REPAIR_PUSH_ENABLED` (default: false)
 - `REPAIR_TOOL_VERSION`, `REPAIR_POLICY_HASH`, `REPAIR_CMD` (repair settings)
 
@@ -329,6 +351,7 @@ Key environment variables for automation:
 - **No auto-saved hints**: Check `AUTO_SAVE_HINTS` and rate limit window.
 - **No retries**: Check `REQUEUE_ON_FAILURE` and `MAX_REQUEUE_ATTEMPTS`.
 - **Repair missing**: Ensure `REPAIR_PUSH_ENABLED` and repair tool settings are configured.
+- **Inference not used**: Check `INFER_ENABLED`, `INFER_URL`, and worker logs for inference errors.
 
 ## Reference: Files and Components
 - Auto-fix logic: `go-worker/internal/service/auto_fix.go`
