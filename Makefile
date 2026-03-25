@@ -4,7 +4,7 @@ ENGINE ?= podman
 COMPOSE_FILE ?= podman-compose.yml
 DEV_IMAGE ?= ghcr.io/k8ika0s/s390x-wheel-refinery-dev:latest
 
-.PHONY: build-rocky build-fedora build-ubuntu build-builder build-images build-devcontainer prep-dirs up
+.PHONY: build-rocky build-fedora build-ubuntu build-builder build-images build-devcontainer prep-dirs up build-stack-hostnet stack-up-no-build stack-diagnostics
 
 build-rocky:
 	$(ENGINE) build -t $(REGISTRY)/refinery-rocky:$(TAG) -f containers/rocky/Containerfile .
@@ -31,3 +31,12 @@ prep-dirs:
 
 up: prep-dirs
 	$(ENGINE) compose -f $(COMPOSE_FILE) up
+
+build-stack-hostnet:
+	./scripts/build-stack-images-hostnet.sh
+
+stack-up-no-build:
+	./scripts/stack-up-no-build.sh
+
+stack-diagnostics:
+	./scripts/stack-diagnostics.sh

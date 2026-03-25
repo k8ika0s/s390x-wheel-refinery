@@ -3,7 +3,7 @@
 This file captures the current technical and operational context. Update it
 whenever major workflows, data models, or architecture change.
 
-Last updated: 2025-01-28 (approx)
+Last updated: 2026-03-25
 
 ## Current focus
 The Go control-plane + Go worker stack is the primary pipeline. The UI and
@@ -42,6 +42,9 @@ compose rebuilds in tmux session kd1.
 - Worker posts NDJSON chunks to POST /api/logs/stream/{name}/{version}.
 - Control-plane stores chunks in log_chunks and broadcasts on WebSocket.
 - UI loads existing chunks then tails the WebSocket for live updates.
+- Control-plane HTTP middleware now adds `X-Correlation-ID` /
+  `X-Request-ID` headers and structured request/response logs for faster API
+  tracing during validation runs.
 
 ## Configuration highlights
 - Control-plane: AUTO_PLAN, AUTO_BUILD, UI_TOKEN, WORKER_TOKEN,
@@ -66,6 +69,17 @@ compose rebuilds in tmux session kd1.
   an s390x host such as `zkd0`.
 - Worker inference secrets stay in the environment (`INFER_URL`, `INFER_TOKEN`);
   prompt text and retry/model policy come from control-plane settings.
+
+## Validation helpers
+- Example requirement sets live in `examples/requirements/`.
+- `scripts/build-stack-images-hostnet.sh` builds the full image set in the
+  order needed for remote s390x hosts.
+- `scripts/stack-up-no-build.sh` starts the compose stack from prebuilt images.
+- `scripts/upload-requirements.sh` uploads and enqueues a full requirements
+  file, while `scripts/seed-build.sh` is still the focused single-package smoke
+  runner.
+- `scripts/stack-diagnostics.sh` captures compose status, recent logs, and
+  health/metrics responses into `output/diagnostics/...`.
 
 ## Recent UI behaviors
 - Plans panel includes Builds, Hints, Recipes, Graph, and Non-builds tabs.

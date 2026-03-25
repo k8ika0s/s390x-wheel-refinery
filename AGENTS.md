@@ -34,6 +34,9 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
 ## Common commands (local)
 - Start stack: podman compose -f podman-compose.yml up
 - Build builder image: podman build -f containers/refinery-builder/Containerfile -t refinery-builder:latest .
+- Build all s390x service images with host networking: ./scripts/build-stack-images-hostnet.sh
+- Start from prebuilt images only: ./scripts/stack-up-no-build.sh
+- Capture compose status + recent logs + health probes: ./scripts/stack-diagnostics.sh
 - Tests:
   - go-control-plane: (cd go-control-plane && go test ./...)
   - go-worker: (cd go-worker && go test ./...)
@@ -66,6 +69,9 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
   machines, local `podman compose up` can build images but the containers will
   fail at runtime with `Exec format error`; use local tests/builds for fast
   feedback and `zkd0` for full-stack runtime validation.
+- Example first-run requirement sets live under `examples/requirements/`.
+- `scripts/upload-requirements.sh` uploads a full requirements file and enqueues
+  planning; `scripts/seed-build.sh` remains the single-package smoke runner.
 - Build status uses leased vs building; UI should reflect this distinction.
 - Auto-build requires both control-plane AUTO_BUILD and worker AUTO_BUILD.
 - OpenAI-compatible inference uses worker-only `INFER_URL`/`INFER_TOKEN`
@@ -73,6 +79,8 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
 - `zkd0` currently needs direct host-networked `podman build --network host`
   per image. `podman compose build` still hits netavark bridge failures on some
   second-stage image steps there.
+- Control-plane request logging is now live on the HTTP path and emits
+  structured logs with `X-Correlation-ID` / `X-Request-ID` response headers.
 - UI uses cache-busting index + immutable assets; hard refresh should update.
 
 ## Collaboration expectations

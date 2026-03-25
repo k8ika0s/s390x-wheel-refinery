@@ -8,6 +8,8 @@ import (
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/api"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/config"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/logging"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/middleware"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/objectstore"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/packcatalog"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-control-plane/internal/queue"
@@ -119,5 +121,9 @@ func (s *Service) routes() {
 // Start runs the HTTP server.
 func (s *Service) Start() error {
 	log.Printf("starting server on %s", s.cfg.HTTPAddr)
-	return http.ListenAndServe(s.cfg.HTTPAddr, withCORS(s.cfg, withGzip(s.mux)))
+	reqLogger := logging.New("control-plane.http")
+	handler := withCORS(s.cfg, withGzip(s.mux))
+	handler = middleware.RequestLogger(reqLogger)(handler)
+	handler = middleware.CorrelationID(handler)
+	return http.ListenAndServe(s.cfg.HTTPAddr, handler)
 }

@@ -75,6 +75,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - API on `:8080` (compose wiring): manifests, artifacts, metrics (`/metrics` Prometheus), queue ops, logs, and worker trigger.
 - UI on `:3000` (compose wiring): artifacts with digests/URLs, queue depth, metrics panels, and log viewers.
 - Auth: optional `UI_TOKEN` protects UI write endpoints; `WORKER_TOKEN` protects worker posts. UI can set `UI_TOKEN` via `POST /api/session/ui-token?token=...`.
+- The control-plane emits structured HTTP request logs and returns `X-Correlation-ID` / `X-Request-ID` headers so API failures can be traced quickly through logs.
 
 ## Worker and queue
 - Queue backends: `file`, `redis`, or `kafka` (compose defaults to Redis).
@@ -98,13 +99,25 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
   ```bash
   podman build -f containers/refinery-builder/Containerfile -t refinery-builder:latest .
   ```
+- **s390x host workflow**: build images explicitly with host networking, then start without rebuilding:
+  ```bash
+  ./scripts/build-stack-images-hostnet.sh
+  ./scripts/stack-up-no-build.sh
+  ```
 - **Data dirs**: outputs appear in `./output`, cache/logs in `./cache`. Inputs are uploaded to object storage (MinIO) instead of a local `/input` folder.
+- **Non-s390x hosts**: service images are built for `linux/s390x`, so image builds can succeed while runtime containers fail with `Exec format error`. Use non-s390x machines for local tests and image assembly, and an s390x host for full-stack runtime validation.
 
 ## Configuration reference
 - **Control-plane**: `HTTP_ADDR`, `POSTGRES_DSN`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `WORKER_WEBHOOK_URL`, `WORKER_PLAN_URL`, `UI_TOKEN`, `WORKER_TOKEN`, `CAS_REGISTRY_URL`, `CAS_REGISTRY_REPO`, `OBJECT_STORE_*`.
 - **Worker**: `OUTPUT_DIR`, `CACHE_DIR`, `CACHE_MAX_BYTES`, `CACHE_PRUNE_INTERVAL_SEC`, `PYTHON_VERSION`, `PLATFORM_TAG`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `PODMAN_BIN`, `CONTAINER_IMAGE`, `WORKER_RUN_CMD` (override container entrypoint), `PACK_RECIPES_DIR`, `DEFAULT_RUNTIME_CMD`, `DEFAULT_REPAIR_CMD`, `CAS_REGISTRY_URL/REPO`, `LOCAL_CAS_DIR`, `CAS_MAX_PARALLEL`, `OBJECT_STORE_MAX_PARALLEL`, `OBJECT_STORE_*`, `INFER_ENABLED`, `INFER_URL`, `INFER_TOKEN`, `INFER_MODEL`, `INFER_TIMEOUT_SEC`, `INFER_MAX_RETRIES` (compose-only limits: `WORKER_CPU_LIMIT`, `WORKER_MEM_LIMIT`).
 - **Inference prompting**: `INFER_URL` and `INFER_TOKEN` remain worker-only secrets. The system prompt and user prompt template are managed through `/api/settings` so prompt tuning does not require rebuilding the worker image.
 - **Repair metadata**: `REPAIR_POLICY_HASH`, `REPAIR_TOOL_VERSION` are attached to repair artifacts for provenance.
+
+## First-Run Kit
+- Example validation inputs live in [examples/requirements/README.md](/Users/kaitlyndavis/dev/github.com/k8ika0s/s390x-wheel-refinery/examples/requirements/README.md).
+- [scripts/upload-requirements.sh](/Users/kaitlyndavis/dev/github.com/k8ika0s/s390x-wheel-refinery/scripts/upload-requirements.sh) uploads a full `requirements.txt` file and enqueues planning.
+- [scripts/seed-build.sh](/Users/kaitlyndavis/dev/github.com/k8ika0s/s390x-wheel-refinery/scripts/seed-build.sh) runs a single-package smoke build with live log tailing and artifact verification.
+- [scripts/stack-diagnostics.sh](/Users/kaitlyndavis/dev/github.com/k8ika0s/s390x-wheel-refinery/scripts/stack-diagnostics.sh) captures compose state, recent logs, and health/metrics responses into `output/diagnostics/...`.
 
 ## Repair and compliance
 - `recipes/repair.sh` runs auditwheel repair by default; installs auditwheel if missing in the builder image and fails when no repaired wheel is produced.

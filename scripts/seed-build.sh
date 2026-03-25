@@ -6,6 +6,9 @@ API_BASE="${API_BASE:-http://localhost:8080}"
 PACKAGE="${PACKAGE:-six}"
 VERSION="${VERSION:-1.16.0}"
 REQ_LINE="${REQ_LINE:-}"
+REQ_FILE="${REQ_FILE:-}"
+REQ_FILENAME="${REQ_FILENAME:-}"
+UI_TOKEN="${UI_TOKEN:-}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-180}"
 POLL_INTERVAL="${POLL_INTERVAL:-2}"
 VERIFY_ARTIFACTS="${VERIFY_ARTIFACTS:-1}"
@@ -30,6 +33,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+curl_ui_args=()
+if [[ -n "$UI_TOKEN" ]]; then
+  curl_ui_args+=(-H "X-UI-Token: ${UI_TOKEN}")
+fi
+
 check_url() {
   local url="$1"
   if curl -sSfI "$url" >/dev/null 2>&1; then
@@ -38,10 +46,29 @@ check_url() {
   curl -sSf -r 0-0 "$url" >/dev/null
 }
 
-printf "%s\n" "$REQ_LINE" > "$tmp_req"
+req_upload_file="$tmp_req"
+req_upload_name="requirements-seed.txt"
+if [[ -n "$REQ_FILE" ]]; then
+  if [[ ! -f "$REQ_FILE" ]]; then
+    echo "REQ_FILE not found: ${REQ_FILE}" >&2
+    exit 1
+  fi
+  req_upload_file="$REQ_FILE"
+  if [[ -n "$REQ_FILENAME" ]]; then
+    req_upload_name="$REQ_FILENAME"
+  else
+    req_upload_name="$(basename "$REQ_FILE")"
+  fi
+else
+  printf "%s\n" "$REQ_LINE" > "$tmp_req"
+fi
 
-echo "Uploading requirements: ${REQ_LINE}"
-upload_resp="$(curl -sS -f -X POST -F "file=@${tmp_req};filename=requirements-seed.txt" "${API_BASE}/api/requirements/upload")"
+if [[ -n "$REQ_FILE" ]]; then
+  echo "Uploading requirements file: ${req_upload_file}"
+else
+  echo "Uploading requirements: ${REQ_LINE}"
+fi
+upload_resp="$(curl -sS -f "${curl_ui_args[@]}" -X POST -F "file=@${req_upload_file};filename=${req_upload_name}" "${API_BASE}/api/requirements/upload")"
 pending_id="$(python3 - <<'PY' "$upload_resp"
 import json,sys
 data=json.loads(sys.argv[1])
@@ -58,7 +85,7 @@ fi
 
 echo "Pending input id: ${pending_id}"
 
-if ! curl -sS -f -X POST "${API_BASE}/api/pending-inputs/${pending_id}/enqueue-plan" >/dev/null; then
+if ! curl -sS -f "${curl_ui_args[@]}" -X POST "${API_BASE}/api/pending-inputs/${pending_id}/enqueue-plan" >/dev/null; then
   echo "Plan enqueue request failed (plan queue may be auto). Continuing." >&2
 fi
 
@@ -171,7 +198,7 @@ if [[ -z "$plan_id" ]]; then
 fi
 
 echo "Plan id: ${plan_id}"
-enqueue_resp="$(curl -sS -f -X POST "${API_BASE}/api/plans/${plan_id}/enqueue-builds")"
+enqueue_resp="$(curl -sS -f "${curl_ui_args[@]}" -X POST "${API_BASE}/api/plans/${plan_id}/enqueue-builds")"
 echo "Builds enqueued: ${enqueue_resp}"
 
 if [[ -n "${WORKER_TOKEN:-}" ]]; then
