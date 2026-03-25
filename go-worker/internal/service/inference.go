@@ -43,20 +43,27 @@ type inferenceResponse struct {
 	} `json:"choices"`
 }
 
-const inferenceSystemPrompt = "You are a build-failure triage assistant. Return only a JSON object with: pattern, confidence (0-1), reason_code, summary, recipes (apt/dnf/pip/env arrays), notes, tags. Use minimal safe fixes."
+const defaultInferenceSystemPrompt = "You are a build-failure triage assistant. Return only a JSON object with: pattern, confidence (0-1), reason_code, summary, recipes (apt/dnf/pip/env arrays), notes, tags. Use minimal safe fixes."
+const defaultInferenceUserPromptTemplate = "Package: {{package}}\nVersion: {{version}}\nPython: {{python}}\nPlatform: {{platform}}\nExisting recipes: {{existing_recipes}}\nLog excerpt:\n{{log_excerpt}}"
 
-func inferenceUserPrompt(ctx plan.HintContext, logContent string, existingRecipes []string) string {
-	lines := []string{
-		"Package: " + strings.TrimSpace(ctx.Package),
-		"Version: " + strings.TrimSpace(ctx.Version),
-		"Python: " + strings.TrimSpace(firstNonEmpty(ctx.PythonVersion, ctx.PythonTag)),
-		"Platform: " + strings.TrimSpace(ctx.PlatformTag),
+func renderInferencePrompt(template string, ctx plan.HintContext, logContent string, existingRecipes []string) string {
+	template = strings.TrimSpace(template)
+	if template == "" {
+		template = defaultInferenceUserPromptTemplate
 	}
-	if len(existingRecipes) > 0 {
-		lines = append(lines, "Existing recipes: "+strings.Join(existingRecipes, ", "))
+	recipes := strings.Join(existingRecipes, ", ")
+	if recipes == "" {
+		recipes = "(none)"
 	}
-	lines = append(lines, "Log excerpt:", logContent)
-	return strings.Join(lines, "\n")
+	replacer := strings.NewReplacer(
+		"{{package}}", strings.TrimSpace(ctx.Package),
+		"{{version}}", strings.TrimSpace(ctx.Version),
+		"{{python}}", strings.TrimSpace(firstNonEmpty(ctx.PythonVersion, ctx.PythonTag)),
+		"{{platform}}", strings.TrimSpace(ctx.PlatformTag),
+		"{{existing_recipes}}", recipes,
+		"{{log_excerpt}}", logContent,
+	)
+	return replacer.Replace(template)
 }
 
 func (w *Worker) inferHintFromLLM(ctx context.Context, logContent string, ctxHint plan.HintContext, existingRecipes []string) (plan.Hint, []string, string, bool, []string) {
@@ -67,12 +74,16 @@ func (w *Worker) inferHintFromLLM(ctx context.Context, logContent string, ctxHin
 	if strings.TrimSpace(w.Cfg.InferURL) == "" {
 		return plan.Hint{}, nil, "", false, []string{"llm inference url not set"}
 	}
-	prompt := inferenceUserPrompt(ctxHint, logContent, existingRecipes)
+	prompt := renderInferencePrompt(w.Cfg.InferUserPromptTemplate, ctxHint, logContent, existingRecipes)
+	systemPrompt := strings.TrimSpace(w.Cfg.InferSystemPrompt)
+	if systemPrompt == "" {
+		systemPrompt = defaultInferenceSystemPrompt
+	}
 	payload := inferenceRequest{
 		Model:       strings.TrimSpace(w.Cfg.InferModel),
 		Temperature: 0.2,
 		Messages: []inferenceMessage{
-			{Role: "system", Content: inferenceSystemPrompt},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: prompt},
 		},
 	}

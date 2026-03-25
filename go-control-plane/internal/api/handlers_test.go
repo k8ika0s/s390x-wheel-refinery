@@ -22,6 +22,7 @@ import (
 type fakeStore struct {
 	lastPlan        []store.PlanNode
 	lastEvent       store.Event
+	lastSettings    settings.Settings
 	nextPendingID   int64
 	listPending     []store.PendingInput
 	lastPending     store.PendingInput
@@ -266,9 +267,10 @@ func (f *fakeStore) ListWorkers(ctx context.Context) ([]store.WorkerStatus, erro
 	return f.workers, nil
 }
 func (f *fakeStore) GetSettings(ctx context.Context) (settings.Settings, error) {
-	return settings.ApplyDefaults(settings.Settings{}), nil
+	return settings.ApplyDefaults(f.lastSettings), nil
 }
 func (f *fakeStore) SaveSettings(ctx context.Context, s settings.Settings) error {
+	f.lastSettings = s
 	return nil
 }
 
@@ -899,5 +901,53 @@ func TestTokenScopes(t *testing.T) {
 	h.logsIngest(recLogOK, reqLogOK)
 	if recLogOK.Code != http.StatusOK {
 		t.Fatalf("expected 200 with worker token, got %d", recLogOK.Code)
+	}
+}
+
+func TestSettingsRoundTripIncludesInferenceFields(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{
+		Store:  fs,
+		Config: config.Config{UIToken: "ui123", PythonRecipesDir: t.TempDir()},
+	}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+
+	body := `{"recent_limit":25,"infer_enabled":true,"infer_model":"gpt-4.1-mini","infer_timeout_sec":45,"infer_max_retries":2,"infer_system_prompt":"system prompt","infer_user_prompt_template":"Package {{package}}"}` //nolint:lll
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(body))
+	req.Header.Set("X-UI-Token", "ui123")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from settings post, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !settings.BoolValue(fs.lastSettings.InferEnabled) {
+		t.Fatalf("expected infer_enabled to persist true: %+v", fs.lastSettings)
+	}
+	if fs.lastSettings.InferModel != "gpt-4.1-mini" {
+		t.Fatalf("expected infer_model to persist, got %+v", fs.lastSettings)
+	}
+	if fs.lastSettings.InferTimeoutSec != 45 || fs.lastSettings.InferMaxRetries != 2 {
+		t.Fatalf("expected inference timing to persist, got %+v", fs.lastSettings)
+	}
+	if fs.lastSettings.InferSystemPrompt != "system prompt" || fs.lastSettings.InferUserPromptTemplate != "Package {{package}}" {
+		t.Fatalf("expected prompts to persist, got %+v", fs.lastSettings)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from settings get, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var out settings.Settings
+	if err := json.NewDecoder(getRec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode settings response: %v", err)
+	}
+	if !settings.BoolValue(out.InferEnabled) || out.InferModel != "gpt-4.1-mini" {
+		t.Fatalf("expected inference settings in get response: %+v", out)
+	}
+	if out.InferSystemPrompt != "system prompt" || out.InferUserPromptTemplate != "Package {{package}}" {
+		t.Fatalf("expected inference prompts in get response: %+v", out)
 	}
 }

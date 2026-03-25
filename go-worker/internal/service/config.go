@@ -64,6 +64,8 @@ type Config struct {
 	InferModel              string
 	InferTimeoutSec         int
 	InferMaxRetries         int
+	InferSystemPrompt       string
+	InferUserPromptTemplate string
 	AutorunInterval         int
 	BatchSize               int
 	RunCmd                  []string
@@ -156,6 +158,8 @@ func fromEnv() Config {
 		InferModel:              getenv("INFER_MODEL", ""),
 		InferTimeoutSec:         getenvInt("INFER_TIMEOUT_SEC", 20),
 		InferMaxRetries:         getenvInt("INFER_MAX_RETRIES", 1),
+		InferSystemPrompt:       getenv("INFER_SYSTEM_PROMPT", ""),
+		InferUserPromptTemplate: getenv("INFER_USER_PROMPT_TEMPLATE", ""),
 		BatchSize:               getenvInt("BATCH_SIZE", 50),
 		RunCmd:                  parseCmd(getenv("WORKER_RUN_CMD", "")),
 		IndexURL:                getenv("INDEX_URL", ""),
