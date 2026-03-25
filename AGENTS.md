@@ -47,11 +47,15 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
 - Remote root: ~/s390x-wheel-refinery (rsync-only; do not use git on host)
 - Build + run (no-cache when requested):
   1) make prep-dirs
-  2) BUILDAH_NETWORK=host podman build --network host --no-cache -f containers/refinery-builder/Containerfile -t refinery-builder:latest .
-  3) BUILDAH_NETWORK=host podman compose build --no-cache
-  4) podman compose down --remove-orphans
-  5) podman compose up -d --force-recreate
-  6) podman compose ps
+  2) `podman build --network host --no-cache -f containers/refinery-builder/Containerfile -t refinery-builder:latest .`
+  3) `podman build --network host --no-cache -f containers/go-control-plane/Containerfile -t localhost/s390x-wheel-refinery_control-plane:latest .`
+  4) `podman build --network host --no-cache -f containers/go-worker/Containerfile -t localhost/s390x-wheel-refinery_worker:latest .`
+  5) `podman build --network host --no-cache -f containers/ui/Containerfile -t localhost/s390x-wheel-refinery_ui:latest .`
+  6) `podman build --network host --no-cache -f containers/zot/Containerfile -t localhost/s390x-wheel-refinery_zot:latest .`
+  7) `podman build --network host --no-cache -f containers/minio/Containerfile -t localhost/s390x-wheel-refinery_minio:latest .`
+  8) podman compose down --remove-orphans
+  9) podman compose up -d --force-recreate --no-build
+  10) podman compose ps
 
 ## Operational notes / gotchas
 - /cache is required; make prep-dirs creates cache/cas/pip/plans.
@@ -66,8 +70,9 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
 - Auto-build requires both control-plane AUTO_BUILD and worker AUTO_BUILD.
 - OpenAI-compatible inference uses worker-only `INFER_URL`/`INFER_TOKEN`
   secrets; prompts and retry/model tuning are controlled through `/api/settings`.
-- `zkd0` currently needs host-networked Podman builds (`BUILDAH_NETWORK=host`)
-  because the default netavark bridge path fails during `podman build`.
+- `zkd0` currently needs direct host-networked `podman build --network host`
+  per image. `podman compose build` still hits netavark bridge failures on some
+  second-stage image steps there.
 - UI uses cache-busting index + immutable assets; hard refresh should update.
 
 ## Collaboration expectations

@@ -56,10 +56,11 @@ compose rebuilds in tmux session kd1.
 - SSH alias: zkd0
 - tmux session: kd1 (required)
 - Root: ~/s390x-wheel-refinery (rsync only; no git on host)
-- Rebuild pattern: builder image first, then `BUILDAH_NETWORK=host podman
-  compose build --no-cache`, then down/up --force-recreate.
-- `zkd0` Podman builds need host networking (`BUILDAH_NETWORK=host` and
-  `podman build --network host`) to avoid a netavark veth creation failure.
+- Rebuild pattern: build each image explicitly with `podman build --network
+  host`, then `podman compose up -d --force-recreate --no-build`.
+- `zkd0` Podman builds need host networking, and `podman compose build` is not
+  sufficient there because some second-stage image steps still hit netavark
+  bridge failures.
 - Local Macs can build the compose images but cannot run the full stack because
   the service containers are built for `linux/s390x`; runtime validation needs
   an s390x host such as `zkd0`.
