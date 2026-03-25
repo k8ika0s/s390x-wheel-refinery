@@ -162,7 +162,7 @@ func TestObjectURLFallback(t *testing.T) {
 func TestFetchRuntime(t *testing.T) {
 	dir := t.TempDir()
 	fetched := false
-	tarBuf, rtDigest := sampleTarWithDigest()
+	tarBuf, rtDigest := sampleRuntimeTarWithDigest()
 	w := &Worker{
 		Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")},
 		Fetcher: cas.Fetcher{
@@ -171,11 +171,6 @@ func TestFetchRuntime(t *testing.T) {
 			Client: &http.Client{
 				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 					fetched = true
-					var buf bytes.Buffer
-					tw := tar.NewWriter(&buf)
-					_ = tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len("stub"))})
-					_, _ = tw.Write([]byte("stub"))
-					_ = tw.Close()
 					return &http.Response{
 						StatusCode: http.StatusOK,
 						Body:       io.NopCloser(bytes.NewReader(tarBuf.Bytes())),
@@ -191,34 +186,48 @@ func TestFetchRuntime(t *testing.T) {
 	if path == "" {
 		t.Fatalf("expected runtime path")
 	}
+	if !strings.HasSuffix(path, filepath.Join("usr", "local")) {
+		t.Fatalf("expected prefix path, got %s", path)
+	}
 	if !fetched {
 		t.Fatalf("fetcher not invoked for runtime")
 	}
 }
 
-func TestResolvePacksBuildsStub(t *testing.T) {
+func TestResolvePacksBuildsArtifacts(t *testing.T) {
 	dir := t.TempDir()
-	w := &Worker{Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")}, packPath: make(map[string]string)}
+	w := &Worker{
+		Cfg: Config{
+			CacheDir:       dir,
+			LocalCASDir:    filepath.Join(dir, "cas"),
+			DefaultPackCmd: samplePackBuildCmd(),
+		},
+		packPath: make(map[string]string),
+	}
 	packID := artifact.ID{Type: artifact.PackType, Digest: "sha256:packstub"}
 	paths := w.resolvePacks(context.Background(), []artifact.ID{packID}, map[string]string{packID.Digest: "build"}, map[string]map[string]any{packID.Digest: {"name": "stub"}})
-	if len(paths) != 1 {
-		t.Fatalf("expected stub pack path")
+	if len(paths) != 1 || paths[0] == "" {
+		t.Fatalf("expected built pack path")
 	}
-	if fi, err := os.Stat(paths[0]); err != nil || !fi.IsDir() {
-		t.Fatalf("stub pack not written: %v", err)
+	if _, err := os.Stat(filepath.Join(paths[0], "include", "stub.h")); err != nil {
+		t.Fatalf("expected built pack payload: %v", err)
 	}
 }
 
-func TestFetchRuntimeBuildsStub(t *testing.T) {
+func TestFetchRuntimeBuildsArtifacts(t *testing.T) {
 	dir := t.TempDir()
-	w := &Worker{Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")}}
+	w := &Worker{Cfg: Config{
+		CacheDir:          dir,
+		LocalCASDir:       filepath.Join(dir, "cas"),
+		DefaultRuntimeCmd: sampleRuntimeBuildCmd(),
+	}}
 	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: "sha256:rt-stub"}
 	path := w.fetchRuntime(context.Background(), "3.11", rtID, "build", map[string]any{"note": "stub"})
 	if path == "" {
-		t.Fatalf("expected stub runtime path")
+		t.Fatalf("expected built runtime path")
 	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("stub runtime not written: %v", err)
+	if _, err := os.Stat(filepath.Join(path, "bin", "python3")); err != nil {
+		t.Fatalf("expected runtime interpreter: %v", err)
 	}
 }
 
@@ -344,15 +353,32 @@ func TestPopBuildQueueCapsMax(t *testing.T) {
 	}
 }
 
-func sampleTarWithDigest() (bytes.Buffer, string) {
+func sampleRuntimeTarWithDigest() (bytes.Buffer, string) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	_ = tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len("stub"))})
 	_, _ = tw.Write([]byte("stub"))
-	data := []byte("x")
-	_ = tw.WriteHeader(&tar.Header{Name: "usr/local/lib/.keep", Mode: 0o644, Size: int64(len(data))})
+	data := []byte("#!/bin/sh\nexit 0\n")
+	_ = tw.WriteHeader(&tar.Header{Name: "usr/local/bin/python3", Mode: 0o755, Size: int64(len(data))})
 	_, _ = tw.Write(data)
 	_ = tw.Close()
 	d := sha256.Sum256(buf.Bytes())
 	return buf, "sha256:" + hex.EncodeToString(d[:])
+}
+
+func samplePackBuildCmd() string {
+	return `mkdir -p "$PACK_OUTPUT/usr/local/include" && \
+printf 'stub\n' > "$PACK_OUTPUT/usr/local/include/stub.h" && \
+cat > "$PACK_OUTPUT/manifest.json" <<'EOF'
+{"name":"stub","version":"1.0.0"}
+EOF`
+}
+
+func sampleRuntimeBuildCmd() string {
+	return `mkdir -p "$PACK_OUTPUT/usr/local/bin" && \
+printf '#!/bin/sh\nexit 0\n' > "$PACK_OUTPUT/usr/local/bin/python3" && \
+chmod +x "$PACK_OUTPUT/usr/local/bin/python3" && \
+cat > "$PACK_OUTPUT/manifest.json" <<'EOF'
+{"name":"cpython311","version":"3.11.0"}
+EOF`
 }

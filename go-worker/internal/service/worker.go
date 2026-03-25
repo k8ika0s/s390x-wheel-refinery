@@ -1379,13 +1379,7 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 					continue
 				}
 			}
-			if stub, err := w.stubPayload("pack", d, nil); err == nil {
-				id := artifact.ID{Type: artifact.PackType, Digest: d}
-				payload := stub
-				casTasks = append(casTasks, func(ctx context.Context) error {
-					return w.casPush(ctx, id, payload, "application/octet-stream")
-				})
-			}
+			log.Printf("skip CAS push for pack: no built artifact available %s", d)
 		}
 	}
 	if w.Cfg.RuntimePushEnabled && job.RuntimeDigest != "" {
@@ -1403,28 +1397,11 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 				goto finalize
 			}
 		}
-		if stub, err := w.stubPayload("runtime", job.RuntimeDigest, nil); err == nil {
-			id := artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}
-			payload := stub
-			casTasks = append(casTasks, func(ctx context.Context) error {
-				return w.casPush(ctx, id, payload, "application/octet-stream")
-			})
-		}
+		log.Printf("skip CAS push for runtime: no built artifact available %s", job.RuntimeDigest)
 	}
 finalize:
 	runTasks("object store", w.Cfg.ObjectStoreMaxParallel, objectTasks)
 	runTasks("cas", w.Cfg.CASMaxParallel, casTasks)
-}
-
-func (w *Worker) stubPayload(kind, digest string, meta map[string]any) ([]byte, error) {
-	data := map[string]any{
-		"kind":   kind,
-		"digest": digest,
-	}
-	for k, v := range meta {
-		data[k] = v
-	}
-	return json.MarshalIndent(data, "", "  ")
 }
 
 func (w *Worker) wheelFileForJob(job runner.Job) string {
@@ -1684,8 +1661,13 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 			if err := extractTar(destPath, extractDir); err != nil {
 				continue
 			}
-			w.packPath[id.Digest] = extractDir
-			paths = append(paths, extractDir)
+			prefix := artifactPrefix(extractDir)
+			if prefix == "" {
+				log.Printf("pack artifact missing prefix dir: %s", id.Digest)
+				continue
+			}
+			w.packPath[id.Digest] = prefix
+			paths = append(paths, prefix)
 		}
 	}
 	return paths
@@ -1708,9 +1690,12 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		if err := w.casFetch(ctx, rtID, destPath); err == nil {
 			if _, err := os.Stat(destPath); err == nil {
 				if ok, err := verifyFileDigest(destPath, rtID.Digest); err == nil && ok {
-					if err := extractTar(destPath, extractDir); err == nil && !isManifestOnly(extractDir) {
-						w.recordCASHit()
-						return extractDir
+					if err := extractTar(destPath, extractDir); err == nil {
+						prefix := artifactPrefix(extractDir)
+						if runtimeReady(prefix) {
+							w.recordCASHit()
+							return prefix
+						}
 					}
 				}
 			}
@@ -1724,8 +1709,9 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		}
 		if err := builder.BuildRuntime(destPath, builder.RuntimeBuildOpts{Digest: rtID.Digest, PythonVersion: pythonVersion, Meta: meta, Cmd: cmd}); err == nil {
 			if err := extractTar(destPath, extractDir); err == nil {
-				if !isManifestOnly(extractDir) || action == "build" {
-					return extractDir
+				prefix := artifactPrefix(extractDir)
+				if runtimeReady(prefix) {
+					return prefix
 				}
 			}
 		}
@@ -1777,7 +1763,7 @@ func depPrefixes(groups ...[]string) []string {
 			if p == "" {
 				continue
 			}
-			out = append(out, filepath.Join(p, "usr", "local"))
+			out = append(out, p)
 		}
 	}
 	return out
@@ -1813,18 +1799,30 @@ func sortPacksByPriority(ids []artifact.ID, meta map[string]map[string]any) []ar
 	return ids
 }
 
-func isManifestOnly(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+func artifactPrefix(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	prefix := filepath.Join(dir, "usr", "local")
+	if fi, err := os.Stat(prefix); err == nil && fi.IsDir() {
+		return prefix
+	}
+	return ""
+}
+
+func runtimeReady(prefix string) bool {
+	if prefix == "" {
 		return false
 	}
-	for _, e := range entries {
-		if e.Name() == "manifest.json" {
-			continue
+	for _, candidate := range []string{
+		filepath.Join(prefix, "bin", "python3"),
+		filepath.Join(prefix, "bin", "python"),
+	} {
+		if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
+			return true
 		}
-		return false
 	}
-	return true
+	return false
 }
 
 // topoSortFromDag orders pack IDs using DAG edges (dependencies first).
