@@ -41,14 +41,14 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
 - UI dev:
   - VITE_API_BASE=http://localhost:8080 npm run dev -- --port 3005
 
-## Remote workflow (kdz)
-- SSH alias: kdz
+## Remote workflow (zkd0)
+- SSH alias: zkd0
 - Tmux session: kd1 (always use tmux; use mcp-tmux tools for remote commands)
-- Remote root: /src/s390x-wheel-refinery (rsync-only; do not use git on host)
+- Remote root: ~/s390x-wheel-refinery (rsync-only; do not use git on host)
 - Build + run (no-cache when requested):
   1) make prep-dirs
-  2) podman build --no-cache -f containers/refinery-builder/Containerfile -t refinery-builder:latest .
-  3) podman compose build --no-cache
+  2) BUILDAH_NETWORK=host podman build --network host --no-cache -f containers/refinery-builder/Containerfile -t refinery-builder:latest .
+  3) BUILDAH_NETWORK=host podman compose build --no-cache
   4) podman compose down --remove-orphans
   5) podman compose up -d --force-recreate
   6) podman compose ps
@@ -58,8 +58,16 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
 - Worker container uses Podman and must be privileged.
 - Recipes must be available in the worker container (/app/recipes). Compose
   mounts ./recipes to /app/recipes.
+- Service container images are built for `linux/s390x`. On non-s390x developer
+  machines, local `podman compose up` can build images but the containers will
+  fail at runtime with `Exec format error`; use local tests/builds for fast
+  feedback and `zkd0` for full-stack runtime validation.
 - Build status uses leased vs building; UI should reflect this distinction.
 - Auto-build requires both control-plane AUTO_BUILD and worker AUTO_BUILD.
+- OpenAI-compatible inference uses worker-only `INFER_URL`/`INFER_TOKEN`
+  secrets; prompts and retry/model tuning are controlled through `/api/settings`.
+- `zkd0` currently needs host-networked Podman builds (`BUILDAH_NETWORK=host`)
+  because the default netavark bridge path fails during `podman build`.
 - UI uses cache-busting index + immutable assets; hard refresh should update.
 
 ## Collaboration expectations
