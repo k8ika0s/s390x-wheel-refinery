@@ -67,6 +67,16 @@ func TestAutoFixCooldownBypassForLowRiskUtilityRecipes(t *testing.T) {
 	if !ok || reason != "" {
 		t.Fatalf("expected runtime libpath fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
+
+	ok, reason = w.canApplyAutoFix(job, "sig-d", []string{"dnf:openblas-devel"}, "heuristic")
+	if !ok || reason != "" {
+		t.Fatalf("expected low-risk system library fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
+	}
+
+	ok, reason = w.canApplyAutoFix(job, "sig-e", []string{"apt:libopenblas-dev"}, "heuristic")
+	if !ok || reason != "" {
+		t.Fatalf("expected apt low-risk system library fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
+	}
 }
 
 func TestInferHintFromLogMapsXargsToFindutils(t *testing.T) {
@@ -106,6 +116,29 @@ func TestInferHintFromLogMapsLibpythonLoadFailureToRuntimeLibPathFix(t *testing.
 	got := strings.Join(recipes, ",")
 	if !strings.Contains(got, "env:LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:${LD_LIBRARY_PATH:-}") {
 		t.Fatalf("expected runtime libpath recipe, got %q", got)
+	}
+}
+
+func TestInferHintFromLogMapsMesonDependencyOpenBLASToSystemLibraryRecipe(t *testing.T) {
+	hint, recipes, note, ok := inferHintFromLog(
+		`../scipy/meson.build:58:15: ERROR: Dependency "OpenBLAS" not found, tried pkgconfig and cmake`,
+		plan.HintContext{Package: "scikit-learn", PythonVersion: "3.11", PlatformTag: "manylinux2014_s390x"},
+	)
+	if !ok {
+		t.Fatal("expected heuristic match")
+	}
+	if hint.Confidence != "high" {
+		t.Fatalf("expected high confidence, got %q", hint.Confidence)
+	}
+	if !strings.Contains(note, "missing Meson dependency OpenBLAS") {
+		t.Fatalf("unexpected note: %q", note)
+	}
+	got := strings.Join(recipes, ",")
+	if !strings.Contains(got, "dnf:openblas-devel") {
+		t.Fatalf("expected dnf:openblas-devel recipe, got %q", got)
+	}
+	if !strings.Contains(got, "apt:libopenblas-dev") {
+		t.Fatalf("expected apt:libopenblas-dev recipe, got %q", got)
 	}
 }
 

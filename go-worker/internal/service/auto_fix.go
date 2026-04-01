@@ -353,11 +353,35 @@ func canBypassAutoFixCooldown(recipes []string, source string) bool {
 		default:
 			return false
 		}
-		if mgr == "" || pkg == "" || !safe[pkg] {
+		if mgr == "" || pkg == "" {
+			return false
+		}
+		if safe[pkg] || isLowRiskSystemLibraryPackage(mgr, pkg) {
+			continue
+		}
+		if !safe[pkg] {
 			return false
 		}
 	}
 	return true
+}
+
+func isLowRiskSystemLibraryPackage(mgr, pkg string) bool {
+	pkg = strings.TrimSpace(strings.ToLower(pkg))
+	if pkg == "" {
+		return false
+	}
+	switch mgr {
+	case "apt":
+		if strings.HasPrefix(pkg, "lib") && strings.HasSuffix(pkg, "-dev") {
+			return true
+		}
+	case "dnf":
+		if strings.HasSuffix(pkg, "-devel") {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *Worker) markAutoFixApplied(job runner.Job, signature string) {
@@ -604,6 +628,21 @@ func inferHintFromLog(logContent string, ctx plan.HintContext) (plan.Hint, []str
 			hint.Tags = append(hint.Tags, "cmake", "missing-lib")
 			hint.Confidence = "medium"
 			hint.Note = fmt.Sprintf("Auto-detected missing CMake dependency %s from build logs.", name)
+			hint.Recipes = recipes
+			hint.Examples = []string{m[0]}
+			return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
+		}
+	}
+
+	mesonDepMissing := regexp.MustCompile(`(?i)Dependency "([A-Za-z0-9_+.-]+)" not found, tried pkgconfig and cmake`)
+	if m := mesonDepMissing.FindStringSubmatch(logContent); len(m) == 2 {
+		name := strings.TrimSpace(m[1])
+		if name != "" {
+			recipes := libraryRecipes(name)
+			hint := baseAutoHint(ctx, fmt.Sprintf(`Dependency "%s" not found, tried pkgconfig and cmake`, regexp.QuoteMeta(name)))
+			hint.Tags = append(hint.Tags, "meson", "missing-lib")
+			hint.Confidence = "high"
+			hint.Note = fmt.Sprintf("Auto-detected missing Meson dependency %s from build logs.", name)
 			hint.Recipes = recipes
 			hint.Examples = []string{m[0]}
 			return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
