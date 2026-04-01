@@ -140,6 +140,10 @@ func workerConfigMetadata(cfg Config) map[string]any {
 		"builder_profiles":           []string{builderProfileDefault, builderProfileNativeHeavy},
 		"builder_image_default":      strings.TrimSpace(cfg.ContainerImage),
 		"builder_image_native_heavy": firstNonEmpty(strings.TrimSpace(cfg.ContainerImageNativeHeavy), strings.TrimSpace(cfg.ContainerImage)),
+		"pack_catalog_loaded":        cfg.PackCatalog != nil,
+		"pack_catalog_path":          strings.TrimSpace(cfg.PackCatalogPath),
+		"pack_catalog_resolved_path": strings.TrimSpace(cfg.PackCatalogResolvedPath),
+		"pack_catalog_load_error":    strings.TrimSpace(cfg.PackCatalogLoadError),
 	}
 	return meta
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -40,6 +41,8 @@ type Config struct {
 	ContainerImageNativeHeavy string
 	ContainerPreset           string
 	PackCatalogPath           string
+	PackCatalogResolvedPath   string
+	PackCatalogLoadError      string
 	WorkerToken               string
 	ControlPlaneURL           string
 	ControlPlaneToken         string
@@ -200,11 +203,35 @@ func fromEnv() Config {
 		PlanPoolSize:              getenvInt("PLAN_POOL_SIZE", 2),
 	}
 	if cfg.PackCatalogPath != "" {
-		if cat, err := pack.Load(cfg.PackCatalogPath); err == nil {
-			cfg.PackCatalog = cat
+		for _, candidate := range packCatalogCandidates(cfg.PackCatalogPath) {
+			cat, err := pack.Load(candidate)
+			if err == nil {
+				cfg.PackCatalog = cat
+				cfg.PackCatalogResolvedPath = candidate
+				cfg.PackCatalogLoadError = ""
+				break
+			}
+			if cfg.PackCatalogLoadError == "" {
+				cfg.PackCatalogLoadError = err.Error()
+			}
 		}
 	}
 	return cfg
+}
+
+func packCatalogCandidates(path string) []string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	candidates := []string{path}
+	if !filepath.IsAbs(path) {
+		candidates = append(candidates,
+			filepath.Join("/", path),
+			filepath.Join("/app", path),
+		)
+	}
+	return dedupeStrings(candidates)
 }
 
 func getenv(k, def string) string {
