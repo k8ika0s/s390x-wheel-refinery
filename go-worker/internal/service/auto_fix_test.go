@@ -25,18 +25,18 @@ func TestAutoFixRateLimitAndDedupe(t *testing.T) {
 		},
 	}
 
-	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:gcc-toolset-12"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
+	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:gcc-toolset-12"}, nil, "", "heuristic", failureReason{}, remediationTierRepoPackage)
 	if ok || !strings.Contains(reason, "rate limit") {
 		t.Fatalf("expected rate limit block, got ok=%v reason=%q", ok, reason)
 	}
 
 	w.autoFixState[key] = autoFixState{lastApplied: now.Add(-40 * time.Minute), lastSignature: "sig-a"}
-	ok, reason = w.canApplyAutoFix(job, "sig-a", []string{"dnf:gcc-toolset-12"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
+	ok, reason = w.canApplyAutoFix(job, "sig-a", []string{"dnf:gcc-toolset-12"}, nil, "", "heuristic", failureReason{}, remediationTierRepoPackage)
 	if ok || !strings.Contains(reason, "duplicate") {
 		t.Fatalf("expected duplicate block, got ok=%v reason=%q", ok, reason)
 	}
 
-	ok, reason = w.canApplyAutoFix(job, "sig-b", []string{"dnf:gcc-toolset-12"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
+	ok, reason = w.canApplyAutoFix(job, "sig-b", []string{"dnf:gcc-toolset-12"}, nil, "", "heuristic", failureReason{}, remediationTierRepoPackage)
 	if !ok || reason != "" {
 		t.Fatalf("expected allow after cooldown, got ok=%v reason=%q", ok, reason)
 	}
@@ -52,30 +52,30 @@ func TestAutoFixCooldownBypassForLowRiskUtilityRecipes(t *testing.T) {
 			key: {lastApplied: now.Add(-2 * time.Minute), lastSignature: "sig-a"},
 		},
 	}
-	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:findutils"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
+	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:findutils"}, nil, "", "heuristic", failureReason{}, remediationTierRepoPackage)
 	if !ok || reason != "" {
 		t.Fatalf("expected low-risk utility fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
-	ok, reason = w.canApplyAutoFix(job, "sig-b", []string{"dnf:findutils", "env:PATH=/tmp"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
+	ok, reason = w.canApplyAutoFix(job, "sig-b", []string{"dnf:findutils", "env:PATH=/tmp"}, nil, "", "heuristic", failureReason{}, remediationTierRepoPackage)
 	if ok || !strings.Contains(reason, "rate limit") {
 		t.Fatalf("expected env-bearing fix not to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
-	ok, reason = w.canApplyAutoFix(job, "sig-a", []string{"dnf:findutils"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
+	ok, reason = w.canApplyAutoFix(job, "sig-a", []string{"dnf:findutils"}, nil, "", "heuristic", failureReason{}, remediationTierRepoPackage)
 	if ok || !strings.Contains(reason, "duplicate") {
 		t.Fatalf("expected duplicate signature to stay blocked, got ok=%v reason=%q", ok, reason)
 	}
 
-	ok, reason = w.canApplyAutoFix(job, "sig-c", []string{"env:LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:${LD_LIBRARY_PATH:-}"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
+	ok, reason = w.canApplyAutoFix(job, "sig-c", []string{"env:LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:${LD_LIBRARY_PATH:-}"}, nil, "", "heuristic", failureReason{}, remediationTierRepoPackage)
 	if !ok || reason != "" {
 		t.Fatalf("expected runtime libpath fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
 
-	ok, reason = w.canApplyAutoFix(job, "sig-d", []string{"dnf:openblas-devel"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
+	ok, reason = w.canApplyAutoFix(job, "sig-d", []string{"dnf:openblas-devel"}, nil, "", "heuristic", failureReason{}, remediationTierRepoPackage)
 	if !ok || reason != "" {
 		t.Fatalf("expected low-risk system library fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
 
-	ok, reason = w.canApplyAutoFix(job, "sig-e", []string{"apt:libopenblas-dev"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
+	ok, reason = w.canApplyAutoFix(job, "sig-e", []string{"apt:libopenblas-dev"}, nil, "", "heuristic", failureReason{}, remediationTierRepoPackage)
 	if !ok || reason != "" {
 		t.Fatalf("expected apt low-risk system library fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
@@ -91,7 +91,7 @@ func TestAutoFixCooldownBypassForLLMPackageUnavailableRecovery(t *testing.T) {
 			key: {lastApplied: now.Add(-2 * time.Minute), lastSignature: "sig-a"},
 		},
 	}
-	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:openblas", "dnf:gcc-gfortran"}, nil, "llm", failureReason{Code: "package_unavailable", Detail: "openblas-devel"}, remediationTierNormalizedAlternative)
+	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:openblas", "dnf:gcc-gfortran"}, nil, "", "llm", failureReason{Code: "package_unavailable", Detail: "openblas-devel"}, remediationTierNormalizedAlternative)
 	if !ok || reason != "" {
 		t.Fatalf("expected llm package-unavailable recovery to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
@@ -107,9 +107,34 @@ func TestAutoFixCooldownBypassForDependencyPackFallback(t *testing.T) {
 			key: {lastApplied: now.Add(-2 * time.Minute), lastSignature: "sig-a"},
 		},
 	}
-	ok, reason := w.canApplyAutoFix(job, "sig-pack", nil, []string{"openblas"}, "heuristic", failureReason{Code: "package_unavailable", Detail: "openblas-devel"}, remediationTierDependencyPack)
+	ok, reason := w.canApplyAutoFix(job, "sig-pack", nil, []string{"openblas"}, "", "heuristic", failureReason{Code: "package_unavailable", Detail: "openblas-devel"}, remediationTierDependencyPack)
 	if !ok || reason != "" {
 		t.Fatalf("expected dependency-pack fallback to bypass cooldown, got ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestAutoFixCooldownBypassForNativeHeavyProfileEscalation(t *testing.T) {
+	job := runner.Job{Name: "scikit-learn", Version: "1.5.2"}
+	key := autoFixKey(job)
+	now := time.Now()
+	w := &Worker{
+		Cfg: Config{AutoFixRateLimitMin: 30},
+		autoFixState: map[string]autoFixState{
+			key: {lastApplied: now.Add(-2 * time.Minute), lastSignature: "sig-a"},
+		},
+	}
+	ok, reason := w.canApplyAutoFix(
+		job,
+		"sig-native-heavy",
+		[]string{"dnf:gcc-toolset-12"},
+		nil,
+		builderProfileNativeHeavy,
+		"policy",
+		failureReason{Code: "build_timeout", Detail: "command_timeout"},
+		remediationTierRepoPackage,
+	)
+	if !ok || reason != "" {
+		t.Fatalf("expected native-heavy escalation to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
 }
 

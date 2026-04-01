@@ -26,6 +26,12 @@ func TestClassifyFailureReason(t *testing.T) {
 			detail:  "encodings",
 		},
 		{
+			name:    "build timeout",
+			logText: "Using cached scikit_learn-1.5.2.tar.gz (7.0 MB)\nrunner: command exceeded timeout elapsed_ms=900128\nstatus=error reason=timeout elapsed_ms=900128",
+			code:    "build_timeout",
+			detail:  "command_timeout",
+		},
+		{
 			name:    "compiler version too old",
 			logText: "../meson.build:25:4: ERROR: Problem encountered: NumPy requires GCC >= 9.3",
 			code:    "compiler_version_too_old",

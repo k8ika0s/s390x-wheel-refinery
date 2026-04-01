@@ -282,6 +282,33 @@ func TestMatchCarriesFallbackPackRequirementsAndNativeHeavyProfile(t *testing.T)
 	}
 }
 
+func TestMatchDefaultsHeavyNativePackagesToNativeHeavyProfile(t *testing.T) {
+	snap := plan.Snapshot{
+		Plan: []plan.FlatNode{{Name: "scikit-learn", Version: "1.5.2", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}},
+		DAG:  []plan.DAGNode{},
+	}
+	w := &Worker{Cfg: Config{
+		ContainerImage:            "refinery-builder:latest",
+		ContainerImageNativeHeavy: "refinery-builder-native:latest",
+	}}
+	reqs := []queue.Request{{
+		Package:     "scikit-learn",
+		Version:     "1.5.2",
+		PythonTag:   "cp311",
+		PlatformTag: "manylinux2014_s390x",
+	}}
+	jobs := w.match(context.Background(), snap, reqs)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+	if jobs[0].BuilderProfile != builderProfileNativeHeavy {
+		t.Fatalf("expected native-heavy profile by default, got %q", jobs[0].BuilderProfile)
+	}
+	if jobs[0].ContainerImage != "refinery-builder-native:latest" {
+		t.Fatalf("expected native-heavy image by default, got %q", jobs[0].ContainerImage)
+	}
+}
+
 func TestExtractTarRestoresRegularFilesAndSymlinks(t *testing.T) {
 	dir := t.TempDir()
 	srcDir := filepath.Join(dir, "src")

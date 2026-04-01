@@ -49,6 +49,11 @@ func classifyFailureReason(err error, logText string) failureReason {
 		strings.Contains(strings.ToLower(text), "no module named 'encodings'") {
 		return failureReason{Code: "runtime_stdlib_missing", Detail: "encodings"}
 	}
+	if strings.Contains(strings.ToLower(text), "runner: command exceeded timeout") ||
+		strings.Contains(strings.ToLower(text), "status=error reason=timeout") ||
+		strings.Contains(strings.ToLower(text), "podman run failed (timeout)") {
+		return failureReason{Code: "build_timeout", Detail: "command_timeout"}
+	}
 	if builderImageRe.MatchString(text) {
 		return failureReason{Code: "builder_image_missing", Detail: "refinery-builder"}
 	}

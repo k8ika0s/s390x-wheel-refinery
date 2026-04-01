@@ -50,19 +50,30 @@ func defaultBuilderProfileForPackage(pkg string) string {
 	}
 }
 
-func resolveBuilderProfile(job runner.Job, failure failureReason) string {
-	if profile := normalizeBuilderProfile(job.BuilderProfile); profile != "" {
-		return profile
+func explicitBuilderProfile(profile string) string {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case builderProfileDefault:
+		return builderProfileDefault
+	case builderProfileNativeHeavy:
+		return builderProfileNativeHeavy
+	default:
+		return ""
 	}
-	if profile := normalizeBuilderProfile(metadataString(job.Metadata, "builder_profile")); profile != "" {
-		return profile
+}
+
+func resolveBuilderProfile(job runner.Job, failure failureReason, logContent string) string {
+	current := explicitBuilderProfile(job.BuilderProfile)
+	if current == "" {
+		current = explicitBuilderProfile(metadataString(job.Metadata, "builder_profile"))
 	}
-	if strings.TrimSpace(failure.Code) == "compiler_version_too_old" || strings.TrimSpace(failure.Code) == "package_unavailable" {
-		if defaultBuilderProfileForPackage(job.Name) == builderProfileNativeHeavy {
-			return builderProfileNativeHeavy
-		}
+	desired := defaultBuilderProfileForPackage(job.Name)
+	if current == "" {
+		current = desired
 	}
-	return defaultBuilderProfileForPackage(job.Name)
+	if current == builderProfileDefault && desired == builderProfileNativeHeavy && shouldEscalateToNativeHeavy(job, failure, logContent) {
+		return builderProfileNativeHeavy
+	}
+	return current
 }
 
 func normalizeBuilderProfile(profile string) string {
@@ -74,6 +85,27 @@ func normalizeBuilderProfile(profile string) string {
 	default:
 		return builderProfileDefault
 	}
+}
+
+func shouldEscalateToNativeHeavy(job runner.Job, failure failureReason, logContent string) bool {
+	if defaultBuilderProfileForPackage(job.Name) != builderProfileNativeHeavy {
+		return false
+	}
+	switch strings.TrimSpace(failure.Code) {
+	case "compiler_version_too_old", "package_unavailable", "build_timeout":
+		return true
+	}
+	lowerLog := strings.ToLower(logContent)
+	if strings.Contains(lowerLog, "runner: command exceeded timeout") ||
+		strings.Contains(lowerLog, "status=error reason=timeout") {
+		return true
+	}
+	for _, recipe := range job.Recipes {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(recipe)), "dnf:gcc-toolset-12") {
+			return true
+		}
+	}
+	return false
 }
 
 func packRequirementsFromMetadata(meta map[string]any) []string {
@@ -144,7 +176,7 @@ func autoFixSignature(recipes []string, packRequirements []string, builderProfil
 func (w *Worker) resolveRemediationPlan(job runner.Job, failure failureReason, recipes []string, logContent string) remediationPlan {
 	recipes, _ = sanitizeRecipesForFailure(recipes, failure, logContent)
 	plan := remediationPlan{
-		BuilderProfile: resolveBuilderProfile(job, failure),
+		BuilderProfile: resolveBuilderProfile(job, failure, logContent),
 		Recipes:        dedupeStrings(recipes),
 	}
 	if len(plan.Recipes) > 0 {

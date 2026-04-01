@@ -244,11 +244,17 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 			reason = resolution.DegradedReason
 		}
 	}
+	if applied && reason == "" && profileChanged {
+		reason = fmt.Sprintf("escalated builder profile to %s", resolution.BuilderProfile)
+	}
+	if remediationSource == "" && (profileChanged || len(resolution.PackRequirements) > 0 || resolution.DegradedReason != "") {
+		remediationSource = "policy"
+	}
 	if applied && reason == "" {
 		reason = "applied hint recipes"
 	}
 	if applied {
-		if ok, guardReason := w.canApplyAutoFix(job, signature, merged, resolution.PackRequirements, remediationSource, failure, resolution.RemediationTier); !ok {
+		if ok, guardReason := w.canApplyAutoFix(job, signature, merged, resolution.PackRequirements, resolution.BuilderProfile, remediationSource, failure, resolution.RemediationTier); !ok {
 			applied = false
 			blockedReason = guardReason
 		}
@@ -360,7 +366,7 @@ func recipeSignature(recipes []string) string {
 	return strings.ToLower(strings.Join(deduped, "|"))
 }
 
-func (w *Worker) canApplyAutoFix(job runner.Job, signature string, recipes []string, packRequirements []string, source string, failure failureReason, tier string) (bool, string) {
+func (w *Worker) canApplyAutoFix(job runner.Job, signature string, recipes []string, packRequirements []string, builderProfile string, source string, failure failureReason, tier string) (bool, string) {
 	if signature == "" {
 		return true, ""
 	}
@@ -376,14 +382,21 @@ func (w *Worker) canApplyAutoFix(job runner.Job, signature string, recipes []str
 			return false, "duplicate auto-fix already applied"
 		}
 		window := time.Duration(w.Cfg.AutoFixRateLimitMin) * time.Minute
-		if window > 0 && !state.lastApplied.IsZero() && time.Since(state.lastApplied) < window && !canBypassAutoFixCooldown(recipes, packRequirements, source, failure, tier) {
+		if window > 0 && !state.lastApplied.IsZero() && time.Since(state.lastApplied) < window && !canBypassAutoFixCooldown(recipes, packRequirements, builderProfile, source, failure, tier) {
 			return false, "rate limit: auto-fix cooldown active"
 		}
 	}
 	return true, ""
 }
 
-func canBypassAutoFixCooldown(recipes []string, packRequirements []string, source string, failure failureReason, tier string) bool {
+func canBypassAutoFixCooldown(recipes []string, packRequirements []string, builderProfile string, source string, failure failureReason, tier string) bool {
+	if normalizeBuilderProfile(builderProfile) == builderProfileNativeHeavy &&
+		strings.TrimSpace(source) == "policy" {
+		switch strings.TrimSpace(failure.Code) {
+		case "compiler_version_too_old", "package_unavailable", "build_timeout":
+			return true
+		}
+	}
 	if strings.TrimSpace(source) != "heuristic" {
 		if strings.TrimSpace(source) == "llm" && strings.TrimSpace(failure.Code) == "package_unavailable" {
 			return true

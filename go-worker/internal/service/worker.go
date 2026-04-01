@@ -760,7 +760,7 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 				}
 			}
 			recipes := mergeRecipes(req.Recipes, recipeNames(node.Recipes))
-			builderProfile := normalizeBuilderProfile(metadataString(req.Metadata, "builder_profile"))
+			builderProfile := explicitBuilderProfile(metadataString(req.Metadata, "builder_profile"))
 			if builderProfile == "" {
 				builderProfile = defaultBuilderProfileForPackage(node.Name)
 			}

@@ -6,6 +6,8 @@ import (
 )
 
 var summaryPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)runner: command exceeded timeout`),
+	regexp.MustCompile(`(?i)status=error reason=timeout`),
 	regexp.MustCompile(`(?i)fatal error:`),
 	regexp.MustCompile(`(?i)moduleNotFoundError`),
 	regexp.MustCompile(`(?i)no such file or directory`),
