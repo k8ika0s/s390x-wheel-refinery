@@ -53,6 +53,22 @@ func TestPodmanRunnerBuildArgs(t *testing.T) {
 	}
 }
 
+func TestPodmanRunnerBuildCmdSanitizesHostPackageManagerEnv(t *testing.T) {
+	r := &PodmanRunner{}
+	cmd := strings.Join(r.buildCmd(Job{}), "\n")
+	for _, want := range []string{
+		`run_host_tool()`,
+		`env -u PYTHONHOME -u PYTHONPATH -u PYTHON_BIN -u PYTHON_PATH`,
+		`run_host_tool dnf -y install`,
+		`run_host_tool apt-get update`,
+		`run_host_tool apt-get install -y`,
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("expected build command to contain %q", want)
+		}
+	}
+}
+
 // PodmanRunner now fails if podman is missing; ensure error is returned.
 func TestPodmanRunnerNoBinary(t *testing.T) {
 	origPath := os.Getenv("PATH")

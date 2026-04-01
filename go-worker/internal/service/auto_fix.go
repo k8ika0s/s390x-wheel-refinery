@@ -177,15 +177,15 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		}
 	}
 	return autoFixResult{
-		Applied:      applied,
-		Recipes:      merged,
-		HintIDs:      dedupeStrings(matchedIDs),
-		SavedHintIDs: dedupeStrings(saved),
-		Reason:       reason,
+		Applied:       applied,
+		Recipes:       merged,
+		HintIDs:       dedupeStrings(matchedIDs),
+		SavedHintIDs:  dedupeStrings(saved),
+		Reason:        reason,
 		BlockedReason: blockedReason,
-		BlockedHints: dedupeStrings(blocked),
-		Impact:       impact,
-		ImpactReason: impactReason,
+		BlockedHints:  dedupeStrings(blocked),
+		Impact:        impact,
+		ImpactReason:  impactReason,
 		DecisionTrace: compactTrace(trace),
 	}
 }
@@ -380,6 +380,31 @@ func autoHintID(hint plan.Hint, ctx plan.HintContext) string {
 }
 
 func inferHintFromLog(logContent string, ctx plan.HintContext) (plan.Hint, []string, string, bool) {
+	if strings.Contains(strings.ToLower(logContent), "unable to get the locale encoding") &&
+		strings.Contains(strings.ToLower(logContent), "no module named 'encodings'") {
+		return plan.Hint{}, nil, "", false
+	}
+
+	gccTooOld := regexp.MustCompile(`(?i)requires gcc >=\s*([0-9.]+)`)
+	if m := gccTooOld.FindStringSubmatch(logContent); len(m) == 2 {
+		minVersion := strings.TrimSpace(m[1])
+		hint := baseAutoHint(ctx, fmt.Sprintf(`requires GCC >= %s`, regexp.QuoteMeta(minVersion)))
+		hint.Tags = append(hint.Tags, "compiler", "gcc")
+		hint.Confidence = "high"
+		hint.Note = fmt.Sprintf("Auto-detected GCC version floor %s from build logs.", minVersion)
+		hint.Recipes = map[string][]string{
+			"dnf": {"gcc-toolset-12"},
+			"env": {
+				"PATH=/opt/rh/gcc-toolset-12/root/usr/bin:$PATH",
+				"CC=/opt/rh/gcc-toolset-12/root/usr/bin/gcc",
+				"CXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++",
+				"LD_LIBRARY_PATH=/opt/rh/gcc-toolset-12/root/usr/lib64:${LD_LIBRARY_PATH:-}",
+			},
+		}
+		hint.Examples = []string{m[0]}
+		return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
+	}
+
 	missingModule := regexp.MustCompile(`ModuleNotFoundError: No module named ['"]([^'"]+)['"]`)
 	if m := missingModule.FindStringSubmatch(logContent); len(m) == 2 {
 		mod := strings.TrimSpace(m[1])

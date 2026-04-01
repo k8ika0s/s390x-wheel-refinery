@@ -19,6 +19,7 @@ var (
 	cmakeFailureRe     = regexp.MustCompile(`(?i)cmake error|cmake failed`)
 	linkerErrorRe      = regexp.MustCompile(`(?i)undefined reference to|ld: cannot find|linker command failed|ld returned \d+ exit status|collect2: error`)
 	cmdNotFoundRe      = regexp.MustCompile(`(?i)(?:^|\\s)([a-z0-9_+.\-]+): command not found`)
+	gccVersionRe       = regexp.MustCompile(`(?i)requires gcc >=\s*([0-9.]+)`)
 )
 
 var compilerTools = map[string]bool{
@@ -41,6 +42,13 @@ func classifyFailureReason(err error, logText string) failureReason {
 	}
 	if text == "" {
 		return failureReason{}
+	}
+	if strings.Contains(strings.ToLower(text), "unable to get the locale encoding") &&
+		strings.Contains(strings.ToLower(text), "no module named 'encodings'") {
+		return failureReason{Code: "runtime_stdlib_missing", Detail: "encodings"}
+	}
+	if match := gccVersionRe.FindStringSubmatch(text); len(match) > 1 {
+		return failureReason{Code: "compiler_version_too_old", Detail: "gcc>=" + match[1]}
 	}
 	if match := moduleNotFoundRe.FindStringSubmatch(text); len(match) > 1 {
 		return failureReason{Code: "missing_module", Detail: match[1]}

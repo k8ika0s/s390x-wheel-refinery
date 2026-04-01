@@ -189,6 +189,13 @@ fi
 PYBIN="${PYTHON_BIN:-${PYTHON_PATH:-python3}}"
 export PIP_NO_INPUT=1
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/cache/pip}"
+HOST_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+run_host_tool() {
+  env -u PYTHONHOME -u PYTHONPATH -u PYTHON_BIN -u PYTHON_PATH \
+    PATH="${HOST_PATH}" \
+    LD_LIBRARY_PATH="" \
+    "$@"
+}
 if [ -n "${DEPS_PREFIXES:-}" ]; then
   pc_paths=""
   for pfx in $(echo "${DEPS_PREFIXES}" | tr ':' ' '); do
@@ -218,11 +225,11 @@ if [ -n "${RECIPES:-}" ]; then
     esac
   done
   if command -v dnf >/dev/null 2>&1 && [ ${#dnf_pkgs[@]} -gt 0 ]; then
-    dnf -y install "${dnf_pkgs[@]}"
+    run_host_tool dnf -y install "${dnf_pkgs[@]}"
   fi
   if command -v apt-get >/dev/null 2>&1 && [ ${#apt_pkgs[@]} -gt 0 ]; then
-    apt-get update
-    apt-get install -y "${apt_pkgs[@]}"
+    run_host_tool apt-get update
+    run_host_tool apt-get install -y "${apt_pkgs[@]}"
   fi
   if [ ${#pip_pkgs[@]} -gt 0 ]; then
     "${PYBIN}" -m pip install "${pip_pkgs[@]}"

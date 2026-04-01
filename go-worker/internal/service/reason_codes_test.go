@@ -14,6 +14,18 @@ func TestClassifyFailureReason(t *testing.T) {
 		detail  string
 	}{
 		{
+			name:    "runtime stdlib missing",
+			logText: "Fatal Python error: Py_Initialize: Unable to get the locale encoding\nModuleNotFoundError: No module named 'encodings'",
+			code:    "runtime_stdlib_missing",
+			detail:  "encodings",
+		},
+		{
+			name:    "compiler version too old",
+			logText: "../meson.build:25:4: ERROR: Problem encountered: NumPy requires GCC >= 9.3",
+			code:    "compiler_version_too_old",
+			detail:  "gcc>=9.3",
+		},
+		{
 			name:    "missing module",
 			logText: "ModuleNotFoundError: No module named 'numpy'",
 			code:    "missing_module",
