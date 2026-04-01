@@ -31,13 +31,19 @@ func TestApplyDefaultsSetsMissing(t *testing.T) {
 	if BoolValue(out.AutoPlan) || BoolValue(out.AutoBuild) {
 		t.Fatalf("expected missing bools to default false: %+v", out)
 	}
+	if !BoolValue(out.InferEnabled) {
+		t.Fatalf("expected missing infer_enabled to default true: %+v", out)
+	}
+	if out.InferSystemPrompt == "" || out.InferUserPromptTemplate == "" {
+		t.Fatalf("expected inference prompts to default: %+v", out)
+	}
 	if out.PollMs == 0 || out.RecentLimit == 0 {
 		t.Fatalf("expected numeric defaults to be set: %+v", out)
 	}
 }
 
 func TestValidate(t *testing.T) {
-	if err := Validate(Settings{PythonVersion: "3.10", PlatformTag: "manylinux2014_s390x"}); err != nil {
+	if err := Validate(Settings{PythonVersion: "3.10", PlatformTag: "manylinux2014_s390x", InferTimeoutSec: 10, InferMaxRetries: 2}); err != nil {
 		t.Fatalf("unexpected validation error: %v", err)
 	}
 	if err := Validate(Settings{PythonVersion: "2.7"}); err == nil {
@@ -45,5 +51,8 @@ func TestValidate(t *testing.T) {
 	}
 	if err := Validate(Settings{PlatformTag: "bad tag"}); err == nil {
 		t.Fatalf("expected error for invalid platform tag")
+	}
+	if err := Validate(Settings{InferTimeoutSec: 601}); err == nil {
+		t.Fatalf("expected error for invalid infer timeout")
 	}
 }

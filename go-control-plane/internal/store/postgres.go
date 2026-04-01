@@ -175,6 +175,7 @@ CREATE TABLE IF NOT EXISTS build_status (
     failure_summary TEXT,
     recipes       JSONB,
     hint_ids      TEXT[],
+    metadata      JSONB,
     run_id        TEXT,
     plan_id       BIGINT,
     leased_at     TIMESTAMPTZ,
@@ -199,6 +200,7 @@ CREATE TABLE IF NOT EXISTS build_attempts (
     duration_ms   BIGINT,
     recipes       JSONB,
     hint_ids      TEXT[],
+    metadata      JSONB,
     reason_code TEXT,
     reason_detail TEXT,
     run_id        TEXT,
@@ -219,6 +221,7 @@ ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS hint_ids TEXT[];
 ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS reason_code TEXT;
 ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS reason_detail TEXT;
 ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS node_id TEXT;
+ALTER TABLE build_attempts ADD COLUMN IF NOT EXISTS metadata JSONB;
 
 CREATE TABLE IF NOT EXISTS worker_status (
     worker_id    TEXT PRIMARY KEY,
@@ -230,6 +233,7 @@ CREATE TABLE IF NOT EXISTS worker_status (
     heartbeat_interval_sec INT NOT NULL DEFAULT 0,
     cas_hits BIGINT NOT NULL DEFAULT 0,
     cas_misses BIGINT NOT NULL DEFAULT 0,
+    metadata     JSONB,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -289,6 +293,7 @@ ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
 ALTER TABLE worker_status ADD COLUMN IF NOT EXISTS cas_hits BIGINT;
 ALTER TABLE worker_status ADD COLUMN IF NOT EXISTS cas_misses BIGINT;
+ALTER TABLE worker_status ADD COLUMN IF NOT EXISTS metadata JSONB;
 
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS recipes JSONB;
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS hint_ids TEXT[];
@@ -296,6 +301,7 @@ ALTER TABLE build_status ADD COLUMN IF NOT EXISTS leased_at TIMESTAMPTZ;
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ;
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
 ALTER TABLE build_status ADD COLUMN IF NOT EXISTS failure_summary TEXT;
+ALTER TABLE build_status ADD COLUMN IF NOT EXISTS metadata JSONB;
 
 CREATE TABLE IF NOT EXISTS plan_metadata (
     id             BIGSERIAL PRIMARY KEY,
@@ -643,7 +649,7 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 	if err := p.ensureDB(); err != nil {
 		return nil, err
 	}
-	q := `SELECT id, node_id, worker_id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), COALESCE(failure_summary,''), run_id, plan_id, extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint, COALESCE(extract(epoch from leased_at),0)::bigint, COALESCE(extract(epoch from started_at),0)::bigint, COALESCE(extract(epoch from finished_at),0)::bigint, COALESCE(extract(epoch from backoff_until),0)::bigint, COALESCE(backoff_reason,''), COALESCE(backoff_seconds,0), COALESCE(reason_code,''), COALESCE(reason_detail,''), COALESCE(recipes, '[]'::jsonb), COALESCE(hint_ids, '{}'::text[]) FROM build_status`
+	q := `SELECT id, node_id, worker_id, package, version, python_tag, platform_tag, status, attempts, COALESCE(last_error,''), COALESCE(failure_summary,''), run_id, plan_id, extract(epoch from (NOW() - created_at))::bigint as age, extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint, COALESCE(extract(epoch from leased_at),0)::bigint, COALESCE(extract(epoch from started_at),0)::bigint, COALESCE(extract(epoch from finished_at),0)::bigint, COALESCE(extract(epoch from backoff_until),0)::bigint, COALESCE(backoff_reason,''), COALESCE(backoff_seconds,0), COALESCE(reason_code,''), COALESCE(reason_detail,''), COALESCE(recipes, '[]'::jsonb), COALESCE(hint_ids, '{}'::text[]), COALESCE(metadata, '{}'::jsonb) FROM build_status`
 	args := []any{}
 	clauses := []string{}
 	if status != "" {
@@ -678,16 +684,22 @@ func (p *PostgresStore) ListBuilds(ctx context.Context, status string, limit int
 	var out []BuildStatus
 	for rows.Next() {
 		var bs BuildStatus
+		var workerID sql.NullString
 		var recipes json.RawMessage
+		var metaRaw json.RawMessage
 		var hints pq.StringArray
-		if err := rows.Scan(&bs.ID, &bs.NodeID, &bs.WorkerID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.OldestAgeSec, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &recipes, &hints); err != nil {
+		if err := rows.Scan(&bs.ID, &bs.NodeID, &workerID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.OldestAgeSec, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &recipes, &hints, &metaRaw); err != nil {
 			return nil, err
 		}
+		bs.WorkerID = nullStringValue(workerID)
 		if len(recipes) > 0 {
 			_ = json.Unmarshal(recipes, &bs.Recipes)
 		}
 		if len(hints) > 0 {
 			bs.HintIDs = hints
+		}
+		if len(metaRaw) > 0 {
+			_ = json.Unmarshal(metaRaw, &bs.Metadata)
 		}
 		out = append(out, bs)
 	}
@@ -739,7 +751,7 @@ func (p *PostgresStore) DeleteBuilds(ctx context.Context, status string) (int64,
 }
 
 // UpdateBuildStatus upserts build status by package/version.
-func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string, workerID string) error {
+func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, metadata map[string]any, planID int64, nodeID string, workerID string) error {
 	if err := p.ensureDB(); err != nil {
 		return err
 	}
@@ -797,6 +809,12 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 	if hintIDs != nil {
 		hints = pqStringArrayParam(hintIDs)
 	}
+	var metadataRaw any
+	if metadata != nil {
+		if data, err := json.Marshal(metadata); err == nil {
+			metadataRaw = data
+		}
+	}
 	var planVal any
 	if planID > 0 {
 		planVal = planID
@@ -812,8 +830,8 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 		workerVal = workerID
 	}
 	_, err := p.db.ExecContext(ctx, `
-		INSERT INTO build_status (package, version, status, last_error, failure_summary, attempts, backoff_until, backoff_reason, backoff_seconds, reason_code, reason_detail, recipes, hint_ids, leased_at, started_at, finished_at, plan_id, node_id, worker_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		INSERT INTO build_status (package, version, status, last_error, failure_summary, attempts, backoff_until, backoff_reason, backoff_seconds, reason_code, reason_detail, recipes, hint_ids, metadata, leased_at, started_at, finished_at, plan_id, node_id, worker_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		ON CONFLICT (package, version) DO UPDATE
 		SET status = EXCLUDED.status,
 		    last_error = EXCLUDED.last_error,
@@ -849,8 +867,18 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 		        WHEN EXCLUDED.status IN ('pending','retry') THEN NULL
 		        ELSE COALESCE(EXCLUDED.worker_id, build_status.worker_id)
 		    END,
-		    recipes = COALESCE(EXCLUDED.recipes, build_status.recipes),
-		    hint_ids = COALESCE(EXCLUDED.hint_ids, build_status.hint_ids),
+		    recipes = CASE
+		        WHEN EXCLUDED.status IN ('pending','leased','building') THEN COALESCE(EXCLUDED.recipes, '[]'::jsonb)
+		        ELSE COALESCE(EXCLUDED.recipes, build_status.recipes)
+		    END,
+		    hint_ids = CASE
+		        WHEN EXCLUDED.status IN ('pending','leased','building') THEN COALESCE(EXCLUDED.hint_ids, '{}'::text[])
+		        ELSE COALESCE(EXCLUDED.hint_ids, build_status.hint_ids)
+		    END,
+		    metadata = CASE
+		        WHEN EXCLUDED.status IN ('pending','leased','building') THEN COALESCE(EXCLUDED.metadata, '{}'::jsonb)
+		        ELSE COALESCE(EXCLUDED.metadata, build_status.metadata)
+		    END,
 		    leased_at = CASE
 		        WHEN EXCLUDED.status IN ('pending','retry') THEN NULL
 		        WHEN EXCLUDED.status = 'leased' THEN COALESCE(build_status.leased_at, NOW())
@@ -867,7 +895,7 @@ func (p *PostgresStore) UpdateBuildStatus(ctx context.Context, pkg, version, sta
 		        ELSE build_status.finished_at
 		    END,
 		    updated_at = NOW()
-	`, pkg, version, statusLower, errMsg, summaryVal, attempts, backoff, backoffReasonVal, backoffSecondsVal, reasonCodeVal, reasonDetailVal, recipesRaw, hints, leasedAt, startedAt, finishedAt, planVal, nodeVal, workerVal)
+	`, pkg, version, statusLower, errMsg, summaryVal, attempts, backoff, backoffReasonVal, backoffSecondsVal, reasonCodeVal, reasonDetailVal, recipesRaw, hints, metadataRaw, leasedAt, startedAt, finishedAt, planVal, nodeVal, workerVal)
 	return err
 }
 
@@ -926,6 +954,12 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 	if attempt.HintIDs != nil {
 		hints = pqStringArrayParam(attempt.HintIDs)
 	}
+	var metadataRaw any
+	if attempt.Metadata != nil {
+		if data, err := json.Marshal(attempt.Metadata); err == nil {
+			metadataRaw = data
+		}
+	}
 	var nodeVal any
 	if strings.TrimSpace(attempt.NodeID) != "" {
 		nodeVal = strings.TrimSpace(attempt.NodeID)
@@ -934,9 +968,9 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 		INSERT INTO build_attempts (
 			package, version, attempt, status, last_error, failure_summary,
 			backoff_until, backoff_reason, backoff_seconds, duration_ms,
-			recipes, hint_ids, reason_code, reason_detail, run_id, plan_id, node_id, started_at, finished_at
+			recipes, hint_ids, metadata, reason_code, reason_detail, run_id, plan_id, node_id, started_at, finished_at
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		ON CONFLICT (package, version, attempt) DO UPDATE
 		SET status = EXCLUDED.status,
 		    last_error = EXCLUDED.last_error,
@@ -960,6 +994,7 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 		    duration_ms = COALESCE(EXCLUDED.duration_ms, build_attempts.duration_ms),
 		    recipes = COALESCE(EXCLUDED.recipes, build_attempts.recipes),
 		    hint_ids = COALESCE(EXCLUDED.hint_ids, build_attempts.hint_ids),
+		    metadata = COALESCE(EXCLUDED.metadata, build_attempts.metadata),
 		    reason_code = COALESCE(EXCLUDED.reason_code, build_attempts.reason_code),
 		    reason_detail = COALESCE(EXCLUDED.reason_detail, build_attempts.reason_detail),
 		    run_id = COALESCE(EXCLUDED.run_id, build_attempts.run_id),
@@ -974,7 +1009,7 @@ func (p *PostgresStore) UpsertBuildAttempt(ctx context.Context, attempt BuildAtt
 		        ELSE build_attempts.finished_at
 		    END,
 		    updated_at = NOW()
-	`, attempt.Package, attempt.Version, attempt.Attempt, statusLower, attempt.LastError, attempt.FailureSummary, backoff, backoffReasonVal, backoffSecondsVal, durationVal, recipesRaw, hints, reasonCodeVal, reasonDetailVal, nullableString(attempt.RunID), nullableInt64(attempt.PlanID), nodeVal, startedAt, finishedAt)
+	`, attempt.Package, attempt.Version, attempt.Attempt, statusLower, attempt.LastError, attempt.FailureSummary, backoff, backoffReasonVal, backoffSecondsVal, durationVal, recipesRaw, hints, metadataRaw, reasonCodeVal, reasonDetailVal, nullableString(attempt.RunID), nullableInt64(attempt.PlanID), nodeVal, startedAt, finishedAt)
 	return err
 }
 
@@ -992,7 +1027,7 @@ func (p *PostgresStore) ListBuildAttempts(ctx context.Context, pkg, version stri
 	rows, err := p.db.QueryContext(ctx, `
 		SELECT id, COALESCE(node_id,''), package, version, attempt, status, COALESCE(last_error,''), COALESCE(failure_summary,''),
 		       COALESCE(extract(epoch from backoff_until),0)::bigint, COALESCE(backoff_reason,''), COALESCE(backoff_seconds,0),
-		       COALESCE(duration_ms,0), COALESCE(recipes, '[]'::jsonb), COALESCE(hint_ids, '{}'::text[]),
+		       COALESCE(duration_ms,0), COALESCE(recipes, '[]'::jsonb), COALESCE(hint_ids, '{}'::text[]), COALESCE(metadata, '{}'::jsonb),
 		       COALESCE(reason_code,''), COALESCE(reason_detail,''),
 		       COALESCE(extract(epoch from started_at),0)::bigint, COALESCE(extract(epoch from finished_at),0)::bigint,
 		       COALESCE(run_id,''), COALESCE(plan_id,0), extract(epoch from created_at)::bigint, extract(epoch from updated_at)::bigint
@@ -1009,9 +1044,10 @@ func (p *PostgresStore) ListBuildAttempts(ctx context.Context, pkg, version stri
 	for rows.Next() {
 		var entry BuildAttempt
 		var recipes json.RawMessage
+		var metaRaw json.RawMessage
 		var hints pq.StringArray
 		if err := rows.Scan(&entry.ID, &entry.NodeID, &entry.Package, &entry.Version, &entry.Attempt, &entry.Status, &entry.LastError, &entry.FailureSummary,
-			&entry.BackoffUntil, &entry.BackoffReason, &entry.BackoffSeconds, &entry.DurationMS, &recipes, &hints,
+			&entry.BackoffUntil, &entry.BackoffReason, &entry.BackoffSeconds, &entry.DurationMS, &recipes, &hints, &metaRaw,
 			&entry.ReasonCode, &entry.ReasonDetail, &entry.StartedAt, &entry.FinishedAt, &entry.RunID, &entry.PlanID, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -1020,6 +1056,9 @@ func (p *PostgresStore) ListBuildAttempts(ctx context.Context, pkg, version stri
 		}
 		if len(hints) > 0 {
 			entry.HintIDs = hints
+		}
+		if len(metaRaw) > 0 {
+			_ = json.Unmarshal(metaRaw, &entry.Metadata)
 		}
 		out = append(out, entry)
 	}
@@ -1950,10 +1989,7 @@ func (p *PostgresStore) SaveManifest(ctx context.Context, entries []ManifestEntr
 			LIMIT 1`,
 			m.Name, m.Version, m.PythonTag, m.PlatformTag,
 		).Scan(&existingID, &existingDigest)
-		if err == nil {
-			if existingDigest != "" && existingDigest != digest {
-				return fmt.Errorf("manifest immutability violation for %s %s", m.Name, m.Version)
-			}
+		if err == nil && (existingDigest == "" || existingDigest == digest) {
 			_, err = p.db.ExecContext(ctx, `
 				UPDATE manifests
 				SET manifest_digest = COALESCE(manifest_digest, $2),
@@ -1982,7 +2018,7 @@ func (p *PostgresStore) SaveManifest(ctx context.Context, entries []ManifestEntr
 			}
 			continue
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		_, err = p.db.ExecContext(ctx, `
@@ -2023,10 +2059,39 @@ func (p *PostgresStore) BuildAttemptStats(ctx context.Context, since time.Time) 
 			COUNT(*) FILTER (WHERE status = 'failed')::int,
 			COUNT(*) FILTER (WHERE status = 'retry')::int,
 			COUNT(*) FILTER (WHERE status = 'quarantined')::int,
-			COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0)
+			COALESCE(AVG(duration_ms) FILTER (WHERE duration_ms > 0), 0),
+			COUNT(*) FILTER (WHERE attempt = 1 AND status = 'built')::int,
+			COUNT(*) FILTER (WHERE attempt = 1 AND status IN ('failed','quarantined'))::int,
+			COUNT(*) FILTER (WHERE attempt > 1 AND status = 'built')::int,
+			COUNT(*) FILTER (WHERE attempt > 1 AND status IN ('failed','quarantined'))::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->'automation'->>'applied', 'false') = 'true')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->'automation'->>'remediation_source', '') = 'known_hint')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->'automation'->>'remediation_source', '') = 'heuristic')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->'automation'->>'remediation_source', '') = 'llm')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->'automation'->>'llm_suggestion_ignored', 'false') = 'true')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->'automation'->>'hint_save_failed', 'false') = 'true')::int,
+			COUNT(*) FILTER (WHERE backoff_reason = 'build stalled')::int
 		FROM build_attempts
 		WHERE created_at >= $1
-	`, since).Scan(&stats.Total, &stats.Built, &stats.Failed, &stats.Retry, &stats.Quarantined, &stats.AvgDurationMs)
+	`, since).Scan(
+		&stats.Total,
+		&stats.Built,
+		&stats.Failed,
+		&stats.Retry,
+		&stats.Quarantined,
+		&stats.AvgDurationMs,
+		&stats.FirstAttemptBuilt,
+		&stats.FirstAttemptFailed,
+		&stats.RetryAttemptBuilt,
+		&stats.RetryAttemptFailed,
+		&stats.HintApplied,
+		&stats.KnownHintApplied,
+		&stats.HeuristicApplied,
+		&stats.LLMApplied,
+		&stats.LLMSuggestionsIgnored,
+		&stats.HintSaveFailed,
+		&stats.StaleRequeues,
+	)
 	if err != nil {
 		return BuildAttemptStats{}, err
 	}
@@ -2240,8 +2305,8 @@ func (p *PostgresStore) QueueBuildsFromPlan(ctx context.Context, runID string, p
 	}
 	defer tx.Rollback()
 	stmt := `
-		INSERT INTO build_status (package, version, python_tag, platform_tag, status, attempts, run_id, plan_id, node_id, backoff_until, backoff_reason, backoff_seconds, last_error, failure_summary, recipes)
-		VALUES ($1,$2,$3,$4,'pending',0,$5,$6,$7,NULL,NULL,NULL,'',NULL,$8)
+		INSERT INTO build_status (package, version, python_tag, platform_tag, status, attempts, run_id, plan_id, node_id, backoff_until, backoff_reason, backoff_seconds, last_error, failure_summary, recipes, hint_ids, metadata)
+		VALUES ($1,$2,$3,$4,'pending',0,$5,$6,$7,NULL,NULL,NULL,'',NULL,$8,'{}'::text[],'{}'::jsonb)
 		ON CONFLICT (package, version) DO UPDATE
 		SET python_tag = EXCLUDED.python_tag,
 		    platform_tag = EXCLUDED.platform_tag,
@@ -2255,9 +2320,12 @@ func (p *PostgresStore) QueueBuildsFromPlan(ctx context.Context, runID string, p
 		    backoff_seconds = NULL,
 		    last_error = '',
 		    failure_summary = NULL,
-		    recipes = COALESCE(EXCLUDED.recipes, build_status.recipes),
+		    recipes = COALESCE(EXCLUDED.recipes, '[]'::jsonb),
+		    hint_ids = '{}'::text[],
+		    metadata = '{}'::jsonb,
 		    updated_at = NOW()
 		WHERE build_status.status IN ('built','failed','quarantined')
+		   OR (build_status.status = 'pending' AND COALESCE(build_status.attempts, 0) = 0)
 	`
 	for _, n := range nodes {
 		if strings.ToLower(n.Action) != "build" || n.Name == "" || n.Version == "" {
@@ -2319,11 +2387,13 @@ func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int, workerID strin
 	var out []BuildStatus
 	for rows.Next() {
 		var bs BuildStatus
+		var workerID sql.NullString
 		var recipes json.RawMessage
 		var hints pq.StringArray
-		if err := rows.Scan(&bs.ID, &bs.NodeID, &bs.WorkerID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints); err != nil {
+		if err := rows.Scan(&bs.ID, &bs.NodeID, &workerID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints); err != nil {
 			return nil, err
 		}
+		bs.WorkerID = nullStringValue(workerID)
 		if len(recipes) > 0 {
 			_ = json.Unmarshal(recipes, &bs.Recipes)
 		}
@@ -2472,11 +2542,13 @@ func (p *PostgresStore) RequeueStaleBuilds(ctx context.Context, leaseAgeSec int,
 	var out []BuildStatus
 	for rows.Next() {
 		var bs BuildStatus
+		var workerID sql.NullString
 		var recipes json.RawMessage
 		var hints pq.StringArray
-		if err := rows.Scan(&bs.ID, &bs.NodeID, &bs.WorkerID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints, &bs.PreviousStatus, &bs.StaleAgeSec); err != nil {
+		if err := rows.Scan(&bs.ID, &bs.NodeID, &workerID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints, &bs.PreviousStatus, &bs.StaleAgeSec); err != nil {
 			return nil, err
 		}
+		bs.WorkerID = nullStringValue(workerID)
 		if len(recipes) > 0 {
 			_ = json.Unmarshal(recipes, &bs.Recipes)
 		}
@@ -2488,6 +2560,13 @@ func (p *PostgresStore) RequeueStaleBuilds(ctx context.Context, leaseAgeSec int,
 	return out, rows.Err()
 }
 
+func nullStringValue(v sql.NullString) string {
+	if v.Valid {
+		return v.String
+	}
+	return ""
+}
+
 // UpsertWorkerStatus records worker heartbeats and pool usage.
 func (p *PostgresStore) UpsertWorkerStatus(ctx context.Context, status WorkerStatus) error {
 	if err := p.ensureDB(); err != nil {
@@ -2496,11 +2575,17 @@ func (p *PostgresStore) UpsertWorkerStatus(ctx context.Context, status WorkerSta
 	if status.WorkerID == "" {
 		return fmt.Errorf("worker_id required")
 	}
+	var metadataRaw any
+	if status.Metadata != nil {
+		if data, err := json.Marshal(status.Metadata); err == nil {
+			metadataRaw = data
+		}
+	}
 	_, err := p.db.ExecContext(ctx, `
 		INSERT INTO worker_status (
-			worker_id, run_id, last_seen, active_builds, build_pool_size, plan_pool_size, heartbeat_interval_sec, cas_hits, cas_misses, updated_at
+			worker_id, run_id, last_seen, active_builds, build_pool_size, plan_pool_size, heartbeat_interval_sec, cas_hits, cas_misses, metadata, updated_at
 		)
-		VALUES ($1,$2,NOW(),$3,$4,$5,$6,$7,$8,NOW())
+		VALUES ($1,$2,NOW(),$3,$4,$5,$6,$7,$8,$9,NOW())
 		ON CONFLICT (worker_id) DO UPDATE
 		SET run_id = EXCLUDED.run_id,
 		    last_seen = NOW(),
@@ -2510,8 +2595,9 @@ func (p *PostgresStore) UpsertWorkerStatus(ctx context.Context, status WorkerSta
 		    heartbeat_interval_sec = EXCLUDED.heartbeat_interval_sec,
 		    cas_hits = EXCLUDED.cas_hits,
 		    cas_misses = EXCLUDED.cas_misses,
+		    metadata = COALESCE(EXCLUDED.metadata, worker_status.metadata),
 		    updated_at = NOW()
-	`, status.WorkerID, nullableString(status.RunID), status.ActiveBuilds, status.BuildPoolSize, status.PlanPoolSize, status.HeartbeatIntervalSec, status.CASHits, status.CASMisses)
+	`, status.WorkerID, nullableString(status.RunID), status.ActiveBuilds, status.BuildPoolSize, status.PlanPoolSize, status.HeartbeatIntervalSec, status.CASHits, status.CASMisses, metadataRaw)
 	return err
 }
 
@@ -2529,6 +2615,7 @@ func (p *PostgresStore) ListWorkers(ctx context.Context) ([]WorkerStatus, error)
 		       heartbeat_interval_sec,
 		       cas_hits,
 		       cas_misses,
+		       COALESCE(metadata, '{}'::jsonb),
 		       EXTRACT(EPOCH FROM last_seen)::bigint AS last_seen,
 		       EXTRACT(EPOCH FROM created_at)::bigint AS created_at,
 		       EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at
@@ -2543,11 +2630,15 @@ func (p *PostgresStore) ListWorkers(ctx context.Context) ([]WorkerStatus, error)
 	for rows.Next() {
 		var ws WorkerStatus
 		var runID sql.NullString
-		if err := rows.Scan(&ws.WorkerID, &runID, &ws.ActiveBuilds, &ws.BuildPoolSize, &ws.PlanPoolSize, &ws.HeartbeatIntervalSec, &ws.CASHits, &ws.CASMisses, &ws.LastSeen, &ws.CreatedAt, &ws.UpdatedAt); err != nil {
+		var metaRaw json.RawMessage
+		if err := rows.Scan(&ws.WorkerID, &runID, &ws.ActiveBuilds, &ws.BuildPoolSize, &ws.PlanPoolSize, &ws.HeartbeatIntervalSec, &ws.CASHits, &ws.CASMisses, &metaRaw, &ws.LastSeen, &ws.CreatedAt, &ws.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if runID.Valid {
 			ws.RunID = runID.String
+		}
+		if len(metaRaw) > 0 {
+			_ = json.Unmarshal(metaRaw, &ws.Metadata)
 		}
 		out = append(out, ws)
 	}

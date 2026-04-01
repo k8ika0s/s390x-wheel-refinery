@@ -22,6 +22,7 @@ import (
 type fakeStore struct {
 	lastPlan        []store.PlanNode
 	lastEvent       store.Event
+	lastSettings    settings.Settings
 	nextPendingID   int64
 	listPending     []store.PendingInput
 	lastPending     store.PendingInput
@@ -42,6 +43,8 @@ type fakeStore struct {
 	lastBuildUpdatePlanID int64
 	lastBuildUpdateNodeID string
 	lastBuildUpdateWorker string
+	updateBuildStatuses   []string
+	listBuildsResp        []store.BuildStatus
 	lastLogChunksAfterID  int64
 	lastLogChunksAfterSeq int64
 	lastLogChunksAttempt  int
@@ -228,15 +231,16 @@ func (f *fakeStore) UpdatePendingInputsForPlan(ctx context.Context, planID int64
 	return 0, nil
 }
 func (f *fakeStore) ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]store.BuildStatus, error) {
-	return nil, nil
+	return f.listBuildsResp, nil
 }
 func (f *fakeStore) BuildQueueStats(ctx context.Context) (store.BuildQueueStats, error) {
 	return store.BuildQueueStats{}, nil
 }
-func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string, workerID string) error {
+func (f *fakeStore) UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, metadata map[string]any, planID int64, nodeID string, workerID string) error {
 	f.lastBuildUpdatePlanID = planID
 	f.lastBuildUpdateNodeID = nodeID
 	f.lastBuildUpdateWorker = workerID
+	f.updateBuildStatuses = append(f.updateBuildStatuses, status)
 	return nil
 }
 func (f *fakeStore) UpsertBuildAttempt(ctx context.Context, attempt store.BuildAttempt) error {
@@ -266,9 +270,10 @@ func (f *fakeStore) ListWorkers(ctx context.Context) ([]store.WorkerStatus, erro
 	return f.workers, nil
 }
 func (f *fakeStore) GetSettings(ctx context.Context) (settings.Settings, error) {
-	return settings.ApplyDefaults(settings.Settings{}), nil
+	return settings.ApplyDefaults(f.lastSettings), nil
 }
 func (f *fakeStore) SaveSettings(ctx context.Context, s settings.Settings) error {
+	f.lastSettings = s
 	return nil
 }
 
@@ -730,6 +735,56 @@ func TestLogsChunksHonorsAttemptAndSeq(t *testing.T) {
 	}
 }
 
+func TestLogsStreamSkipsTouchForTerminalBuild(t *testing.T) {
+	fs := &fakeStore{
+		listBuildsResp: []store.BuildStatus{{Status: "built"}},
+	}
+	h := &Handler{
+		Store: fs,
+		Config: config.Config{
+			WorkerToken: "token",
+		},
+	}
+	body := bytes.NewBufferString("{\"seq\":1,\"content\":\"done\"}\n")
+	req := httptest.NewRequest(http.MethodPost, "/api/logs/stream/demo/1.0?attempt=1", body)
+	req.Header.Set("X-Worker-Token", "token")
+	rec := httptest.NewRecorder()
+
+	h.logsStream(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(fs.updateBuildStatuses) != 0 {
+		t.Fatalf("expected no build status touch, got %v", fs.updateBuildStatuses)
+	}
+}
+
+func TestLogsStreamTouchesActiveBuild(t *testing.T) {
+	fs := &fakeStore{
+		listBuildsResp: []store.BuildStatus{{Status: "building"}},
+	}
+	h := &Handler{
+		Store: fs,
+		Config: config.Config{
+			WorkerToken: "token",
+		},
+	}
+	body := bytes.NewBufferString("{\"seq\":1,\"content\":\"still working\"}\n")
+	req := httptest.NewRequest(http.MethodPost, "/api/logs/stream/demo/1.0?attempt=2", body)
+	req.Header.Set("X-Worker-Token", "token")
+	rec := httptest.NewRecorder()
+
+	h.logsStream(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(fs.updateBuildStatuses) != 1 || fs.updateBuildStatuses[0] != "building" {
+		t.Fatalf("expected single building touch, got %v", fs.updateBuildStatuses)
+	}
+}
+
 func TestSimpleIndexRoot(t *testing.T) {
 	fs := &fakeStore{
 		manifestPackages: []string{"NumPy", "requests"},
@@ -796,12 +851,23 @@ func TestMaybeSweepRetention(t *testing.T) {
 func TestMetricsIncludesAttemptsAndLogs(t *testing.T) {
 	fs := &fakeStore{
 		buildAttemptStats: store.BuildAttemptStats{
-			Total:         4,
-			Built:         2,
-			Failed:        1,
-			Retry:         1,
-			Quarantined:   0,
-			AvgDurationMs: 2500,
+			Total:                 4,
+			Built:                 2,
+			Failed:                1,
+			Retry:                 1,
+			Quarantined:           0,
+			AvgDurationMs:         2500,
+			FirstAttemptBuilt:     1,
+			FirstAttemptFailed:    1,
+			RetryAttemptBuilt:     1,
+			RetryAttemptFailed:    0,
+			HintApplied:           2,
+			KnownHintApplied:      1,
+			HeuristicApplied:      1,
+			LLMApplied:            0,
+			LLMSuggestionsIgnored: 1,
+			HintSaveFailed:        1,
+			StaleRequeues:         0,
 		},
 		logChunkStats: store.LogChunkStats{Total: 120},
 		workers: []store.WorkerStatus{
@@ -811,6 +877,10 @@ func TestMetricsIncludesAttemptsAndLogs(t *testing.T) {
 				HeartbeatIntervalSec: 15,
 				CASHits:              5,
 				CASMisses:            15,
+				Metadata: map[string]any{
+					"config_ready": true,
+					"config_drift": false,
+				},
 			},
 		},
 	}
@@ -840,6 +910,15 @@ func TestMetricsIncludesAttemptsAndLogs(t *testing.T) {
 	if attempts["retry"] != float64(1) {
 		t.Fatalf("expected attempts retry 1, got %v", attempts["retry"])
 	}
+	if attempts["first_attempt_built"] != float64(1) {
+		t.Fatalf("expected first_attempt_built 1, got %v", attempts["first_attempt_built"])
+	}
+	if rate, ok := attempts["first_attempt_success_rate"].(float64); !ok || math.Abs(rate-0.5) > 0.001 {
+		t.Fatalf("expected first_attempt_success_rate 0.5, got %v", attempts["first_attempt_success_rate"])
+	}
+	if applied, ok := attempts["hint_applied"].(float64); !ok || applied != 2 {
+		t.Fatalf("expected hint_applied 2, got %v", attempts["hint_applied"])
+	}
 	if rc, ok := attempts["retry_churn"].(float64); !ok || math.Abs(rc-0.25) > 0.001 {
 		t.Fatalf("expected retry_churn 0.25, got %v", attempts["retry_churn"])
 	}
@@ -859,6 +938,12 @@ func TestMetricsIncludesAttemptsAndLogs(t *testing.T) {
 	}
 	if workers["cas_hits"] != float64(5) {
 		t.Fatalf("expected cas_hits 5, got %v", workers["cas_hits"])
+	}
+	if workers["configured"] != float64(1) {
+		t.Fatalf("expected configured 1, got %v", workers["configured"])
+	}
+	if workers["config_drift"] != float64(0) {
+		t.Fatalf("expected config_drift 0, got %v", workers["config_drift"])
 	}
 	if workers["cas_misses"] != float64(15) {
 		t.Fatalf("expected cas_misses 15, got %v", workers["cas_misses"])
@@ -899,5 +984,53 @@ func TestTokenScopes(t *testing.T) {
 	h.logsIngest(recLogOK, reqLogOK)
 	if recLogOK.Code != http.StatusOK {
 		t.Fatalf("expected 200 with worker token, got %d", recLogOK.Code)
+	}
+}
+
+func TestSettingsRoundTripIncludesInferenceFields(t *testing.T) {
+	fs := &fakeStore{}
+	h := &Handler{
+		Store:  fs,
+		Config: config.Config{UIToken: "ui123", PythonRecipesDir: t.TempDir()},
+	}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+
+	body := `{"recent_limit":25,"infer_enabled":true,"infer_model":"gpt-4.1-mini","infer_timeout_sec":45,"infer_max_retries":2,"infer_system_prompt":"system prompt","infer_user_prompt_template":"Package {{package}}"}` //nolint:lll
+	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(body))
+	req.Header.Set("X-UI-Token", "ui123")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from settings post, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !settings.BoolValue(fs.lastSettings.InferEnabled) {
+		t.Fatalf("expected infer_enabled to persist true: %+v", fs.lastSettings)
+	}
+	if fs.lastSettings.InferModel != "gpt-4.1-mini" {
+		t.Fatalf("expected infer_model to persist, got %+v", fs.lastSettings)
+	}
+	if fs.lastSettings.InferTimeoutSec != 45 || fs.lastSettings.InferMaxRetries != 2 {
+		t.Fatalf("expected inference timing to persist, got %+v", fs.lastSettings)
+	}
+	if fs.lastSettings.InferSystemPrompt != "system prompt" || fs.lastSettings.InferUserPromptTemplate != "Package {{package}}" {
+		t.Fatalf("expected prompts to persist, got %+v", fs.lastSettings)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from settings get, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+	var out settings.Settings
+	if err := json.NewDecoder(getRec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode settings response: %v", err)
+	}
+	if !settings.BoolValue(out.InferEnabled) || out.InferModel != "gpt-4.1-mini" {
+		t.Fatalf("expected inference settings in get response: %+v", out)
+	}
+	if out.InferSystemPrompt != "system prompt" || out.InferUserPromptTemplate != "Package {{package}}" {
+		t.Fatalf("expected inference prompts in get response: %+v", out)
 	}
 }

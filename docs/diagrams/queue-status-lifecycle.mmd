@@ -9,6 +9,8 @@ flowchart TD
   G --> H[Build status pending]
   H --> I[Build leased]
   I --> J[Build building]
+  J -->|live log chunks| J1[Refresh active row]
+  J1 --> J
   J -->|success| K[Build built]
   J -->|failure and retry| L[Build retry]
   L --> H

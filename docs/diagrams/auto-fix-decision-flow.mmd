@@ -4,14 +4,20 @@ flowchart TD
   C -->|match| D[Check applies_to + confidence]
   D -->|below threshold| E[Block hint + record metadata]
   D -->|meets threshold| F[Collect recipes]
-  C -->|no match| G[Infer hint from patterns]
-  G -->|no inference| H[No auto-fix applied]
-  G -->|inferred| I[Assign hint ID]
-  I --> J[Check confidence threshold]
-  J -->|blocked| E
-  J -->|allowed| K[Auto-save hint - rate limited]
-  K --> L[Merge recipes with existing]
-  F --> L
-  L --> M{Recipes increased?}
-  M -->|yes| N[Apply auto-fix + requeue]
-  M -->|no| H
+  C -->|no match| G[Run deterministic heuristics]
+  G -->|no inference| H[LLM inference fallback]
+  G -->|inferred| I[Assign remediation source heuristic]
+  H -->|no suggestion| X[No auto-fix applied]
+  H -->|suggested| J[Normalize raw suggestion]
+  J -->|ignored blocked or no-op| Y[Record ignored suggestion metadata]
+  J -->|accepted| K[Assign remediation source llm]
+  I --> L[Check confidence threshold]
+  K --> L
+  L -->|blocked| E
+  L -->|allowed| M[Auto-save hint - rate limited]
+  M --> N[Merge recipes with existing]
+  F --> N
+  N --> O{Recipes increased?}
+  O -->|yes| P[Persist before after recipes and env overrides]
+  P --> Q[Apply auto-fix + requeue]
+  O -->|no| X

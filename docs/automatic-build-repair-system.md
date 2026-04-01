@@ -11,6 +11,9 @@ The system takes a list of Python packages, builds wheels in a controlled enviro
 - The system can infer new hints from logs and save them for reuse.
 - Artifacts (wheels, repairs) are stored and tracked.
 - All automation actions are recorded and shown in the UI.
+- Worker heartbeats also record configuration provenance so readiness and drift are visible before scaling out.
+- Worker heartbeats and attempt/build rows now carry structured metadata for
+  remediation provenance and scale-readiness checks.
 
 ## System Components and Data Flow
 - **Control-plane**: API + Postgres; stores plans, build status, events, hints, and logs.
@@ -42,6 +45,8 @@ The system takes a list of Python packages, builds wheels in a controlled enviro
 - **Event**: A historical record of a build attempt (status + metadata).
 - **Build status**: The current state of a build request (attempts, backoff, recipes, hint IDs).
 - **Metadata**: Structured JSON payload attached to events.
+- **Attempt metadata**: Structured JSON stored on build rows, attempt rows, and
+  worker heartbeats to capture failure evidence and remediation provenance.
 - **CAS**: Content-addressed storage for immutable artifacts (wheels, repairs, packs).
 - **Object store**: A blob storage backend for artifacts (S3 or similar).
 - **Recipe format**: A string like `apt:libssl-dev`, `dnf:openssl-devel`, `pip:cryptography`, or `env:VAR=value`.
@@ -91,10 +96,15 @@ The system has two primary queues plus a legacy retry queue:
 ### Lease vs build running
 The control-plane marks a build **leased** when it is claimed from the queue. The worker then posts **building** when the container actually starts. This distinction lets the UI show work that is claimed but not yet executing.
 
+Active log streaming also refreshes in-flight `building` rows during long
+bootstrap or compile phases so runtime/pack preparation does not get recycled as
+stale while logs are still flowing.
+
 ### Worker scheduling and concurrency
 - **Auto-build**: The worker polls the build queue on `BUILD_POLL_INTERVAL_SEC` and auto-drains as long as there is capacity.
 - **Build pool**: `BUILD_POOL_SIZE` caps concurrency.
 - **Plan polling**: `PLAN_POLL_ENABLED=true` allows workers to poll pending inputs for planning on `PLAN_POLL_INTERVAL_SEC`.
+- **Scale gate**: The current target is to prove clean evidence and retry attribution on one worker first, then move to `2-3` workers with conservative pooling before considering broader intake.
 
 ## Workflow Diagrams (Mermaid)
 - High-level build workflow: `docs/diagrams/automatic-build-workflow.mmd`
@@ -157,6 +167,7 @@ Live logs are captured while the container runs and are visible in the UI withou
 3) The control-plane stores each chunk in the `log_chunks` table and broadcasts it to connected UI clients.
 4) The UI pulls any existing chunks first (`GET /api/logs/chunks/{name}/{version}`), then keeps a WebSocket open (`GET /api/logs/stream/{name}/{version}`) to receive new chunks live.
 5) When the job finishes, the worker still posts the final summarized log entry to `/api/logs` for long-term storage and export.
+6) While logs are still flowing, the control-plane refreshes the active build row so long runtime/bootstrap phases are not recycled as stale.
 
 ### Chunk payload format
 Each chunk is a JSON line with the fields below. If `seq` or `timestamp` are missing, the control-plane fills them in.
@@ -206,6 +217,31 @@ When inference succeeds:
 - It is only applied if confidence meets the threshold.
 - The hint can be auto-saved (see below).
 
+### LLM-backed inference (optional fallback)
+When `INFER_URL` is configured, the worker can call an external inference API to propose recipes after deterministic heuristics
+have had a chance to classify the obvious cases. The app treats this as a provider-agnostic black box: it sends a structured prompt
+and expects a strict JSON response (pattern, confidence, recipes).
+
+Why this exists:
+- The heuristic patterns cover common cases, but the long tail of build errors benefits from broader reasoning.
+- External inference can translate unfamiliar errors into concrete package fixes without baking new heuristics into the worker.
+
+Safety defaults:
+- If inference is not configured or fails, the worker proceeds without it.
+- Confidence gating still applies; low-confidence suggestions are blocked and recorded.
+- Suggested hints are tagged (`llm`, `suggested`) so they are easy to audit.
+- Deterministic heuristics run before LLM fallback for obvious classes such as
+  missing tools, compiler mismatches, or missing system libraries.
+- Raw model output is normalized before use; shell-shaped or no-op/self-referential
+  suggestions are rejected and recorded as ignored.
+
+Relevant settings:
+- `INFER_ENABLED` (default true; ignored if `INFER_URL` is empty)
+- `INFER_URL` / `INFER_TOKEN` / `INFER_MODEL`
+- `INFER_TIMEOUT_SEC`, `INFER_MAX_RETRIES`
+- `INFER_SYSTEM_PROMPT`, `INFER_USER_PROMPT_TEMPLATE` via `/api/settings`
+See `docs/llm-inference-brief.md` for model guidance and prompt expectations.
+
 ### Auto-save and dedupe
 When `AUTO_SAVE_HINTS=true`:
 - Inferred hints are saved to the control-plane catalog.
@@ -216,11 +252,41 @@ When `AUTO_SAVE_HINTS=true`:
 - New recipes are merged with any existing recipes for the job.
 - If the merged recipe set grows, auto-fix is considered "applied".
 - The merged recipe list is recorded in event metadata and build status.
+- The system also records the before/after recipe set and effective environment
+  overrides so later analysis can tell whether a retry materially changed the
+  build environment.
 
 ### Impact classification (safety signal)
 - Recipes are classified as `normal` or `high` impact.
 - High impact is flagged when recipes include large toolchains (gcc, clang, rust) or many dependencies.
 - Impact is recorded in the automation metadata so humans can review.
+
+## Structured evidence recorded per attempt
+The system now captures a normalized evidence payload for each retry/failure path, including:
+- `failure_stage`
+- `failure_excerpt`
+- `remediation_source`
+- `raw_llm_output`
+- `normalized_llm_output`
+- `prompt_version`
+- `policy_version`
+- `effective_recipes_before`
+- `effective_recipes_after`
+- `effective_env_overrides`
+- `prior_attempt`
+- `retry_cause`
+
+This evidence is written into build/event history so remediation quality can be analyzed without rereading the full raw logs.
+
+## Worker readiness telemetry
+Worker heartbeats now also include configuration metadata:
+- inference URL/token configured flags,
+- prompt version,
+- policy version,
+- runtime env loaded/source,
+- and a `config_ready` / `config_drift` signal.
+
+These feed `/api/metrics` and `/metrics`, which are intended to gate controlled horizontal scaling.
 
 ## Recipe Execution Model
 Recipes are serialized into the `RECIPES` environment variable and executed by the runner.
@@ -259,12 +325,35 @@ Fields include:
 - attempts, backoff_until
 - recipes (JSON list)
 - hint_ids (string list)
+- metadata JSON with fields such as:
+  - `failure_stage`
+  - `failure_excerpt`
+  - `remediation_source`
+  - `raw_llm_output`
+  - `normalized_llm_output`
+  - `prompt_version`
+  - `policy_version`
+  - `effective_recipes_before`
+  - `effective_recipes_after`
+  - `effective_env_overrides`
 
 ### Events (control-plane)
 Each build attempt writes an event with:
 - status, detail, timestamp
 - metadata (duration, attempts, artifacts)
 - automation metadata (applied, recipes, hints, blocked hints, impact)
+- remediation source (`known_hint`, `heuristic`, `llm`)
+- ignored LLM suggestion reason
+- hint save failure state
+
+### Worker heartbeats
+Worker heartbeats now report configuration provenance such as:
+- whether inference URL/token are configured
+- prompt version and policy version
+- runtime env loaded and its source path
+- config ready / config drift
+
+This data is surfaced through `/api/workers`, `/api/metrics`, and `/metrics`.
 
 ### Logs and manifests
 - Logs are stored and accessible via the UI.
@@ -280,6 +369,9 @@ The system is automated but visible at every step:
 - **Build queue row details** show timestamps, plan/run IDs, and failure summaries.
 - **Log viewer** supports live tailing with search, wrap, highlights, and download links.
 - **Hints view** shows catalog entries and any auto-saved hints.
+- **Workers / metrics views** show whether workers are configured correctly
+  before scale-up (`configured`, `config_drift`, remediation source counters,
+  retry success rates, ignored LLM suggestions).
 
 ## Seed Build Workflow (Quick Iteration)
 For fast iteration, use the seed script to upload a tiny requirements file, enqueue planning, enqueue builds, and tail logs.
@@ -313,6 +405,9 @@ Key environment variables for automation:
 - `PLAN_POLL_ENABLED` / `PLAN_POLL_INTERVAL_SEC` (worker plan polling cadence)
 - `BUILD_POOL_SIZE` / `PLAN_POOL_SIZE` (worker concurrency)
 - `LOG_CHUNK_MAX` (max log chunks to retain per build)
+- `INFER_ENABLED` (default: true; enables optional inference)
+- `INFER_URL` / `INFER_TOKEN` / `INFER_MODEL` (inference endpoint config)
+- `INFER_TIMEOUT_SEC`, `INFER_MAX_RETRIES` (inference request tuning)
 - `REPAIR_PUSH_ENABLED` (default: false)
 - `REPAIR_TOOL_VERSION`, `REPAIR_POLICY_HASH`, `REPAIR_CMD` (repair settings)
 
@@ -322,6 +417,8 @@ Key environment variables for automation:
 - Impact classification flags potentially heavy recipe changes.
 - Max attempts + exponential backoff prevent infinite retry loops.
 - Full automation metadata is recorded for review.
+- Fresh-plan requeue semantics clear stale recipes, hint IDs, and attempt
+  metadata so retries from a new plan do not inherit prior automation state.
 
 ## Troubleshooting and Failure Modes
 - **No hints applied**: Check `AUTO_FIX_ENABLED` and the hint catalog; verify regex patterns match logs.
@@ -329,6 +426,7 @@ Key environment variables for automation:
 - **No auto-saved hints**: Check `AUTO_SAVE_HINTS` and rate limit window.
 - **No retries**: Check `REQUEUE_ON_FAILURE` and `MAX_REQUEUE_ATTEMPTS`.
 - **Repair missing**: Ensure `REPAIR_PUSH_ENABLED` and repair tool settings are configured.
+- **Inference not used**: Check `INFER_ENABLED`, `INFER_URL`, and worker logs for inference errors.
 
 ## Reference: Files and Components
 - Auto-fix logic: `go-worker/internal/service/auto_fix.go`

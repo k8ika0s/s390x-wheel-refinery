@@ -1,9 +1,11 @@
 flowchart LR
   A[Worker] -->|events and metadata| B[Control plane DB]
   A -->|log chunks and log entry| B
+  A -->|worker heartbeat metadata| B
   B --> C[UI Events table]
   B --> D[Automation timeline]
   B --> E[Build queue view]
   B --> F[Build row details]
   B --> G[Log viewer live tail]
   B --> H[Hints catalog]
+  B --> I[Workers and readiness metrics]

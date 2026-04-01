@@ -69,6 +69,44 @@ func TestPodmanRunnerBuildCmdSanitizesHostPackageManagerEnv(t *testing.T) {
 	}
 }
 
+func TestPodmanRunnerBuildArgsUsesPackPrefixPaths(t *testing.T) {
+	r := &PodmanRunner{
+		OutputDir: "/out",
+		CacheDir:  "/cache",
+	}
+	job := Job{
+		Name:      "pkg",
+		Version:   "1.0.0",
+		PackPaths: []string{"/packs/openssl"},
+	}
+	args := strings.Join(r.buildArgs(job), " ")
+	if !strings.Contains(args, "-v /packs/openssl:/opt/packs/pack0:ro") {
+		t.Fatalf("expected pack mount in args: %s", args)
+	}
+	if !strings.Contains(args, "-e DEPS_PREFIXES=/opt/packs/pack0") {
+		t.Fatalf("expected pack prefix env in args: %s", args)
+	}
+	if strings.Contains(args, "/opt/packs/pack0/usr/local") {
+		t.Fatalf("unexpected nested usr/local prefix in args: %s", args)
+	}
+}
+
+func TestPodmanRunnerBuildCmdPrefersRuntimePythonCandidates(t *testing.T) {
+	r := &PodmanRunner{}
+	cmd := strings.Join(r.buildCmd(Job{}), "\n")
+	want := []string{
+		`if [ -z "${PYTHON_BIN:-}" ] && [ -z "${PYTHON_PATH:-}" ] && [ -n "${RUNTIME_PATH:-}" ]; then`,
+		`"${RUNTIME_PATH}/bin/python3"`,
+		`"${RUNTIME_PATH}"/bin/python3.*`,
+		`"${RUNTIME_PATH}/bin/python"`,
+	}
+	for _, fragment := range want {
+		if !strings.Contains(cmd, fragment) {
+			t.Fatalf("expected runtime python selection fragment %q in command: %s", fragment, cmd)
+		}
+	}
+}
+
 // PodmanRunner now fails if podman is missing; ensure error is returned.
 func TestPodmanRunnerNoBinary(t *testing.T) {
 	origPath := os.Getenv("PATH")

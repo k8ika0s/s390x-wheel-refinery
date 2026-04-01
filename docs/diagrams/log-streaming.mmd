@@ -1,6 +1,7 @@
 flowchart LR
   worker[Worker Runner] -- "NDJSON log chunks" --> cp[Control plane API]
   cp -- "insert log chunks" --> db[Postgres]
+  cp -- "refresh active build while logs flow" --> status[build_status]
   cp -- "publish log chunks" --> hub[Log hub]
   hub -- "WebSocket log chunks" --> ui[UI Log Viewer]
   ui -- "GET log chunks" --> cp

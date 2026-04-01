@@ -14,9 +14,9 @@ func TestZotStoreHas(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		switch r.URL.Path {
-		case "/v2/artifacts/manifests/sha256:present":
+		case "/v2/artifacts/manifests/sha256-present":
 			w.WriteHeader(http.StatusOK)
-		case "/v2/artifacts/manifests/sha256:missing":
+		case "/v2/artifacts/manifests/sha256-missing":
 			w.WriteHeader(http.StatusNotFound)
 		default:
 			w.WriteHeader(http.StatusBadRequest)
@@ -36,7 +36,7 @@ func TestZotStoreHas(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected present to be true")
 	}
-	if gotPath != "/v2/artifacts/manifests/sha256:present" {
+	if gotPath != "/v2/artifacts/manifests/sha256-present" {
 		t.Fatalf("unexpected path: %s", gotPath)
 	}
 

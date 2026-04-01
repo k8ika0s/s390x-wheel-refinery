@@ -36,6 +36,10 @@ func heartbeatLoop(ctx context.Context, cfg Config, w *Worker, workerID, runID s
 	ticker := time.NewTicker(time.Duration(intervalSec) * time.Second)
 	defer ticker.Stop()
 	send := func() {
+		currentCfg := cfg
+		if w != nil {
+			currentCfg = w.Cfg
+		}
 		buildPoolSize := cfg.BuildPoolSize
 		if buildPool != nil && buildPool.Load() > 0 {
 			buildPoolSize = int(buildPool.Load())
@@ -53,6 +57,7 @@ func heartbeatLoop(ctx context.Context, cfg Config, w *Worker, workerID, runID s
 			"heartbeat_interval_sec": intervalSec,
 			"cas_hits":               w.casHits.Load(),
 			"cas_misses":             w.casMisses.Load(),
+			"metadata":               workerConfigMetadata(currentCfg),
 		}
 		if err := postHeartbeat(ctx, cfg, payload); err != nil {
 			log.Printf("heartbeat: %v", err)

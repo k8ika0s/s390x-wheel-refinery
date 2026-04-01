@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Run starts the worker HTTP server (stub for now).
@@ -76,7 +77,7 @@ func Run() error {
 		}
 		go plannerLoop(ctx, cfg, popURL, statusURL, listURL, &planPool, &pyVersion, &platformTag)
 	}
-	go pollSettings(ctx, cfg, &planPool, &buildPool, &pyVersion, &platformTag)
+	go pollSettings(ctx, cfg, w, &planPool, &buildPool, &pyVersion, &platformTag)
 	go heartbeatLoop(ctx, cfg, w, workerID, workerRunID, &planPool, &buildPool)
 	if cfg.AutoBuild {
 		go buildLoop(ctx, cfg, runDrain)
@@ -182,6 +183,10 @@ func Run() error {
 			wr.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
+
+	// Add Prometheus metrics endpoint
+	mux.Handle("/metrics", promhttp.Handler())
+
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: mux}
 	go func() {
 		<-context.Background().Done()
@@ -229,8 +234,8 @@ func requeueStaleBuilds(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// pollSettings periodically refreshes pool sizes from control-plane settings.
-func pollSettings(ctx context.Context, cfg Config, planPool, buildPool *atomic.Int32, pyVersion, platformTag *atomic.Value) {
+// pollSettings periodically refreshes worker-tunable settings from the control-plane.
+func pollSettings(ctx context.Context, cfg Config, worker *Worker, planPool, buildPool *atomic.Int32, pyVersion, platformTag *atomic.Value) {
 	if cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -253,6 +258,14 @@ func pollSettings(ctx context.Context, cfg Config, planPool, buildPool *atomic.I
 			}
 			if platformTag != nil && updated.PlatformTag != "" {
 				platformTag.Store(updated.PlatformTag)
+			}
+			if worker != nil {
+				worker.Cfg.InferEnabled = updated.InferEnabled
+				worker.Cfg.InferModel = updated.InferModel
+				worker.Cfg.InferTimeoutSec = updated.InferTimeoutSec
+				worker.Cfg.InferMaxRetries = updated.InferMaxRetries
+				worker.Cfg.InferSystemPrompt = updated.InferSystemPrompt
+				worker.Cfg.InferUserPromptTemplate = updated.InferUserPromptTemplate
 			}
 		}
 	}
@@ -284,10 +297,16 @@ func overlaySettingsFromControlPlane(cfg Config) Config {
 		return cfg
 	}
 	var payload struct {
-		PlanPoolSize  int    `json:"plan_pool_size"`
-		BuildPoolSize int    `json:"build_pool_size"`
-		PythonVersion string `json:"python_version"`
-		PlatformTag   string `json:"platform_tag"`
+		PlanPoolSize            int    `json:"plan_pool_size"`
+		BuildPoolSize           int    `json:"build_pool_size"`
+		PythonVersion           string `json:"python_version"`
+		PlatformTag             string `json:"platform_tag"`
+		InferEnabled            *bool  `json:"infer_enabled"`
+		InferModel              string `json:"infer_model"`
+		InferTimeoutSec         int    `json:"infer_timeout_sec"`
+		InferMaxRetries         int    `json:"infer_max_retries"`
+		InferSystemPrompt       string `json:"infer_system_prompt"`
+		InferUserPromptTemplate string `json:"infer_user_prompt_template"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		log.Printf("settings decode failed: %v", err)
@@ -304,6 +323,24 @@ func overlaySettingsFromControlPlane(cfg Config) Config {
 	}
 	if payload.PlatformTag != "" && validPlatformTag(payload.PlatformTag) {
 		cfg.PlatformTag = payload.PlatformTag
+	}
+	if payload.InferEnabled != nil {
+		cfg.InferEnabled = *payload.InferEnabled
+	}
+	if payload.InferModel != "" {
+		cfg.InferModel = payload.InferModel
+	}
+	if payload.InferTimeoutSec > 0 {
+		cfg.InferTimeoutSec = payload.InferTimeoutSec
+	}
+	if payload.InferMaxRetries >= 0 {
+		cfg.InferMaxRetries = payload.InferMaxRetries
+	}
+	if payload.InferSystemPrompt != "" {
+		cfg.InferSystemPrompt = payload.InferSystemPrompt
+	}
+	if payload.InferUserPromptTemplate != "" {
+		cfg.InferUserPromptTemplate = payload.InferUserPromptTemplate
 	}
 	return cfg
 }

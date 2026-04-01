@@ -29,12 +29,16 @@ This document describes the **current** queue model used by the control-plane an
   - `POST /api/build-queue/pop?max=N`
 - The control-plane marks them `leased` and increments attempts.
 - The worker then posts `building` when the container starts.
+- Fresh plans for the same package/version now clear stale recipes, hint IDs,
+  and metadata before reuse so a replay starts from a clean automation state.
 
 ## Data Model (Postgres)
 - `pending_inputs`: uploaded requirements/wheels awaiting planning.
 - `plans`: plan snapshot + optional DAG JSON.
 - `plan_metadata`: links `pending_inputs` to `plans` with a status.
 - `build_status`: the durable build queue with attempts, backoff, and timestamps.
+- `build_attempts`: per-attempt history rows used for retry analysis and scale
+  readiness metrics.
 
 ## Status Lifecycles
 See `docs/diagrams/queue-status-lifecycle.mmd` for the full flow.
@@ -79,6 +83,11 @@ See `docs/diagrams/queue-status-lifecycle.mmd` for the full flow.
 - **Build polling**: Enabled with `AUTO_BUILD=true`. The worker calls `/api/build-queue/pop` at `BUILD_POLL_INTERVAL_SEC`.
 - **Concurrency**: `PLAN_POOL_SIZE` and `BUILD_POOL_SIZE` cap parallelism.
 - **Settings overlay**: The worker periodically reads `/api/settings` to update pool sizes and python/platform tags.
+- **Bootstrap status**: Leased batches are promoted to `building` before long
+  runtime/pack preparation begins so the queue does not appear idle during
+  dependency bootstrap.
+- **Active log touch**: While logs are still streaming, the control-plane
+  refreshes active `building` rows to avoid stale-build recycle.
 
 ## API Touchpoints
 - Uploads:
@@ -108,3 +117,5 @@ See `docs/diagrams/queue-status-lifecycle.mmd` for the full flow.
 - UI `auto_plan` / `auto_build` toggles are informational; they do not override env-configured loops.
 - Plan queue metrics are limited; expose queue depth for plan queue backend.
 - Add integration tests for upload → plan → build end-to-end.
+- Scale out conservatively. Get clean remediation evidence on hard packages
+  first, then move to `2-3` workers rather than opening broad parallel intake.

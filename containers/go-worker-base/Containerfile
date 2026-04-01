@@ -1,0 +1,21 @@
+# Cached base for the worker runtime. Rebuild only when nested podman/runtime
+# dependencies change.
+FROM registry.access.redhat.com/ubi8/ubi:8.9
+
+RUN dnf -y install \
+      podman fuse-overlayfs \
+      gcc gcc-c++ make automake autoconf libtool \
+      perl git wget patch xz bzip2 tar findutils unzip \
+      openssl-devel libffi-devel zlib-devel \
+      which python3 python3-pip \
+      cmake ninja-build pkgconf && \
+    dnf clean all
+
+RUN mkdir -p /etc/containers && \
+    cat > /etc/containers/storage.conf <<'EOF'
+[storage]
+driver = "vfs"
+graphroot = "/var/lib/containers/storage"
+runroot = "/run/containers/storage"
+mount_program = ""
+EOF

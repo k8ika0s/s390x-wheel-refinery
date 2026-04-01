@@ -11,7 +11,7 @@ import (
 )
 
 // ZotStore checks an OCI registry (e.g., Zot) for artifacts.
-// It uses HEAD requests against /v2/<repo>/manifests/<digest>.
+// It uses HEAD requests against a stable manifest reference derived from the artifact digest.
 type ZotStore struct {
 	BaseURL  string
 	Repo     string
@@ -27,7 +27,7 @@ func (z ZotStore) client() *http.Client {
 	return &http.Client{Timeout: 10 * time.Second}
 }
 
-// Has reports whether the digest exists as a manifest in the configured repo.
+// Has reports whether the artifact exists as a manifest in the configured repo.
 func (z ZotStore) Has(ctx context.Context, id artifact.ID) (bool, error) {
 	if z.BaseURL == "" || id.Digest == "" {
 		return false, nil
@@ -36,7 +36,7 @@ func (z ZotStore) Has(ctx context.Context, id artifact.ID) (bool, error) {
 	if repo == "" {
 		repo = "artifacts"
 	}
-	url := fmt.Sprintf("%s/v2/%s/manifests/%s", strings.TrimRight(z.BaseURL, "/"), repo, id.Digest)
+	url := fmt.Sprintf("%s/v2/%s/manifests/%s", strings.TrimRight(z.BaseURL, "/"), repo, refForDigest(id.Digest))
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return false, err

@@ -1,0 +1,14 @@
+# Cached base for the builder image. Rebuild only when toolchain deps change.
+FROM registry.access.redhat.com/ubi8/ubi:8.9
+
+RUN dnf -y install \
+      gcc gcc-c++ make automake autoconf libtool \
+      perl git wget curl patch xz bzip2 tar findutils \
+      openssl-devel libffi-devel zlib-devel \
+      which python3 python3-pip python3-virtualenv \
+      cmake ninja-build pkgconf && \
+    dnf clean all
+
+RUN python3 -m pip install --no-cache-dir setuptools_scm scikit-build && \
+    python3 -m pip install --no-cache-dir auditwheel patchelf && \
+    rm -rf /root/.cache/pip

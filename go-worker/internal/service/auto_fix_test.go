@@ -51,28 +51,36 @@ func TestCompactTracePreservesOrder(t *testing.T) {
 	}
 }
 
-func TestInferHintFromLogDetectsGccToolsetRemediation(t *testing.T) {
-	hint, recipes, note, ok := inferHintFromLog(
-		"../meson.build:25:4: ERROR: Problem encountered: NumPy requires GCC >= 9.3",
-		plan.HintContext{Package: "scikit-learn", PythonVersion: "3.11", PlatformTag: "manylinux2014_s390x"},
-	)
+func TestInferHintFromLogPrefersCompilerToolsetForNumPyGCCMismatch(t *testing.T) {
+	ctxHint := plan.HintContext{
+		Package:       "scikit-learn",
+		Version:       "1.5.2",
+		PythonVersion: "3.11",
+		PlatformTag:   "manylinux2014_s390x",
+	}
+	logContent := "../meson.build:25:4: ERROR: Problem encountered: NumPy requires GCC >= 9.3"
+	hint, recipes, note, ok := inferHintFromLog(logContent, ctxHint)
 	if !ok {
-		t.Fatalf("expected inferred hint")
+		t.Fatal("expected heuristic match")
 	}
 	if hint.Confidence != "high" {
 		t.Fatalf("expected high confidence, got %q", hint.Confidence)
 	}
-	if !strings.Contains(note, "GCC version floor 9.3") {
-		t.Fatalf("unexpected note %q", note)
+	if !strings.Contains(note, "compiler toolset") {
+		t.Fatalf("expected compiler toolset note, got %q", note)
 	}
-	joined := strings.Join(recipes, ",")
+	got := strings.Join(recipes, ",")
 	for _, want := range []string{
 		"dnf:gcc-toolset-12",
+		"dnf:gcc-toolset-12-gcc",
+		"dnf:gcc-toolset-12-gcc-c++",
 		"env:CC=/opt/rh/gcc-toolset-12/root/usr/bin/gcc",
 		"env:CXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++",
+		"env:LD_LIBRARY_PATH=/opt/rh/gcc-toolset-12/root/usr/lib64:${LD_LIBRARY_PATH:-}",
+		"env:NPY_ALLOW_BLAS_UNSAFE=1",
 	} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("expected recipes to contain %q, got %q", want, joined)
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected recipes to contain %q, got %q", want, got)
 		}
 	}
 }

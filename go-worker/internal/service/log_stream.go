@@ -111,6 +111,7 @@ func (l *logStreamWriter) emitChunk(content string) error {
 
 func (w *Worker) openLogStream(ctx context.Context, job runner.Job, attempt int) io.WriteCloser {
 	if w.Reporter == nil || w.Reporter.BaseURL == "" {
+		log.Printf("log stream disabled for %s@%s: reporter base URL empty", job.Name, job.Version)
 		return nil
 	}
 	name := url.PathEscape(job.Name)
@@ -123,9 +124,11 @@ func (w *Worker) openLogStream(ctx context.Context, job runner.Job, attempt int)
 	if qs := q.Encode(); qs != "" {
 		endpoint = endpoint + "?" + qs
 	}
+	log.Printf("opening log stream for %s@%s attempt=%d endpoint=%s", job.Name, job.Version, attempt, endpoint)
 	pr, pw := io.Pipe()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, pr)
 	if err != nil {
+		log.Printf("log stream request build failed for %s@%s: %v", job.Name, job.Version, err)
 		_ = pr.Close()
 		_ = pw.Close()
 		return nil
@@ -141,15 +144,26 @@ func (w *Worker) openLogStream(ctx context.Context, job runner.Job, attempt int)
 	go func() {
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("log stream send failed: %v", err)
+			log.Printf("log stream send failed for %s@%s: %v", job.Name, job.Version, err)
 			_ = pr.CloseWithError(err)
 			return
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode >= 300 {
-			log.Printf("log stream failed: status=%s", resp.Status)
+			log.Printf("log stream failed for %s@%s: status=%s", job.Name, job.Version, resp.Status)
+			return
 		}
+		log.Printf("log stream completed for %s@%s: status=%s", job.Name, job.Version, resp.Status)
 	}()
 	return newLogStreamWriter(pw)
+}
+
+func writeBootstrapLog(w io.Writer, format string, args ...any) {
+	if w == nil {
+		return
+	}
+	msg := fmt.Sprintf(format, args...)
+	log.Printf("bootstrap log: %s", msg)
+	_, _ = fmt.Fprintf(w, "%s\n", msg)
 }
