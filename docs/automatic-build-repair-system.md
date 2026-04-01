@@ -104,6 +104,7 @@ stale while logs are still flowing.
 - **Auto-build**: The worker polls the build queue on `BUILD_POLL_INTERVAL_SEC` and auto-drains as long as there is capacity.
 - **Build pool**: `BUILD_POOL_SIZE` caps concurrency.
 - **Plan polling**: `PLAN_POLL_ENABLED=true` allows workers to poll pending inputs for planning on `PLAN_POLL_INTERVAL_SEC`.
+- **Scale gate**: The current target is to prove clean evidence and retry attribution on one worker first, then move to `2-3` workers with conservative pooling before considering broader intake.
 
 ## Workflow Diagrams (Mermaid)
 - High-level build workflow: `docs/diagrams/automatic-build-workflow.mmd`
@@ -166,6 +167,7 @@ Live logs are captured while the container runs and are visible in the UI withou
 3) The control-plane stores each chunk in the `log_chunks` table and broadcasts it to connected UI clients.
 4) The UI pulls any existing chunks first (`GET /api/logs/chunks/{name}/{version}`), then keeps a WebSocket open (`GET /api/logs/stream/{name}/{version}`) to receive new chunks live.
 5) When the job finishes, the worker still posts the final summarized log entry to `/api/logs` for long-term storage and export.
+6) While logs are still flowing, the control-plane refreshes the active build row so long runtime/bootstrap phases are not recycled as stale.
 
 ### Chunk payload format
 Each chunk is a JSON line with the fields below. If `seq` or `timestamp` are missing, the control-plane fills them in.

@@ -8,6 +8,7 @@ This guide is written in plain language for day to day use. It explains how to u
 - Retries failed builds with automatic fixes when possible.
 - Streams build logs live in the UI.
 - Stores outputs (wheels, repairs, manifests) in object storage and/or CAS, with local staging for debugging.
+- Records structured remediation evidence for each attempt so you can later see what failed, what changed, and what drove the retry.
 
 If you are new, think of it as a factory: you drop in a shopping list (requirements), and the system produces s390x wheels, while recording every step and retry it makes.
 
@@ -205,6 +206,11 @@ This will upload a tiny requirements file, create a plan, enqueue builds, and ta
 - Confirm the worker can reach `/api/logs/stream`.
 - Try opening `/api/logs/chunks/{name}/{version}` directly.
 
+### A worker is online but not ready
+- Open the Workers view or call `/api/workers`.
+- Check `config_ready`, `config_drift`, `infer_url_configured`, `infer_token_configured`, `prompt_version`, and `runtime_env_source`.
+- If `runtime_env_source` is not your expected env file, restart with `./scripts/stack-up-no-build.sh` so runtime overrides are reloaded.
+
 ### Token issues
 - Set `UI_TOKEN` for UI actions and `WORKER_TOKEN` for worker actions.
 - The UI sends `X-UI-Token` and the worker sends `X-Worker-Token`.
@@ -229,3 +235,4 @@ The long-term goal is to grow object storage into a large, searchable library of
 - `docs/automatic-build-repair-system.md` for deep technical detail.
 - `docs/plan-build-queues.md` for the queue model.
 - `docs/diagrams/README.md` for diagram index.
+- `/api/metrics` and `/metrics` for readiness counters such as first-attempt success, retry success, hint application rate, and worker configuration drift.

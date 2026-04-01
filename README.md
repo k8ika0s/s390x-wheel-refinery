@@ -164,6 +164,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - Builder image details: `containers/refinery-builder/Containerfile`.
 
 ## Status and known gaps
+- The next deliberate scale step is `2-3` workers on curated package sets, not broad multi-host fan-out. The evidence-quality gate should stay ahead of throughput.
 - Pack dependency metadata is currently hardcoded in the planner; promoting this to a catalog is planned.
 - Ensure real pack/runtime recipes are built and pushed in environments beyond local smoke (builder image must be built/published where workers run).
 - Continue to validate the structured remediation evidence path on hard packages such as `pandas` and `scikit-learn` before increasing worker count beyond the current controlled rollout.
