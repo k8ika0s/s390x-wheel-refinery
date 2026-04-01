@@ -111,6 +111,7 @@ func (w *Worker) LoadPlan() error {
 			if err != nil {
 				return err
 			}
+			sanitizePlanSnapshot(w.Cfg, &snap)
 		}
 	}
 	w.mu.Lock()

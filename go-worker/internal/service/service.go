@@ -178,6 +178,7 @@ func Run() error {
 				_, _ = wr.Write([]byte(err.Error()))
 				return
 			}
+			sanitizePlanSnapshot(cfg, &snap)
 			writeJSON(wr, http.StatusOK, snap)
 		default:
 			wr.WriteHeader(http.StatusMethodNotAllowed)

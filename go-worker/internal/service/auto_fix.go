@@ -90,6 +90,8 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 	var llmSuggestionIgnored bool
 	var llmIgnoreReason string
 	var currentPromptVersion = promptVersion(w.Cfg)
+	var inferredHint *plan.Hint
+	var inferredHintSource string
 	applyInferred := func(hint plan.Hint, hintRecipes []string, note string, sourceLabel string) (bool, *autoFixResult) {
 		addTrace("%s inferred hint pattern %s", sourceLabel, hint.Pattern)
 		if hint.ID == "" {
@@ -109,38 +111,13 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 			hint = existing
 			if merged {
 				addTrace("merged inferred hint into %s", hint.ID)
-				if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
-					if err := w.saveAutoHint(hint); err != nil {
-						log.Printf("auto-fix: hint merge save failed for %s: %v", hint.ID, err)
-					} else {
-						saved = append(saved, hint.ID)
-					}
-				}
 			}
 		}
 		if hint.ID == "" {
 			hint.ID = autoHintID(hint, ctxHint)
 		}
-		if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
-			if w.canSaveAutoHint(job.Name) && (knownHints == nil || !knownHints[hint.ID]) {
-				if err := w.saveAutoHint(hint); err != nil {
-					log.Printf("auto-fix: hint save failed for %s: %v", hint.ID, err)
-					addTrace("hint save failed: %s", hint.ID)
-					hintSaveFailed = true
-				} else {
-					knownHints[hint.ID] = true
-					w.markAutoHintSaved(job.Name)
-					saved = append(saved, hint.ID)
-					addTrace("saved inferred hint %s", hint.ID)
-				}
-			} else if !w.canSaveAutoHint(job.Name) {
-				log.Printf("auto-fix: rate limit hit for %s; hint not saved", job.Name)
-				if reason == "" {
-					reason = "rate limit: hint not saved"
-				}
-				addTrace("rate limit hit: hint not saved")
-			}
-		}
+		inferredHint = cloneHint(hint)
+		inferredHintSource = strings.TrimSpace(sourceLabel)
 		matchedIDs = append(matchedIDs, hint.ID)
 		recipes = append(recipes, hintRecipes...)
 		if reason == "" {
@@ -226,6 +203,38 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 	}
 	if resolution.DegradedReason != "" {
 		addTrace("degraded mode: %s", resolution.DegradedReason)
+	}
+	if inferredHint != nil {
+		if persisted, persistReason := persistableResolvedHint(*inferredHint, resolution); persisted != nil {
+			if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
+				if w.canSaveAutoHint(job.Name) && (knownHints == nil || !knownHints[persisted.ID]) {
+					if err := w.saveAutoHint(*persisted); err != nil {
+						log.Printf("auto-fix: hint save failed for %s: %v", persisted.ID, err)
+						addTrace("hint save failed: %s", persisted.ID)
+						hintSaveFailed = true
+					} else {
+						knownHints[persisted.ID] = true
+						w.markAutoHintSaved(job.Name)
+						saved = append(saved, persisted.ID)
+						addTrace("saved inferred hint %s", persisted.ID)
+					}
+				} else if !w.canSaveAutoHint(job.Name) {
+					log.Printf("auto-fix: rate limit hit for %s; hint not saved", job.Name)
+					if reason == "" {
+						reason = "rate limit: hint not saved"
+					}
+					addTrace("rate limit hit: hint not saved")
+				}
+			}
+		} else {
+			if persistReason == "" {
+				persistReason = "superseded by remediation policy"
+			}
+			if inferredHintSource == "" {
+				inferredHintSource = "inferred"
+			}
+			addTrace("skipped inferred hint save (%s): %s", inferredHintSource, persistReason)
+		}
 	}
 	recipes = resolution.Recipes
 

@@ -282,6 +282,7 @@ func planOne(ctx context.Context, client *http.Client, cfg Config, store objects
 	if err != nil {
 		return err
 	}
+	sanitizePlanSnapshot(cfg, &snap)
 	if err := postPlan(ctx, client, cfg, snap, pi.ID); err != nil {
 		return fmt.Errorf("post plan: %w", err)
 	}
