@@ -16,7 +16,7 @@ export RECIPE_DIGEST="$(compute_recipe_digest "$0" "$SCRIPT_DIR/_common.sh" "$SC
 pack_start
 require_tool make
 require_tool gcc
-require_tool gfortran
+ensure_tool_package gfortran gcc-gfortran gfortran
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT

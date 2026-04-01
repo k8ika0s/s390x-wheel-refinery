@@ -20,6 +20,30 @@ require_tool() {
   command -v "$t" >/dev/null 2>&1 || die "required tool not found in PATH: $t"
 }
 
+ensure_tool_package() {
+  local tool="$1"
+  local dnf_pkg="${2:-}"
+  local apt_pkg="${3:-$dnf_pkg}"
+  if command -v "$tool" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ -n "$dnf_pkg" ]] && command -v dnf >/dev/null 2>&1; then
+    log "installing missing tool package via dnf: $dnf_pkg"
+    dnf -y install "$dnf_pkg"
+    command -v "$tool" >/dev/null 2>&1 || die "tool still missing after dnf install: $tool"
+    return 0
+  fi
+  if [[ -n "$apt_pkg" ]] && command -v apt-get >/dev/null 2>&1; then
+    log "installing missing tool package via apt: $apt_pkg"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y "$apt_pkg"
+    command -v "$tool" >/dev/null 2>&1 || die "tool still missing after apt install: $tool"
+    return 0
+  fi
+  die "required tool not found in PATH: $tool"
+}
+
 nproc_() {
   if command -v nproc >/dev/null 2>&1; then nproc
   elif command -v getconf >/dev/null 2>&1; then getconf _NPROCESSORS_ONLN
