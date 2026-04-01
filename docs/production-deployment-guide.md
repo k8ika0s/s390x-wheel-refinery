@@ -66,14 +66,27 @@ The system uses three main images:
 - `s390x-wheel-refinery_control-plane` (API + UI proxy).
 - `s390x-wheel-refinery_worker` (worker runtime).
 
+The builder and worker runtime now each have a cached UBI8 base image:
+- `localhost/s390x-wheel-refinery_builder-base:ubi8`
+- `localhost/s390x-wheel-refinery_worker-base:ubi8`
+
 In production, you generally want a consistent builder image across workers so builds are reproducible. Rebuild the builder image
 only when you intend to change build tooling. That is the main reason the builder is separated from the control-plane.
+The builder and worker runtimes now each have cached UBI8 base images. On `zkd0`, the first `builder-base` / `worker-base` build is
+expensive, but normal service iterations should only rebuild the thin service layers unless `REBUILD_BASES=1` is set.
+Normal iteration should reuse the cached bases; reserve `REBUILD_BASES=1` for
+real dependency-layer changes.
 
 ## Configuration choices that affect reliability
 
 ### Worker identity
 Set `WORKER_ID` to a stable value per worker. This gives you clear ownership in build status and avoids confusion when multiple
 workers are active.
+
+### Runtime env provenance
+For remote operators, keep runtime and inference overrides in `~/.config/refinery/runtime.env` and start through
+`./scripts/stack-up-no-build.sh`. Worker heartbeats now report whether that file was loaded and whether the effective inference
+configuration is complete.
 
 ### CAS and object store concurrency
 `CAS_MAX_PARALLEL` and `OBJECT_STORE_MAX_PARALLEL` cap concurrent transfers. These defaults protect your storage from bursts
@@ -90,15 +103,52 @@ A deployment is considered healthy when:
 - The UI shows a connected API status.
 - Worker heartbeats show online in the Settings → Workers list.
 - A test build produces logs and a manifest entry.
+- `/api/metrics` or `/metrics` show sane worker readiness and retry/hint rates.
+- Worker readiness surfaces show configured workers and no config drift.
 
 If any of those steps fail, the fastest path is to check control-plane logs first (API errors), then worker logs (build errors),
 then storage logs (CAS or object store failures). The `docs/alerts-runbooks.md` guide maps common symptoms to likely causes.
+
+## `zkd0` deployment notes
+- Use `podman build --network host` for image builds there; `podman compose build` still hits network issues on some image stages.
+- If bridge networking is flaky, use `COMPOSE_FILE=podman-compose.hostnet.yml ./scripts/stack-up-no-build.sh`.
+- Publish the builder image into local Zot with `./scripts/publish-builder-image.sh` and point host-network workers at `127.0.0.1:5000/refinery-builder:latest`.
+
+### `zkd0`-specific deployment notes
+- Build images with `podman build --network host` or `./scripts/build-stack-images-hostnet.sh`; `podman compose build`
+  is still unreliable there for some multi-stage images.
+- Publish the builder image into local Zot with `./scripts/publish-builder-image.sh` and point workers at
+  `127.0.0.1:5000/refinery-builder:latest`.
+- If `netavark` bridge startup is unstable, use:
+  `COMPOSE_FILE=podman-compose.hostnet.yml ./scripts/stack-up-no-build.sh`
+- Store remote runtime overrides, inference config, and builder wiring in
+  `~/.config/refinery/runtime.env`; the worker heartbeat now reports whether
+  that file was loaded successfully.
 
 ## Scaling and multi-worker behavior
 
 Multiple workers are supported, and build leases are stamped with `worker_id` so you can see which worker owns a job. This makes
 it safe to scale horizontally without double builds. If you use a shared queue backend (Redis/Kafka), ensure all workers point to
 the same control-plane and queue, and keep `WORKER_ID` unique per worker.
+Before increasing worker count, verify the readiness signals now exposed by the control-plane:
+- configured workers vs config drift,
+- first-attempt and retry success rates,
+- hint application vs LLM fallback rates,
+- ignored LLM suggestions,
+- hint save failures,
+- stale requeue rate.
+
+Those metrics are the intended gate for moving from one worker to a controlled `2-3` worker rollout.
+
+For this stack, the recommended first scale step is `2-3` workers with a
+conservative `BUILD_POOL_SIZE`, not broad uncontrolled intake. Before scaling
+past one worker, verify:
+- clean fresh-plan semantics (no stale recipes or hint IDs),
+- worker heartbeats show `config_ready=true`,
+- attempt/event metadata is attributable enough to explain retries without
+  rereading raw logs,
+- `/api/metrics` and `/metrics` show understandable remediation source and retry
+  behavior under load.
 
 ## Backups and retention
 

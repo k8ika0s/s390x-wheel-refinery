@@ -1,19 +1,28 @@
 flowchart TD
-    subgraph Host s390x
-        subgraph Compose Stack
-            API[api: Go control-plane/worker trigger]
-            UI[ui: React SPA]
-            WORKER[worker: optional webhook runner]
-            VOL_OUT[/output/]
-            VOL_CACHE[/cache/]
-            OBJ[MinIO bucket]
+    subgraph "Host s390x (zkd0)"
+        subgraph "Forge stack (host network when needed)"
+            API["control-plane :18080"]
+            UI["ui"]
+            WORKER["worker :19000"]
+            PG["postgres"]
+            REDIS["redis"]
+            ZOT["zot :5000"]
+            MINIO["minio :9000"]
+            VOL_OUT["/output"]
+            VOL_CACHE["/cache"]
         end
+        BUILDER["builder image in Zot\n127.0.0.1:5000/refinery-builder:latest"]
+        RUNTIME["~/.config/refinery/runtime.env"]
     end
-    VOL_OUT --- API
-    VOL_CACHE --- API
+    UI --> API
+    API --> PG
+    API --> REDIS
+    API --> MINIO
+    WORKER --> API
+    WORKER --> REDIS
+    WORKER --> ZOT
+    WORKER --> MINIO
+    WORKER --> BUILDER
+    RUNTIME --> WORKER
     VOL_OUT --- WORKER
     VOL_CACHE --- WORKER
-    OBJ --- API
-    OBJ --- WORKER
-    UI --> API
-    API <-- webhook --> WORKER
