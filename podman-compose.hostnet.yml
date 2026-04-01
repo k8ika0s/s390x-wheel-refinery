@@ -141,6 +141,7 @@ services:
       REDIS_URL: redis://127.0.0.1:6379
       PODMAN_BIN: podman
       CONTAINER_IMAGE: ${CONTAINER_IMAGE:-127.0.0.1:5000/refinery-builder:latest}
+      CONTAINER_IMAGE_NATIVE_HEAVY: ${CONTAINER_IMAGE_NATIVE_HEAVY:-127.0.0.1:5000/refinery-builder-native:latest}
       CONTAINER_IMAGE_TLS_VERIFY: ${CONTAINER_IMAGE_TLS_VERIFY:-false}
       CAS_REGISTRY_URL: http://127.0.0.1:5000
       CAS_REGISTRY_REPO: artifacts

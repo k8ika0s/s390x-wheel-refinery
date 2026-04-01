@@ -144,6 +144,7 @@ services:
       REDIS_URL: redis://redis:6379
       PODMAN_BIN: podman
       CONTAINER_IMAGE: ${CONTAINER_IMAGE:-refinery-builder:latest}
+      CONTAINER_IMAGE_NATIVE_HEAVY: ${CONTAINER_IMAGE_NATIVE_HEAVY:-refinery-builder-native:latest}
       CONTAINER_IMAGE_TLS_VERIFY: ${CONTAINER_IMAGE_TLS_VERIFY:-false}
       CAS_REGISTRY_URL: http://zot:5000
       CAS_REGISTRY_REPO: artifacts
