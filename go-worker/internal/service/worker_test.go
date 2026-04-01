@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/builder"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/queue"
@@ -408,6 +409,39 @@ func TestFetchRuntime(t *testing.T) {
 	}
 }
 
+func TestFetchRuntimeUsesLocalCacheBeforeRemoteFetch(t *testing.T) {
+	dir := t.TempDir()
+	tarBuf, rtDigest := sampleRuntimeTarWithDigest()
+	localCAS := filepath.Join(dir, "cas")
+	tarPath := filepath.Join(localCAS, strings.ReplaceAll(rtDigest, ":", "_")+".tar")
+	if err := os.MkdirAll(localCAS, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tarPath, tarBuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := &Worker{
+		Cfg: Config{CacheDir: dir, LocalCASDir: localCAS},
+		Fetcher: cas.Fetcher{
+			BaseURL: "http://example",
+			Repo:    "artifacts",
+			Client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				t.Fatalf("remote fetch should not run when runtime tar is already cached locally")
+				return nil, nil
+			})},
+		},
+		packPath: make(map[string]string),
+	}
+	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: rtDigest}
+	path := w.fetchRuntime(context.Background(), "3.11", rtID, "reuse", nil, nil, nil)
+	if path == "" {
+		t.Fatalf("expected cached runtime path")
+	}
+	if !strings.HasSuffix(path, filepath.Join("usr", "local")) {
+		t.Fatalf("expected prefix path, got %s", path)
+	}
+}
+
 func TestResolvePacksBuildsArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	w := &Worker{
@@ -425,6 +459,43 @@ func TestResolvePacksBuildsArtifacts(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(paths[0], "include", "stub.h")); err != nil {
 		t.Fatalf("expected built pack payload: %v", err)
+	}
+}
+
+func TestResolvePacksUsesLocalCacheBeforeRemoteFetch(t *testing.T) {
+	dir := t.TempDir()
+	localCAS := filepath.Join(dir, "cas")
+	if err := os.MkdirAll(localCAS, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	packID := artifact.ID{Type: artifact.PackType, Digest: "sha256:packstub"}
+	tarPath := filepath.Join(localCAS, strings.ReplaceAll(packID.Digest, ":", "_")+".tar")
+	if err := builder.BuildPack(tarPath, builder.PackBuildOpts{
+		Digest:    packID.Digest,
+		Meta:      map[string]any{"name": "stub"},
+		Cmd:       samplePackBuildCmd(),
+		LogWriter: io.Discard,
+	}); err != nil {
+		t.Fatalf("build cached pack artifact: %v", err)
+	}
+	w := &Worker{
+		Cfg: Config{CacheDir: dir, LocalCASDir: localCAS},
+		Fetcher: cas.Fetcher{
+			BaseURL: "http://example",
+			Repo:    "artifacts",
+			Client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				t.Fatalf("remote fetch should not run when pack tar is already cached locally")
+				return nil, nil
+			})},
+		},
+		packPath: make(map[string]string),
+	}
+	paths := w.resolvePacks(context.Background(), []artifact.ID{packID}, map[string]string{packID.Digest: "reuse"}, map[string]map[string]any{packID.Digest: {"name": "stub"}}, nil)
+	if len(paths) != 1 || paths[0] == "" {
+		t.Fatalf("expected cached pack path")
+	}
+	if _, err := os.Stat(filepath.Join(paths[0], "include", "stub.h")); err != nil {
+		t.Fatalf("expected cached pack payload: %v", err)
 	}
 }
 

@@ -1669,6 +1669,12 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 		}
 		destPath := filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_")+".tar")
 		extractDir := filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_"))
+		if prefix := cachedPackPrefix(destPath, extractDir); prefix != "" {
+			w.recordCASHit()
+			w.packPath[id.Digest] = prefix
+			paths = append(paths, prefix)
+			continue
+		}
 		fetched := false
 		if w.Fetcher.BaseURL != "" {
 			if err := w.casFetch(ctx, id, destPath); err == nil {
@@ -1740,6 +1746,10 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 	}
 	destPath := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_")+".tar")
 	extractDir := filepath.Join(destDir, strings.ReplaceAll(rtID.Digest, ":", "_"))
+	if prefix := cachedRuntimePrefix(destPath, extractDir); prefix != "" {
+		w.recordCASHit()
+		return prefix
+	}
 	if w.Fetcher.BaseURL != "" {
 		if err := w.casFetch(ctx, rtID, destPath); err == nil {
 			if _, err := os.Stat(destPath); err == nil {
@@ -1777,6 +1787,34 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		}
 	}
 	return ""
+}
+
+func cachedPackPrefix(destPath, extractDir string) string {
+	if _, err := os.Stat(destPath); err != nil {
+		return ""
+	}
+	if err := extractTar(destPath, extractDir); err != nil {
+		return ""
+	}
+	prefix := artifactPrefix(extractDir)
+	if prefix == "" {
+		return ""
+	}
+	return prefix
+}
+
+func cachedRuntimePrefix(destPath, extractDir string) string {
+	if _, err := os.Stat(destPath); err != nil {
+		return ""
+	}
+	if err := extractTar(destPath, extractDir); err != nil {
+		return ""
+	}
+	prefix := artifactPrefix(extractDir)
+	if !runtimeReady(prefix) {
+		return ""
+	}
+	return prefix
 }
 
 func (w *Worker) writeStubArtifact(path, kind, digest string, meta map[string]any) error {
