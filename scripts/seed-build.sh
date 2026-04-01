@@ -94,10 +94,18 @@ deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
 
 while [[ $(date +%s) -lt $deadline ]]; do
   for status in planned queued build_queued planning; do
-    plan_id="$(curl -sS "${API_BASE}/api/pending-inputs?status=${status}" | python3 - "$pending_id" <<'PY'
+    pending_resp="$(curl -sS "${API_BASE}/api/pending-inputs?status=${status}" || true)"
+    if [[ -z "${pending_resp//[[:space:]]/}" || "$pending_resp" == "null" ]]; then
+      continue
+    fi
+    plan_id="$(printf "%s" "$pending_resp" | python3 - "$pending_id" <<'PY'
 import json,sys
 pid=int(sys.argv[1])
-items=json.load(sys.stdin)
+try:
+    items=json.load(sys.stdin)
+except Exception:
+    print("")
+    raise SystemExit
 for item in items:
     if int(item.get("id") or 0) == pid:
         plan_id=item.get("plan_id")
@@ -114,65 +122,6 @@ PY
   done
   sleep "$POLL_INTERVAL"
 done
-
-case "${status:-}" in
-  built|cached|reused)
-    ;;
-  *)
-    echo "Build did not succeed (status: ${status:-unknown})." >&2
-    exit 1
-    ;;
-esac
-
-if [[ "$VERIFY_ARTIFACTS" == "1" ]]; then
-  echo "Verifying manifest and artifact URLs..."
-  manifest_info="$(curl -sS "${API_BASE}/api/manifest?limit=${MANIFEST_LIMIT}" | python3 - "$PACKAGE" "$VERSION" <<'PY'
-import json,sys
-pkg=sys.argv[1].lower()
-ver=sys.argv[2]
-data=json.load(sys.stdin)
-match=None
-for item in data:
-    if str(item.get("name","")).lower() == pkg and str(item.get("version","")) == ver:
-        match=item
-        break
-if not match:
-    print("")
-    raise SystemExit
-status=match.get("status") or ""
-wheel=match.get("wheel_url") or match.get("wheel") or ""
-repair=match.get("repair_url") or ""
-print(f"{status}|{wheel}|{repair}")
-PY
-)"
-  if [[ -z "$manifest_info" ]]; then
-    echo "No manifest entry found for ${PACKAGE} ${VERSION}." >&2
-    exit 1
-  fi
-  manifest_status="${manifest_info%%|*}"
-  rest="${manifest_info#*|}"
-  wheel_url="${rest%%|*}"
-  repair_url="${rest#*|}"
-  if [[ -n "$manifest_status" && "$manifest_status" != "built" && "$manifest_status" != "cached" && "$manifest_status" != "reused" ]]; then
-    echo "Manifest status not successful: ${manifest_status}" >&2
-    exit 1
-  fi
-  if [[ -z "$wheel_url" ]]; then
-    echo "Manifest entry missing wheel URL." >&2
-    exit 1
-  fi
-  if ! check_url "$wheel_url"; then
-    echo "Wheel URL not reachable: ${wheel_url}" >&2
-    exit 1
-  fi
-  if [[ -n "$repair_url" ]]; then
-    if ! check_url "$repair_url"; then
-      echo "Repair URL not reachable: ${repair_url}" >&2
-      exit 1
-    fi
-  fi
-  echo "Artifact verification complete."
-fi
 
 if [[ -z "$plan_id" ]]; then
   echo "Plan id not linked to pending input. Falling back to latest plan." >&2
@@ -295,3 +244,62 @@ PY
   fi
   sleep "$POLL_INTERVAL"
 done
+
+case "${status:-}" in
+  built|cached|reused)
+    ;;
+  *)
+    echo "Build did not succeed (status: ${status:-unknown})." >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$VERIFY_ARTIFACTS" == "1" ]]; then
+  echo "Verifying manifest and artifact URLs..."
+  manifest_info="$(curl -sS "${API_BASE}/api/manifest?limit=${MANIFEST_LIMIT}" | python3 - "$PACKAGE" "$VERSION" <<'PY'
+import json,sys
+pkg=sys.argv[1].lower()
+ver=sys.argv[2]
+data=json.load(sys.stdin)
+match=None
+for item in data:
+    if str(item.get("name","")).lower() == pkg and str(item.get("version","")) == ver:
+        match=item
+        break
+if not match:
+    print("")
+    raise SystemExit
+status=match.get("status") or ""
+wheel=match.get("wheel_url") or match.get("wheel") or ""
+repair=match.get("repair_url") or ""
+print(f"{status}|{wheel}|{repair}")
+PY
+)"
+  if [[ -z "$manifest_info" ]]; then
+    echo "No manifest entry found for ${PACKAGE} ${VERSION}." >&2
+    exit 1
+  fi
+  manifest_status="${manifest_info%%|*}"
+  rest="${manifest_info#*|}"
+  wheel_url="${rest%%|*}"
+  repair_url="${rest#*|}"
+  if [[ -n "$manifest_status" && "$manifest_status" != "built" && "$manifest_status" != "cached" && "$manifest_status" != "reused" ]]; then
+    echo "Manifest status not successful: ${manifest_status}" >&2
+    exit 1
+  fi
+  if [[ -z "$wheel_url" ]]; then
+    echo "Manifest entry missing wheel URL." >&2
+    exit 1
+  fi
+  if ! check_url "$wheel_url"; then
+    echo "Wheel URL not reachable: ${wheel_url}" >&2
+    exit 1
+  fi
+  if [[ -n "$repair_url" ]]; then
+    if ! check_url "$repair_url"; then
+      echo "Repair URL not reachable: ${repair_url}" >&2
+      exit 1
+    fi
+  fi
+  echo "Artifact verification complete."
+fi
