@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -206,6 +208,7 @@ func fromEnv() Config {
 		for _, candidate := range packCatalogCandidates(cfg.PackCatalogPath) {
 			cat, err := pack.Load(candidate)
 			if err == nil {
+				inferPackRecipeDigests(cat, cfg.PackRecipesDir)
 				cfg.PackCatalog = cat
 				cfg.PackCatalogResolvedPath = candidate
 				cfg.PackCatalogLoadError = ""
@@ -232,6 +235,45 @@ func packCatalogCandidates(path string) []string {
 		)
 	}
 	return dedupeStrings(candidates)
+}
+
+func inferPackRecipeDigests(cat *pack.Catalog, recipesDir string) {
+	if cat == nil || len(cat.Packs) == 0 {
+		return
+	}
+	for key, def := range cat.Packs {
+		if strings.TrimSpace(def.RecipeDigest) != "" {
+			continue
+		}
+		if digest := computePackRecipeDigest(recipesDir, def.Recipe); digest != "" {
+			def.RecipeDigest = digest
+			cat.Packs[key] = def
+		}
+	}
+}
+
+func computePackRecipeDigest(recipesDir, recipe string) string {
+	recipesDir = strings.TrimSpace(recipesDir)
+	recipe = strings.TrimSpace(recipe)
+	if recipesDir == "" || recipe == "" {
+		return ""
+	}
+	files := []string{
+		filepath.Join(recipesDir, recipe),
+		filepath.Join(recipesDir, "_common.sh"),
+		filepath.Join(recipesDir, "versions.sh"),
+	}
+	h := sha256.New()
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		if _, err := h.Write(data); err != nil {
+			return ""
+		}
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 func getenv(k, def string) string {

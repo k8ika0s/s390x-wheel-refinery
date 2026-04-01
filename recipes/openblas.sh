@@ -49,7 +49,7 @@ install -d "$PREFIX/lib/pkgconfig"
 cat >"$PREFIX/lib/pkgconfig/openblas.pc" <<EOF
 prefix=$PREFIX
 exec_prefix=\${prefix}
-libdir=\${exec_prefix}/lib
+libdir=$LIBDIR
 includedir=\${prefix}/include
 
 Name: OpenBLAS
@@ -59,6 +59,7 @@ URL: https://www.openblas.net/
 Libs: -L\${libdir} -lopenblas
 Cflags: -I\${includedir}
 EOF
+ln -sf openblas.pc "$PREFIX/lib/pkgconfig/scipy-openblas.pc"
 
 postprocess_prefix "$PREFIX"
 emit_manifest_json "$PACK_OUTPUT"
