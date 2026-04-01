@@ -160,12 +160,14 @@ services:
       INFER_TIMEOUT_SEC: ${INFER_TIMEOUT_SEC:-20}
       INFER_MAX_RETRIES: ${INFER_MAX_RETRIES:-1}
       DEFAULT_RUNTIME_CMD: ${DEFAULT_RUNTIME_CMD:-/app/recipes/cpython311.sh}
+      PACK_CATALOG_PATH: ${PACK_CATALOG_PATH:-/data/pack-catalog.yaml}
       REFINERY_RUNTIME_ENV_LOADED: ${REFINERY_RUNTIME_ENV_LOADED:-0}
       REFINERY_RUNTIME_ENV_SOURCE: ${REFINERY_RUNTIME_ENV_SOURCE:-process-env}
     volumes:
       - ./output:/output
       - ./cache:/cache
       - ./recipes:/app/recipes:ro
+      - ./data:/data:ro
       - podman-storage:/var/lib/containers
     depends_on:
       - control-plane
