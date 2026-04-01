@@ -58,14 +58,19 @@ func TestPodmanRunnerBuildCmdSanitizesHostPackageManagerEnv(t *testing.T) {
 	cmd := strings.Join(r.buildCmd(Job{}), "\n")
 	for _, want := range []string{
 		`run_host_tool()`,
+		`trim_spaces()`,
 		`env -u PYTHONHOME -u PYTHONPATH -u PYTHON_BIN -u PYTHON_PATH`,
 		`run_host_tool dnf -y install`,
 		`run_host_tool apt-get update`,
 		`run_host_tool apt-get install -y`,
+		`r="$(trim_spaces "$r")"`,
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("expected build command to contain %q", want)
 		}
+	}
+	if strings.Contains(cmd, `xargs`) {
+		t.Fatalf("expected build command not to depend on xargs: %s", cmd)
 	}
 }
 

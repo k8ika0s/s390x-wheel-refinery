@@ -202,7 +202,7 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		reason = "applied hint recipes"
 	}
 	if applied {
-		if ok, guardReason := w.canApplyAutoFix(job, signature); !ok {
+		if ok, guardReason := w.canApplyAutoFix(job, signature, merged, remediationSource); !ok {
 			applied = false
 			blockedReason = guardReason
 		}
@@ -290,7 +290,7 @@ func recipeSignature(recipes []string) string {
 	return strings.ToLower(strings.Join(deduped, "|"))
 }
 
-func (w *Worker) canApplyAutoFix(job runner.Job, signature string) (bool, string) {
+func (w *Worker) canApplyAutoFix(job runner.Job, signature string, recipes []string, source string) (bool, string) {
 	if signature == "" {
 		return true, ""
 	}
@@ -306,11 +306,49 @@ func (w *Worker) canApplyAutoFix(job runner.Job, signature string) (bool, string
 			return false, "duplicate auto-fix already applied"
 		}
 		window := time.Duration(w.Cfg.AutoFixRateLimitMin) * time.Minute
-		if window > 0 && !state.lastApplied.IsZero() && time.Since(state.lastApplied) < window {
+		if window > 0 && !state.lastApplied.IsZero() && time.Since(state.lastApplied) < window && !canBypassAutoFixCooldown(recipes, source) {
 			return false, "rate limit: auto-fix cooldown active"
 		}
 	}
 	return true, ""
+}
+
+func canBypassAutoFixCooldown(recipes []string, source string) bool {
+	if strings.TrimSpace(source) != "heuristic" {
+		return false
+	}
+	if len(recipes) == 0 {
+		return false
+	}
+	safe := map[string]bool{
+		"findutils":   true,
+		"cmake":       true,
+		"ninja-build": true,
+		"pkgconf":     true,
+		"pkg-config":  true,
+		"make":        true,
+	}
+	for _, recipe := range recipes {
+		trimmed := strings.TrimSpace(recipe)
+		if trimmed == "" {
+			continue
+		}
+		var mgr, pkg string
+		switch {
+		case strings.HasPrefix(trimmed, "apt:"):
+			mgr = "apt"
+			pkg = strings.TrimSpace(strings.TrimPrefix(trimmed, "apt:"))
+		case strings.HasPrefix(trimmed, "dnf:"):
+			mgr = "dnf"
+			pkg = strings.TrimSpace(strings.TrimPrefix(trimmed, "dnf:"))
+		default:
+			return false
+		}
+		if mgr == "" || pkg == "" || !safe[pkg] {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *Worker) markAutoFixApplied(job runner.Job, signature string) {
@@ -744,6 +782,8 @@ func toolRecipes(tool string) map[string][]string {
 		return map[string][]string{"apt": {"ninja-build"}, "dnf": {"ninja-build"}}
 	case "pkg-config", "pkgconf":
 		return map[string][]string{"apt": {"pkg-config"}, "dnf": {"pkgconf"}}
+	case "xargs":
+		return map[string][]string{"apt": {"findutils"}, "dnf": {"findutils"}}
 	case "rustc", "cargo":
 		return map[string][]string{"apt": {"rustc", "cargo"}, "dnf": {"rust", "cargo"}}
 	case "make":

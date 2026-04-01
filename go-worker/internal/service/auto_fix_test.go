@@ -23,20 +23,64 @@ func TestAutoFixRateLimitAndDedupe(t *testing.T) {
 		},
 	}
 
-	ok, reason := w.canApplyAutoFix(job, "sig-b")
+	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:gcc-toolset-12"}, "heuristic")
 	if ok || !strings.Contains(reason, "rate limit") {
 		t.Fatalf("expected rate limit block, got ok=%v reason=%q", ok, reason)
 	}
 
 	w.autoFixState[key] = autoFixState{lastApplied: now.Add(-40 * time.Minute), lastSignature: "sig-a"}
-	ok, reason = w.canApplyAutoFix(job, "sig-a")
+	ok, reason = w.canApplyAutoFix(job, "sig-a", []string{"dnf:gcc-toolset-12"}, "heuristic")
 	if ok || !strings.Contains(reason, "duplicate") {
 		t.Fatalf("expected duplicate block, got ok=%v reason=%q", ok, reason)
 	}
 
-	ok, reason = w.canApplyAutoFix(job, "sig-b")
+	ok, reason = w.canApplyAutoFix(job, "sig-b", []string{"dnf:gcc-toolset-12"}, "heuristic")
 	if !ok || reason != "" {
 		t.Fatalf("expected allow after cooldown, got ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestAutoFixCooldownBypassForLowRiskUtilityRecipes(t *testing.T) {
+	job := runner.Job{Name: "demo", Version: "1.0.0"}
+	key := autoFixKey(job)
+	now := time.Now()
+	w := &Worker{
+		Cfg: Config{AutoFixRateLimitMin: 30},
+		autoFixState: map[string]autoFixState{
+			key: {lastApplied: now.Add(-2 * time.Minute), lastSignature: "sig-a"},
+		},
+	}
+	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:findutils"}, "heuristic")
+	if !ok || reason != "" {
+		t.Fatalf("expected low-risk utility fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
+	}
+	ok, reason = w.canApplyAutoFix(job, "sig-b", []string{"dnf:findutils", "env:PATH=/tmp"}, "heuristic")
+	if ok || !strings.Contains(reason, "rate limit") {
+		t.Fatalf("expected env-bearing fix not to bypass cooldown, got ok=%v reason=%q", ok, reason)
+	}
+	ok, reason = w.canApplyAutoFix(job, "sig-a", []string{"dnf:findutils"}, "heuristic")
+	if ok || !strings.Contains(reason, "duplicate") {
+		t.Fatalf("expected duplicate signature to stay blocked, got ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestInferHintFromLogMapsXargsToFindutils(t *testing.T) {
+	hint, recipes, note, ok := inferHintFromLog(
+		"/bin/sh: line 43: xargs: command not found",
+		plan.HintContext{Package: "scikit-learn", PythonVersion: "3.11", PlatformTag: "manylinux2014_s390x"},
+	)
+	if !ok {
+		t.Fatal("expected heuristic match")
+	}
+	if hint.Confidence != "medium" {
+		t.Fatalf("expected medium confidence, got %q", hint.Confidence)
+	}
+	if !strings.Contains(note, "missing tool xargs") {
+		t.Fatalf("unexpected note: %q", note)
+	}
+	got := strings.Join(recipes, ",")
+	if !strings.Contains(got, "dnf:findutils") {
+		t.Fatalf("expected dnf:findutils recipe, got %q", got)
 	}
 }
 

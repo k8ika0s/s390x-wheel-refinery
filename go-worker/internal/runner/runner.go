@@ -219,8 +219,14 @@ if [ -n "${RECIPES:-}" ]; then
   apt_pkgs=()
   dnf_pkgs=()
   pip_pkgs=()
+  trim_spaces() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+  }
   for r in "${recipe_list[@]}"; do
-    r="$(echo "$r" | xargs)"
+    r="$(trim_spaces "$r")"
     if [ -z "$r" ]; then
       continue
     fi
