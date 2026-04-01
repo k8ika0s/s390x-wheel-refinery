@@ -1,6 +1,7 @@
 # Builder container for s390x wheel refinery recipes.
 # Provides recipes on top of the cached builder base image.
-FROM localhost/s390x-wheel-refinery_builder-base:ubi8
+ARG BUILDER_BASE_IMAGE=localhost/s390x-wheel-refinery_builder-base:ubi8
+FROM ${BUILDER_BASE_IMAGE}
 
 WORKDIR /app
 COPY recipes/ /app/recipes/

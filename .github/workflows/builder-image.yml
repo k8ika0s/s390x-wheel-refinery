@@ -26,7 +26,31 @@ env:
   IMAGE_NAME: ${{ github.repository }}/refinery-builder
 
 jobs:
+  pr-validation:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate builder workflow files
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          for path in [
+              Path(".github/workflows/builder-image.yml"),
+              Path("containers/refinery-builder/Containerfile"),
+              Path("containers/refinery-builder-base/Containerfile"),
+          ]:
+              if path.suffix in {".yml", ".yaml"}:
+                  yaml.safe_load(path.read_text())
+              else:
+                  text = path.read_text()
+                  assert text.strip(), f"{path} is empty"
+          print("builder workflow files OK")
+          PY
+
   build-and-push:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
