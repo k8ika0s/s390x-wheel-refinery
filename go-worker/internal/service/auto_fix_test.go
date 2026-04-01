@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -204,5 +205,26 @@ func TestInferHintFromLogSkipsInitFsEncodingRuntimeCorruption(t *testing.T) {
 	)
 	if ok {
 		t.Fatalf("expected no inferred hint, got recipes=%v", recipes)
+	}
+}
+
+func TestAutoFixSkipsInfrastructureFailures(t *testing.T) {
+	w := &Worker{Cfg: Config{AutoFixEnabled: true}}
+	result := w.autoFix(
+		context.Background(),
+		runner.Job{Name: "scikit-learn", Version: "1.5.2", PythonVersion: "3.11", PlatformTag: "manylinux2014_s390x"},
+		`Error: 127.0.0.1:5000/refinery-builder:latest: image not known`,
+		nil,
+		nil,
+		failureReason{Code: "builder_image_missing", Detail: "refinery-builder"},
+	)
+	if result.Applied {
+		t.Fatal("expected infrastructure failure not to auto-apply")
+	}
+	if result.BlockedReason == "" || !strings.Contains(result.BlockedReason, "infrastructure failure") {
+		t.Fatalf("expected infrastructure block reason, got %q", result.BlockedReason)
+	}
+	if len(result.DecisionTrace) == 0 || !strings.Contains(strings.Join(result.DecisionTrace, "\n"), "infrastructure failure builder_image_missing") {
+		t.Fatalf("expected infrastructure skip trace, got %v", result.DecisionTrace)
 	}
 }

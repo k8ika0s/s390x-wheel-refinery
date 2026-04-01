@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -190,6 +191,50 @@ func TestFetchArtifactUsesFetcher(t *testing.T) {
 	}
 	if !fetched {
 		t.Fatalf("fetcher not invoked")
+	}
+}
+
+func TestEnsureContainerImageAvailablePullsMissingImage(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "podman.log")
+	bin := filepath.Join(dir, "podman")
+	script := `#!/bin/sh
+set -eu
+echo "$@" >> "` + logPath + `"
+if [ "$1" = "image" ] && [ "$2" = "exists" ]; then
+  exit 1
+fi
+if [ "$1" = "pull" ]; then
+  exit 0
+fi
+exit 0
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exec.LookPath(bin); err != nil {
+		t.Fatal(err)
+	}
+	w := &Worker{Cfg: Config{PodmanBin: bin, ContainerImage: "127.0.0.1:5000/refinery-builder:latest"}}
+	var traces []string
+	if err := w.ensureContainerImageAvailable(context.Background(), func(format string, args ...any) {
+		traces = append(traces, fmt.Sprintf(format, args...))
+	}); err != nil {
+		t.Fatalf("ensureContainerImageAvailable: %v", err)
+	}
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(logData)
+	if !strings.Contains(got, "image exists 127.0.0.1:5000/refinery-builder:latest") {
+		t.Fatalf("expected image exists probe, got %q", got)
+	}
+	if !strings.Contains(got, "pull --tls-verify=false 127.0.0.1:5000/refinery-builder:latest") {
+		t.Fatalf("expected insecure local-registry pull, got %q", got)
+	}
+	if len(traces) == 0 {
+		t.Fatal("expected preflight traces")
 	}
 }
 

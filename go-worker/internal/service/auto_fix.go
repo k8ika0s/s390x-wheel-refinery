@@ -44,7 +44,7 @@ type autoFixState struct {
 
 const hintSaveTimeout = 5 * time.Second
 
-func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string, hints []plan.Hint, knownHints map[string]bool) autoFixResult {
+func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string, hints []plan.Hint, knownHints map[string]bool, failure failureReason) autoFixResult {
 	if !w.Cfg.AutoFixEnabled {
 		return autoFixResult{DecisionTrace: []string{"auto-fix disabled"}}
 	}
@@ -63,6 +63,13 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 	trace := []string{}
 	addTrace := func(format string, args ...any) {
 		trace = append(trace, fmt.Sprintf(format, args...))
+	}
+	if shouldSkipAutoFixForReason(failure) {
+		addTrace("auto-fix skipped: infrastructure failure %s", failure.Code)
+		return autoFixResult{
+			BlockedReason: fmt.Sprintf("infrastructure failure: %s", failure.Code),
+			DecisionTrace: compactTrace(trace),
+		}
 	}
 
 	var matchedIDs []string
@@ -247,6 +254,15 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		LLMSuggestionIgnored: llmSuggestionIgnored,
 		LLMIgnoreReason:      llmIgnoreReason,
 		HintSaveFailed:       hintSaveFailed,
+	}
+}
+
+func shouldSkipAutoFixForReason(reason failureReason) bool {
+	switch strings.TrimSpace(reason.Code) {
+	case "builder_image_missing", "registry_unavailable":
+		return true
+	default:
+		return false
 	}
 }
 

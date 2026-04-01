@@ -14,6 +14,12 @@ func TestClassifyFailureReason(t *testing.T) {
 		detail  string
 	}{
 		{
+			name:    "builder image missing",
+			logText: `Error: 127.0.0.1:5000/refinery-builder:latest: image not known`,
+			code:    "builder_image_missing",
+			detail:  "refinery-builder",
+		},
+		{
 			name:    "runtime stdlib missing",
 			logText: "Fatal Python error: Py_Initialize: Unable to get the locale encoding\nModuleNotFoundError: No module named 'encodings'",
 			code:    "runtime_stdlib_missing",

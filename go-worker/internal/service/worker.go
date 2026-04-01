@@ -188,8 +188,37 @@ func (w *Worker) Drain(ctx context.Context) error {
 				defer logStream.Close()
 				job.LogWriter = logStream
 			}
+			var preflight bytes.Buffer
+			tracef := func(format string, args ...any) {
+				line := fmt.Sprintf(format, args...)
+				if !strings.HasSuffix(line, "\n") {
+					line += "\n"
+				}
+				_, _ = preflight.WriteString(line)
+				if job.LogWriter != nil {
+					_, _ = job.LogWriter.Write([]byte(line))
+				}
+			}
 			w.reportBuildStatus(ctx, job, "building", nil, "", attempt, 0, failureReason{}, backoffMeta{}, job.Recipes, nil, nil)
+			if err := w.ensureContainerImageAvailable(ctx, tracef); err != nil {
+				results[i] = result{
+					job:      job,
+					duration: 0,
+					log:      strings.TrimRight(preflight.String(), "\n"),
+					err:      err,
+					attempt:  attempt,
+				}
+				return nil
+			}
 			dur, logContent, err := w.Runner.Run(ctx, job)
+			if preflight.Len() > 0 {
+				prefix := strings.TrimRight(preflight.String(), "\n")
+				if strings.TrimSpace(logContent) == "" {
+					logContent = prefix
+				} else {
+					logContent = prefix + "\n" + logContent
+				}
+			}
 			if err != nil && strings.TrimSpace(logContent) == "" {
 				logContent = fmt.Sprintf("error: %s", err.Error())
 			}
@@ -262,7 +291,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 					meta["reason_detail"] = reason.Detail
 				}
 			}
-			autoFix = w.autoFix(ctx, res.job, logForHints, hintCatalog, knownHints)
+			autoFix = w.autoFix(ctx, res.job, logForHints, hintCatalog, knownHints, reason)
 			if autoFix.Applied {
 				recipesForStatus = autoFix.Recipes
 			}
@@ -1031,6 +1060,47 @@ func BuildWorker(cfg Config) (*Worker, error) {
 			return &v
 		}(),
 	}, nil
+}
+
+func (w *Worker) ensureContainerImageAvailable(ctx context.Context, tracef func(format string, args ...any)) error {
+	image := strings.TrimSpace(w.Cfg.ContainerImage)
+	if image == "" {
+		return nil
+	}
+	bin := strings.TrimSpace(w.Cfg.PodmanBin)
+	if bin == "" {
+		path, err := exec.LookPath("podman")
+		if err != nil {
+			return fmt.Errorf("podman binary not found; cannot preflight container image %s", image)
+		}
+		bin = path
+	}
+	if exec.CommandContext(ctx, bin, "image", "exists", image).Run() == nil {
+		if tracef != nil {
+			tracef("preflight: builder image ready: %s", image)
+		}
+		return nil
+	}
+	if tracef != nil {
+		tracef("preflight: builder image missing locally; pulling %s", image)
+	}
+	args := []string{"pull"}
+	if strings.HasPrefix(image, "127.0.0.1:") || strings.HasPrefix(image, "localhost:") {
+		args = append(args, "--tls-verify=false")
+	}
+	args = append(args, image)
+	cmd := exec.CommandContext(ctx, bin, args...)
+	out, err := cmd.CombinedOutput()
+	if len(out) > 0 && tracef != nil {
+		tracef("preflight: podman pull output: %s", strings.TrimSpace(string(out)))
+	}
+	if err != nil {
+		return fmt.Errorf("builder image preflight failed for %s: %w", image, err)
+	}
+	if tracef != nil {
+		tracef("preflight: builder image pull succeeded: %s", image)
+	}
+	return nil
 }
 
 func queueKey(name, version, nodeID string) string {

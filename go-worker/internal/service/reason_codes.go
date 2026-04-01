@@ -20,6 +20,7 @@ var (
 	linkerErrorRe      = regexp.MustCompile(`(?i)undefined reference to|ld: cannot find|linker command failed|ld returned \d+ exit status|collect2: error`)
 	cmdNotFoundRe      = regexp.MustCompile(`(?i)(?:^|\\s)([a-z0-9_+.\-]+): command not found`)
 	gccVersionRe       = regexp.MustCompile(`(?i)requires gcc >=\s*([0-9.]+)`)
+	builderImageRe     = regexp.MustCompile(`(?i)(image not known|manifest unknown|repository name not known to registry)`)
 )
 
 var compilerTools = map[string]bool{
@@ -46,6 +47,9 @@ func classifyFailureReason(err error, logText string) failureReason {
 	if strings.Contains(strings.ToLower(text), "unable to get the locale encoding") &&
 		strings.Contains(strings.ToLower(text), "no module named 'encodings'") {
 		return failureReason{Code: "runtime_stdlib_missing", Detail: "encodings"}
+	}
+	if builderImageRe.MatchString(text) {
+		return failureReason{Code: "builder_image_missing", Detail: "refinery-builder"}
 	}
 	if match := gccVersionRe.FindStringSubmatch(text); len(match) > 1 {
 		return failureReason{Code: "compiler_version_too_old", Detail: "gcc>=" + match[1]}
