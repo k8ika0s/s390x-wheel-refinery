@@ -92,6 +92,24 @@ func TestPodmanRunnerBuildCmdExpandsEnvRecipeVariables(t *testing.T) {
 	}
 }
 
+func TestPodmanRunnerBuildCmdExportsDiscoveryPathsForDependencyPrefixes(t *testing.T) {
+	cmd := strings.Join((&PodmanRunner{}).buildCmd(Job{}), "\n")
+	for _, want := range []string{
+		`prepend_env_path PKG_CONFIG_PATH "${pfx}/lib/pkgconfig"`,
+		`prepend_env_path PKG_CONFIG_PATH "${pfx}/lib64/pkgconfig"`,
+		`prepend_env_path CMAKE_PREFIX_PATH "${pfx}"`,
+		`prepend_env_path CMAKE_LIBRARY_PATH "${pfx}/lib64"`,
+		`prepend_env_path LIBRARY_PATH "${pfx}/lib"`,
+		`export CPPFLAGS="${CPPFLAGS:-} -I${pfx}/include"`,
+		`export CXXFLAGS="${CXXFLAGS:-} -I${pfx}/include"`,
+		`export LDFLAGS="${LDFLAGS:-} -L${pfx}/lib -L${pfx}/lib64"`,
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("expected dependency discovery fragment %q in command", want)
+		}
+	}
+}
+
 func TestPodmanRunnerBuildArgsUsesPackPrefixPaths(t *testing.T) {
 	r := &PodmanRunner{
 		OutputDir: "/out",
@@ -108,6 +126,9 @@ func TestPodmanRunnerBuildArgsUsesPackPrefixPaths(t *testing.T) {
 	}
 	if !strings.Contains(args, "-e DEPS_PREFIXES=/opt/packs/pack0") {
 		t.Fatalf("expected pack prefix env in args: %s", args)
+	}
+	if strings.Contains(args, "LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:/opt/packs/lib") {
+		t.Fatalf("expected runtime LD_LIBRARY_PATH to omit nonexistent /opt/packs/lib: %s", args)
 	}
 	if strings.Contains(args, "/opt/packs/pack0/usr/local") {
 		t.Fatalf("unexpected nested usr/local prefix in args: %s", args)

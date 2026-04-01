@@ -45,6 +45,21 @@ make -j"$JOBS" \
 
 make install PREFIX="$PREFIX"
 
+install -d "$PREFIX/lib/pkgconfig"
+cat >"$PREFIX/lib/pkgconfig/openblas.pc" <<EOF
+prefix=$PREFIX
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: OpenBLAS
+Description: OpenBLAS BLAS/LAPACK implementation
+Version: $PACK_VERSION
+URL: https://www.openblas.net/
+Libs: -L\${libdir} -lopenblas
+Cflags: -I\${includedir}
+EOF
+
 postprocess_prefix "$PREFIX"
 emit_manifest_json "$PACK_OUTPUT"
 log "done: $PACK_NAME"

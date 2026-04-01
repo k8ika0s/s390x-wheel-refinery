@@ -239,15 +239,41 @@ apply_env_recipe() {
   value="$(expand_env_recipe_value "$value")"
   export "$key=$value"
 }
+prepend_env_path() {
+  local key="$1"
+  local value="$2"
+  local current="${!key:-}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  if [ -z "$current" ]; then
+    export "$key=$value"
+    return 0
+  fi
+  case ":$current:" in
+    *":$value:"*) ;;
+    *) export "$key=$value:$current" ;;
+  esac
+}
 if [ -n "${DEPS_PREFIXES:-}" ]; then
-  pc_paths=""
   for pfx in $(echo "${DEPS_PREFIXES}" | tr ':' ' '); do
-    pc_paths="${pc_paths}${pfx}/lib/pkgconfig:"
+    prepend_env_path PATH "${pfx}/bin"
+    prepend_env_path PKG_CONFIG_PATH "${pfx}/lib/pkgconfig"
+    prepend_env_path PKG_CONFIG_PATH "${pfx}/lib64/pkgconfig"
+    prepend_env_path PKG_CONFIG_PATH "${pfx}/share/pkgconfig"
+    prepend_env_path CMAKE_PREFIX_PATH "${pfx}"
+    prepend_env_path CMAKE_LIBRARY_PATH "${pfx}/lib"
+    prepend_env_path CMAKE_LIBRARY_PATH "${pfx}/lib64"
+    prepend_env_path CMAKE_INCLUDE_PATH "${pfx}/include"
+    prepend_env_path LIBRARY_PATH "${pfx}/lib"
+    prepend_env_path LIBRARY_PATH "${pfx}/lib64"
+    prepend_env_path LD_LIBRARY_PATH "${pfx}/lib"
+    prepend_env_path LD_LIBRARY_PATH "${pfx}/lib64"
     export CFLAGS="${CFLAGS:-} -I${pfx}/include"
-    export LDFLAGS="${LDFLAGS:-} -L${pfx}/lib"
-    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:${pfx}/lib:${pfx}/lib64"
+    export CPPFLAGS="${CPPFLAGS:-} -I${pfx}/include"
+    export CXXFLAGS="${CXXFLAGS:-} -I${pfx}/include"
+    export LDFLAGS="${LDFLAGS:-} -L${pfx}/lib -L${pfx}/lib64"
   done
-  export PKG_CONFIG_PATH="${pc_paths}${PKG_CONFIG_PATH:-}"
 fi
 if [ -n "${RECIPES:-}" ]; then
   IFS=',' read -r -a recipe_list <<< "${RECIPES}"
@@ -322,7 +348,7 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 		args = append(args, "-e", "RUNTIME_PATH=/opt/runtime")
 		args = append(args, "-e", "PYTHONHOME=/opt/runtime")
 		args = append(args, "-e", "PATH=/opt/runtime/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin")
-		args = append(args, "-e", "LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:/opt/packs/lib")
+		args = append(args, "-e", "LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64")
 	}
 	for i, pth := range job.PackPaths {
 		args = append(args, "-v", fmt.Sprintf("%s:/opt/packs/pack%d:ro", pth, i))
