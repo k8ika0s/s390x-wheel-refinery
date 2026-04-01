@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
 )
 
@@ -35,5 +36,41 @@ func TestResolveRemediationPlanEscalatesToNativeHeavyOnTimeout(t *testing.T) {
 	}
 	if plan.RemediationTier != remediationTierRepoPackage {
 		t.Fatalf("expected repo package tier to be preserved, got %q", plan.RemediationTier)
+	}
+}
+
+func TestResolveRemediationPlanPrefersPackFallbackForNativeHeavyBLAS(t *testing.T) {
+	w := &Worker{Cfg: Config{PackCatalog: &pack.Catalog{
+		Packs: map[string]pack.PackDef{
+			"openblas": {Name: "openblas", Version: "0.3.25"},
+		},
+	}}}
+	job := runner.Job{
+		Name:           "scikit-learn",
+		Version:        "1.5.2",
+		BuilderProfile: builderProfileNativeHeavy,
+		Recipes: []string{
+			"dnf:gcc-toolset-12",
+			"dnf:gcc-toolset-12-gcc",
+		},
+	}
+	plan := w.resolveRemediationPlan(
+		job,
+		failureReason{},
+		[]string{"dnf:gcc-toolset-12", "dnf:openblas-devel", "apt:libopenblas-dev"},
+		`../scipy/meson.build:58:15: ERROR: Dependency "OpenBLAS" not found, tried pkgconfig and cmake`,
+	)
+	if plan.RemediationTier != remediationTierDependencyPack {
+		t.Fatalf("expected dependency-pack tier, got %q", plan.RemediationTier)
+	}
+	if got := strings.Join(plan.PackRequirements, ","); got != "openblas" {
+		t.Fatalf("expected openblas pack requirement, got %q", got)
+	}
+	recipes := strings.Join(plan.Recipes, ",")
+	if strings.Contains(recipes, "openblas") || strings.Contains(recipes, "libopenblas") {
+		t.Fatalf("expected repo OpenBLAS recipes stripped, got %q", recipes)
+	}
+	if !strings.Contains(recipes, "gcc-toolset-12") {
+		t.Fatalf("expected unrelated compiler recipe preserved, got %q", recipes)
 	}
 }

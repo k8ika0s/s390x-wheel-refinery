@@ -182,12 +182,26 @@ func (w *Worker) resolveRemediationPlan(job runner.Job, failure failureReason, r
 	if len(plan.Recipes) > 0 {
 		plan.RemediationTier = remediationTierRepoPackage
 	}
+	intents := inferDependencyIntents(nil, logContent, plan.Recipes)
+	if shouldPreferPackFallback(plan.BuilderProfile, intents) {
+		if packs := dependencyPackFallbacks(intents, w.Cfg.PackCatalog); len(packs) > 0 {
+			plan.RemediationTier = remediationTierDependencyPack
+			plan.PackRequirements = packs
+			plan.Recipes = stripDependencyRecipesForPackFallback(plan.Recipes, intents)
+			plan.PackResolutionResult = map[string]any{
+				"logical_dependencies": intents,
+				"selected_packs":       packs,
+				"resolution":           "pack_fallback_preferred",
+			}
+			return plan
+		}
+	}
 	unavailable := unavailablePackages(failure, logContent)
 	if len(unavailable) == 0 {
 		return plan
 	}
 	plan.MissingPackages = sortKeysWithPrefixTrim(unavailable)
-	intents := inferDependencyIntents(plan.MissingPackages, logContent, plan.Recipes)
+	intents = inferDependencyIntents(plan.MissingPackages, logContent, plan.Recipes)
 	result := map[string]any{
 		"missing_packages": plan.MissingPackages,
 	}
@@ -344,6 +358,45 @@ func dependencyPackFallbacks(intents []string, catalog *pack.Catalog) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func shouldPreferPackFallback(profile string, intents []string) bool {
+	if normalizeBuilderProfile(profile) != builderProfileNativeHeavy {
+		return false
+	}
+	for _, intent := range intents {
+		switch strings.TrimSpace(intent) {
+		case "blas_lapack":
+			return true
+		}
+	}
+	return false
+}
+
+func stripDependencyRecipesForPackFallback(recipes []string, intents []string) []string {
+	if len(recipes) == 0 || len(intents) == 0 {
+		return dedupeStrings(recipes)
+	}
+	dropBLAS := false
+	for _, intent := range intents {
+		if strings.TrimSpace(intent) == "blas_lapack" {
+			dropBLAS = true
+			break
+		}
+	}
+	if !dropBLAS {
+		return dedupeStrings(recipes)
+	}
+	out := make([]string, 0, len(recipes))
+	for _, recipe := range recipes {
+		trimmed := strings.TrimSpace(recipe)
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "openblas") || strings.Contains(lower, "lapack") || strings.Contains(lower, "blas") {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return dedupeStrings(out)
 }
 
 func degradedBuildFallback(pkg string, intents []string) ([]string, string) {
