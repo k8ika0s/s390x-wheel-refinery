@@ -8,6 +8,7 @@ NO_CACHE="${NO_CACHE:-0}"
 IMAGE_PREFIX="${IMAGE_PREFIX:-localhost/s390x-wheel-refinery}"
 REBUILD_BASES="${REBUILD_BASES:-0}"
 BUILDER_IMAGE="${BUILDER_IMAGE:-refinery-builder:latest}"
+BUILDER_NATIVE_IMAGE="${BUILDER_NATIVE_IMAGE:-refinery-builder-native:latest}"
 BUILDER_BASE_IMAGE="${BUILDER_BASE_IMAGE:-${IMAGE_PREFIX}_builder-base:ubi8}"
 WORKER_BASE_IMAGE="${WORKER_BASE_IMAGE:-${IMAGE_PREFIX}_worker-base:ubi8}"
 
@@ -43,7 +44,7 @@ ensure_base_image() {
 
 services=("$@")
 if [[ ${#services[@]} -eq 0 ]]; then
-  services=(builder control-plane worker ui zot minio)
+  services=(builder builder-native control-plane worker ui zot minio)
 fi
 
 for service in "${services[@]}"; do
@@ -51,6 +52,11 @@ for service in "${services[@]}"; do
     builder)
       ensure_base_image "$BUILDER_BASE_IMAGE" "containers/refinery-builder-base/Containerfile"
       build_image "$BUILDER_IMAGE" "containers/refinery-builder/Containerfile" \
+        --build-arg "BUILDER_BASE_IMAGE=$BUILDER_BASE_IMAGE"
+      ;;
+    builder-native)
+      ensure_base_image "$BUILDER_BASE_IMAGE" "containers/refinery-builder-base/Containerfile"
+      build_image "$BUILDER_NATIVE_IMAGE" "containers/refinery-builder-native/Containerfile" \
         --build-arg "BUILDER_BASE_IMAGE=$BUILDER_BASE_IMAGE"
       ;;
     builder-base)
@@ -78,7 +84,7 @@ for service in "${services[@]}"; do
       ;;
     *)
       echo "unknown service: ${service}" >&2
-      echo "valid services: builder builder-base control-plane worker worker-base ui zot minio" >&2
+      echo "valid services: builder builder-native builder-base control-plane worker worker-base ui zot minio" >&2
       exit 1
       ;;
   esac

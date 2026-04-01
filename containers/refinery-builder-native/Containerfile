@@ -1,0 +1,19 @@
+# Native-heavy builder profile for scientific and dependency-rich packages.
+# This intentionally adds broader toolchain coverage, but still relies on
+# dynamic repo/package/pack fallback for native libraries rather than baking
+# everything into the image.
+ARG BUILDER_BASE_IMAGE=localhost/s390x-wheel-refinery_builder-base:ubi8
+FROM ${BUILDER_BASE_IMAGE}
+
+RUN dnf -y install \
+      gcc-gfortran \
+      meson && \
+    dnf clean all
+
+WORKDIR /app
+COPY recipes/ /app/recipes/
+
+ENV PACK_RECIPES_DIR=/app/recipes \
+    DEFAULT_PACK_CMD=/app/recipes/pkgconf.sh \
+    DEFAULT_RUNTIME_CMD=/app/recipes/cpython311.sh \
+    DEFAULT_REPAIR_CMD=/app/recipes/repair.sh

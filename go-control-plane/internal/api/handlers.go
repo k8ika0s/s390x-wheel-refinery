@@ -200,6 +200,13 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 		HintSaveFailureRate     float64 `json:"hint_save_failure_rate"`
 		StaleRequeues           int     `json:"stale_requeues"`
 		StaleRequeueRate        float64 `json:"stale_requeue_rate"`
+		PackageUnavailable      int     `json:"package_unavailable"`
+		PackFallbackAttempts    int     `json:"pack_fallback_attempts"`
+		PackFallbackSuccesses   int     `json:"pack_fallback_successes"`
+		DegradedAttempts        int     `json:"degraded_attempts"`
+		DegradedSuccesses       int     `json:"degraded_successes"`
+		DefaultProfileCount     int     `json:"default_profile_count"`
+		NativeHeavyCount        int     `json:"native_heavy_count"`
 	}
 	type logMetrics struct {
 		RecentChunks int     `json:"recent_chunks"`
@@ -343,6 +350,13 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 			am.LLMSuggestionsIgnored = stats.LLMSuggestionsIgnored
 			am.HintSaveFailed = stats.HintSaveFailed
 			am.StaleRequeues = stats.StaleRequeues
+			am.PackageUnavailable = stats.PackageUnavailable
+			am.PackFallbackAttempts = stats.PackFallbackAttempts
+			am.PackFallbackSuccesses = stats.PackFallbackSuccesses
+			am.DegradedAttempts = stats.DegradedAttempts
+			am.DegradedSuccesses = stats.DegradedSuccesses
+			am.DefaultProfileCount = stats.DefaultProfileCount
+			am.NativeHeavyCount = stats.NativeHeavyCount
 			denom := stats.Built + stats.Failed + stats.Quarantined
 			if denom > 0 {
 				am.FailureRate = float64(stats.Failed+stats.Quarantined) / float64(denom)
@@ -579,6 +593,27 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&buf, "# HELP refinery_stale_requeues_total Retry attempts caused by stale build recycle.\n")
 		fmt.Fprintf(&buf, "# TYPE refinery_stale_requeues_total gauge\n")
 		fmt.Fprintf(&buf, "refinery_stale_requeues_total %d\n", stats.StaleRequeues)
+		fmt.Fprintf(&buf, "# HELP refinery_package_unavailable_total Attempts that failed due to unavailable distro packages.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_package_unavailable_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_package_unavailable_total %d\n", stats.PackageUnavailable)
+		fmt.Fprintf(&buf, "# HELP refinery_pack_fallback_attempts Attempts that selected dependency-pack fallback.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_pack_fallback_attempts gauge\n")
+		fmt.Fprintf(&buf, "refinery_pack_fallback_attempts %d\n", stats.PackFallbackAttempts)
+		fmt.Fprintf(&buf, "# HELP refinery_pack_fallback_successes Successful builds after dependency-pack fallback.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_pack_fallback_successes gauge\n")
+		fmt.Fprintf(&buf, "refinery_pack_fallback_successes %d\n", stats.PackFallbackSuccesses)
+		fmt.Fprintf(&buf, "# HELP refinery_degraded_build_attempts Attempts that selected degraded-build fallback.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_degraded_build_attempts gauge\n")
+		fmt.Fprintf(&buf, "refinery_degraded_build_attempts %d\n", stats.DegradedAttempts)
+		fmt.Fprintf(&buf, "# HELP refinery_degraded_build_successes Successful builds after degraded-build fallback.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_degraded_build_successes gauge\n")
+		fmt.Fprintf(&buf, "refinery_degraded_build_successes %d\n", stats.DegradedSuccesses)
+		fmt.Fprintf(&buf, "# HELP refinery_builder_profile_default Attempts using the default builder profile.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_builder_profile_default gauge\n")
+		fmt.Fprintf(&buf, "refinery_builder_profile_default %d\n", stats.DefaultProfileCount)
+		fmt.Fprintf(&buf, "# HELP refinery_builder_profile_native_heavy Attempts using the native-heavy builder profile.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_builder_profile_native_heavy gauge\n")
+		fmt.Fprintf(&buf, "refinery_builder_profile_native_heavy %d\n", stats.NativeHeavyCount)
 		denom := stats.Built + stats.Failed + stats.Quarantined
 		if denom > 0 {
 			fmt.Fprintf(&buf, "# HELP refinery_build_failure_rate Failure rate in the metrics window.\n")
@@ -1633,16 +1668,17 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type job struct {
-		NodeID      string   `json:"node_id,omitempty"`
-		Package     string   `json:"package"`
-		Version     string   `json:"version"`
-		PythonTag   string   `json:"python_tag"`
-		PlatformTag string   `json:"platform_tag"`
-		Attempts    int      `json:"attempts"`
-		RunID       string   `json:"run_id,omitempty"`
-		PlanID      int64    `json:"plan_id,omitempty"`
-		Recipes     []string `json:"recipes,omitempty"`
-		HintIDs     []string `json:"hint_ids,omitempty"`
+		NodeID      string         `json:"node_id,omitempty"`
+		Package     string         `json:"package"`
+		Version     string         `json:"version"`
+		PythonTag   string         `json:"python_tag"`
+		PlatformTag string         `json:"platform_tag"`
+		Attempts    int            `json:"attempts"`
+		RunID       string         `json:"run_id,omitempty"`
+		PlanID      int64          `json:"plan_id,omitempty"`
+		Recipes     []string       `json:"recipes,omitempty"`
+		HintIDs     []string       `json:"hint_ids,omitempty"`
+		Metadata    map[string]any `json:"metadata,omitempty"`
 	}
 	var out []job
 	for _, b := range builds {
@@ -1657,6 +1693,7 @@ func (h *Handler) buildQueuePop(w http.ResponseWriter, r *http.Request) {
 			PlanID:      b.PlanID,
 			Recipes:     b.Recipes,
 			HintIDs:     b.HintIDs,
+			Metadata:    b.Metadata,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"builds": out})

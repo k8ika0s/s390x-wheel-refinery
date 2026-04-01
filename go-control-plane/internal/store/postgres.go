@@ -2070,7 +2070,14 @@ func (p *PostgresStore) BuildAttemptStats(ctx context.Context, since time.Time) 
 			COUNT(*) FILTER (WHERE COALESCE(metadata->'automation'->>'remediation_source', '') = 'llm')::int,
 			COUNT(*) FILTER (WHERE COALESCE(metadata->'automation'->>'llm_suggestion_ignored', 'false') = 'true')::int,
 			COUNT(*) FILTER (WHERE COALESCE(metadata->'automation'->>'hint_save_failed', 'false') = 'true')::int,
-			COUNT(*) FILTER (WHERE backoff_reason = 'build stalled')::int
+			COUNT(*) FILTER (WHERE backoff_reason = 'build stalled')::int,
+			COUNT(*) FILTER (WHERE COALESCE(reason_code, '') = 'package_unavailable')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->>'remediation_tier', '') = 'dependency_pack')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->>'remediation_tier', '') = 'dependency_pack' AND status = 'built')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->>'remediation_tier', '') = 'feature_degraded')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->>'remediation_tier', '') = 'feature_degraded' AND status = 'built')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->>'builder_profile', 'default') = 'default')::int,
+			COUNT(*) FILTER (WHERE COALESCE(metadata->>'builder_profile', '') = 'native-heavy')::int
 		FROM build_attempts
 		WHERE created_at >= $1
 	`, since).Scan(
@@ -2091,6 +2098,13 @@ func (p *PostgresStore) BuildAttemptStats(ctx context.Context, since time.Time) 
 		&stats.LLMSuggestionsIgnored,
 		&stats.HintSaveFailed,
 		&stats.StaleRequeues,
+		&stats.PackageUnavailable,
+		&stats.PackFallbackAttempts,
+		&stats.PackFallbackSuccesses,
+		&stats.DegradedAttempts,
+		&stats.DegradedSuccesses,
+		&stats.DefaultProfileCount,
+		&stats.NativeHeavyCount,
 	)
 	if err != nil {
 		return BuildAttemptStats{}, err
@@ -2378,7 +2392,7 @@ func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int, workerID strin
 		    updated_at = NOW()
 		FROM cte
 		WHERE b.id = cte.id
-		RETURNING b.id, b.node_id, b.worker_id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts, COALESCE(b.last_error,''), COALESCE(b.failure_summary,''), b.run_id, b.plan_id, COALESCE(extract(epoch from b.backoff_until),0)::bigint, COALESCE(b.backoff_reason,''), COALESCE(b.backoff_seconds,0), COALESCE(b.reason_code,''), COALESCE(b.reason_detail,''), extract(epoch from b.created_at)::bigint, extract(epoch from b.updated_at)::bigint, COALESCE(extract(epoch from b.leased_at),0)::bigint, COALESCE(extract(epoch from b.started_at),0)::bigint, COALESCE(extract(epoch from b.finished_at),0)::bigint, COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[])
+		RETURNING b.id, b.node_id, b.worker_id, b.package, b.version, b.python_tag, b.platform_tag, b.status, b.attempts, COALESCE(b.last_error,''), COALESCE(b.failure_summary,''), b.run_id, b.plan_id, COALESCE(extract(epoch from b.backoff_until),0)::bigint, COALESCE(b.backoff_reason,''), COALESCE(b.backoff_seconds,0), COALESCE(b.reason_code,''), COALESCE(b.reason_detail,''), extract(epoch from b.created_at)::bigint, extract(epoch from b.updated_at)::bigint, COALESCE(extract(epoch from b.leased_at),0)::bigint, COALESCE(extract(epoch from b.started_at),0)::bigint, COALESCE(extract(epoch from b.finished_at),0)::bigint, COALESCE(b.recipes, '[]'::jsonb), COALESCE(b.hint_ids, '{}'::text[]), COALESCE(b.metadata, '{}'::jsonb)
 	`, max, workerID)
 	if err != nil {
 		return nil, err
@@ -2390,7 +2404,8 @@ func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int, workerID strin
 		var workerID sql.NullString
 		var recipes json.RawMessage
 		var hints pq.StringArray
-		if err := rows.Scan(&bs.ID, &bs.NodeID, &workerID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints); err != nil {
+		var metadata json.RawMessage
+		if err := rows.Scan(&bs.ID, &bs.NodeID, &workerID, &bs.Package, &bs.Version, &bs.PythonTag, &bs.PlatformTag, &bs.Status, &bs.Attempts, &bs.LastError, &bs.FailureSummary, &bs.RunID, &bs.PlanID, &bs.BackoffUntil, &bs.BackoffReason, &bs.BackoffSeconds, &bs.ReasonCode, &bs.ReasonDetail, &bs.CreatedAt, &bs.UpdatedAt, &bs.LeasedAt, &bs.StartedAt, &bs.FinishedAt, &recipes, &hints, &metadata); err != nil {
 			return nil, err
 		}
 		bs.WorkerID = nullStringValue(workerID)
@@ -2399,6 +2414,9 @@ func (p *PostgresStore) LeaseBuilds(ctx context.Context, max int, workerID strin
 		}
 		if len(hints) > 0 {
 			bs.HintIDs = hints
+		}
+		if len(metadata) > 0 {
+			_ = json.Unmarshal(metadata, &bs.Metadata)
 		}
 		out = append(out, bs)
 	}

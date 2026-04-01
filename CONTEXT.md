@@ -3,7 +3,7 @@
 This file captures the current technical and operational context. Update it
 whenever major workflows, data models, or architecture change.
 
-Last updated: 2026-03-31
+Last updated: 2026-04-01
 
 ## Current focus
 The Go control-plane + Go worker stack is the primary pipeline. The UI and
@@ -20,6 +20,9 @@ compose rebuilds in tmux session kd1.
 - Worker leases jobs (status=leased), then posts building once the container
   starts.
 - Auto-fix applies hints/recipes and retries when configured.
+- Package-unavailable failures now run through a deterministic resolver that can
+  escalate from repo packages to normalized alternatives to reusable
+  dependency-pack fallback before the build is blocked.
 - Logs stream live from worker -> control-plane -> UI (NDJSON chunks + WS).
 - Artifacts are stored in CAS (Zot) and optionally mirrored to object storage.
 
@@ -58,6 +61,12 @@ compose rebuilds in tmux session kd1.
   - `failure_stage`
   - `failure_excerpt`
   - `remediation_source`
+  - `remediation_tier`
+  - `builder_profile`
+  - `missing_packages`
+  - `pack_requirements`
+  - `pack_resolution_result`
+  - `effective_pack_mounts`
   - `raw_llm_output`
   - `normalized_llm_output`
   - `prompt_version`
@@ -71,6 +80,7 @@ compose rebuilds in tmux session kd1.
   - inference URL/token configured flags
   - prompt version
   - runtime env loaded/source
+  - builder profiles and configured builder images
   - config ready / config drift
 - `/api/metrics` and `/metrics` now expose first-attempt success, retry
   success, hint/remediation source usage, ignored LLM suggestions, hint save
@@ -82,8 +92,9 @@ compose rebuilds in tmux session kd1.
   METRICS_WINDOW_MINUTES, CAS_REGISTRY_*, OBJECT_STORE_*.
 - Worker: AUTO_BUILD, BUILD_POLL_INTERVAL_SEC, BUILD_POOL_SIZE, PLAN_POLL_*,
   CACHE_MAX_BYTES, CACHE_PRUNE_INTERVAL_SEC, CONTAINER_IMAGE, PACK_RECIPES_DIR,
-  DEFAULT_RUNTIME_CMD, DEFAULT_REPAIR_CMD, CAS_REGISTRY_*, OBJECT_STORE_*,
-  INFER_URL, INFER_TOKEN, INFER_MODEL, INFER_TIMEOUT_SEC, INFER_MAX_RETRIES.
+  CONTAINER_IMAGE_NATIVE_HEAVY, PACK_CATALOG_PATH, DEFAULT_RUNTIME_CMD,
+  DEFAULT_REPAIR_CMD, CAS_REGISTRY_*, OBJECT_STORE_*, INFER_URL, INFER_TOKEN,
+  INFER_MODEL, INFER_TIMEOUT_SEC, INFER_MAX_RETRIES.
 - Compose limits: WORKER_CPU_LIMIT, WORKER_MEM_LIMIT (worker container caps).
 
 ## Remote deployment (zkd0)
@@ -114,6 +125,9 @@ compose rebuilds in tmux session kd1.
   `builder-base` / `worker-base` UBI8 images unless `REBUILD_BASES=1` is set.
 - `scripts/publish-builder-image.sh` tags and pushes the builder image into the
   local Zot registry so nested Podman in the worker can pull it explicitly.
+- `scripts/stack-up-no-build.sh` now republishes both the default builder image
+  and the native-heavy builder image after restart when configured, so resets do
+  not strand the worker on a missing builder image.
 - `scripts/stack-up-no-build.sh` starts the compose stack from prebuilt images.
 - `COMPOSE_FILE=podman-compose.core.yml ./scripts/stack-up-no-build.sh` starts
   only the forge-critical services from prebuilt images.
@@ -132,8 +146,8 @@ compose rebuilds in tmux session kd1.
 - Build logs are live and persisted; package view shows status/time-in-state.
 
 ## Known gaps / open items
-- Continue validating the new structured evidence on hard packages
-  (`pandas`, `scikit-learn`) before increasing worker count beyond 1.
+- Continue validating dependency-pack fallback on hard packages
+  (`scikit-learn`, `pandas`) before increasing worker count beyond 1.
 - Tighten leased vs building semantics in UI (avoid marking all leased items
   as building).
 - P2 polish + scale items remain (retry queue redesign, batching, dedupe,

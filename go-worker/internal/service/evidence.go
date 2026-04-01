@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const autoFixPolicyVersion = "autofix-policy-2026-03-31"
+const autoFixPolicyVersion = "autofix-policy-2026-04-01-resilient-fallback"
 
 var (
 	stagePublishRe   = regexp.MustCompile(`(?i)(push|publish|manifest|zot|minio|uploadArtifacts|skip CAS push|digest mismatch)`)
@@ -127,16 +127,19 @@ func workerConfigMetadata(cfg Config) map[string]any {
 		source = "process-env"
 	}
 	meta := map[string]any{
-		"config_ready":           len(issues) == 0,
-		"config_drift":           len(issues) > 0,
-		"config_issues":          issues,
-		"infer_url_configured":   strings.TrimSpace(cfg.InferURL) != "",
-		"infer_token_configured": strings.TrimSpace(cfg.InferToken) != "",
-		"infer_model":            strings.TrimSpace(cfg.InferModel),
-		"prompt_version":         promptVersion(cfg),
-		"policy_version":         autoFixPolicyVersion,
-		"runtime_env_loaded":     loaded,
-		"runtime_env_source":     source,
+		"config_ready":               len(issues) == 0,
+		"config_drift":               len(issues) > 0,
+		"config_issues":              issues,
+		"infer_url_configured":       strings.TrimSpace(cfg.InferURL) != "",
+		"infer_token_configured":     strings.TrimSpace(cfg.InferToken) != "",
+		"infer_model":                strings.TrimSpace(cfg.InferModel),
+		"prompt_version":             promptVersion(cfg),
+		"policy_version":             autoFixPolicyVersion,
+		"runtime_env_loaded":         loaded,
+		"runtime_env_source":         source,
+		"builder_profiles":           []string{builderProfileDefault, builderProfileNativeHeavy},
+		"builder_image_default":      strings.TrimSpace(cfg.ContainerImage),
+		"builder_image_native_heavy": firstNonEmpty(strings.TrimSpace(cfg.ContainerImageNativeHeavy), strings.TrimSpace(cfg.ContainerImage)),
 	}
 	return meta
 }

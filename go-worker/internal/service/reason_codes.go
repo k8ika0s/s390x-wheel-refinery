@@ -15,6 +15,7 @@ var (
 	missingHeaderRe    = regexp.MustCompile(`(?i)fatal error: ([^:\s]+): no such file or directory`)
 	missingLibraryRe   = regexp.MustCompile(`(?i)cannot find -l([a-z0-9_+.\-]+)`)
 	pkgConfigMissingRe = regexp.MustCompile(`(?i)no package ['"]?([^'"]+)['"]? found`)
+	pkgUnavailableRe   = regexp.MustCompile(`(?i)(?:no match for argument|unable to find a match):\s*([a-z0-9_+.\-]+)`)
 	cmakeMissingRe     = regexp.MustCompile(`(?i)could not find ([a-z0-9_+.\-]+)`)
 	cmakeFailureRe     = regexp.MustCompile(`(?i)cmake error|cmake failed`)
 	linkerErrorRe      = regexp.MustCompile(`(?i)undefined reference to|ld: cannot find|linker command failed|ld returned \d+ exit status|collect2: error`)
@@ -65,6 +66,9 @@ func classifyFailureReason(err error, logText string) failureReason {
 	}
 	if match := pkgConfigMissingRe.FindStringSubmatch(text); len(match) > 1 {
 		return failureReason{Code: "pkg_config_missing", Detail: match[1]}
+	}
+	if match := pkgUnavailableRe.FindStringSubmatch(text); len(match) > 1 {
+		return failureReason{Code: "package_unavailable", Detail: match[1]}
 	}
 	if match := cmakeMissingRe.FindStringSubmatch(text); len(match) > 1 {
 		return failureReason{Code: "cmake_missing", Detail: match[1]}

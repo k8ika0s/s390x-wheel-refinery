@@ -117,14 +117,15 @@ Builds are stored in `build_status` and drained by the worker.
 - Per-node enqueue buttons exist for individual build nodes.
 - API:
 ```
-POST /api/plans/{id}/enqueue-builds
-POST /api/plans/{id}/enqueue-build
+POST /api/plan/{id}/enqueue-builds
+POST /api/plan/{id}/enqueue-build
 ```
 
 ## Watching progress
 ### Builds page
 - Shows queue status and active jobs.
-- Expand a row to see timestamps, plan/run IDs, recipes, and errors.
+- Expand a row to see timestamps, plan/run IDs, recipes, errors, builder
+  profile, remediation tier, missing packages, and dependency-pack mounts.
 - Build rows now keep `leased` distinct from `building`, so long runtime/pack
   bootstrap work is visible separately from queue ownership.
 
@@ -134,6 +135,9 @@ POST /api/plans/{id}/enqueue-build
 - Recent attempts now include richer remediation evidence such as failure stage,
   failure excerpt, remediation source, prompt/policy version, and effective
   recipe/env changes when available.
+- Native dependency retries also show builder profile, remediation tier,
+  missing distro packages, pack requirements, pack resolution, and effective
+  pack mounts.
 
 ### Log streaming
 - Live logs stream into the UI while a build runs.
@@ -148,12 +152,16 @@ When a build fails, the worker:
    ambiguous.
 4) Normalizes any accepted suggestion into concrete `apt`, `dnf`, `pip`, and
    `env` recipes.
-5) Retries automatically if attempts remain.
+5) If a required repo package is unavailable, the worker continues through a
+   deterministic ladder: repo package -> normalized alternative ->
+   dependency pack -> degraded mode -> blocked.
+6) Retries automatically if attempts remain.
 
 You can review:
 - Applied recipes and hints in events.
 - Auto-saved hints in the Hints page.
-- Decision traces, remediation source, and ignored/blocked suggestions in event
+- Decision traces, remediation source, remediation tier, builder profile, pack
+  requirements, pack resolution, and ignored/blocked suggestions in event
   metadata and attempt history.
 
 ## Seed build for quick testing

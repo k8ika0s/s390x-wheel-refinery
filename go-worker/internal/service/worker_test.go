@@ -21,6 +21,7 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/builder"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/cas"
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/queue"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
@@ -217,7 +218,7 @@ exit 0
 	}
 	w := &Worker{Cfg: Config{PodmanBin: bin, ContainerImage: "127.0.0.1:5000/refinery-builder:latest"}}
 	var traces []string
-	if err := w.ensureContainerImageAvailable(context.Background(), func(format string, args ...any) {
+	if err := w.ensureContainerImageAvailable(context.Background(), runner.Job{ContainerImage: "127.0.0.1:5000/refinery-builder:latest"}, func(format string, args ...any) {
 		traces = append(traces, fmt.Sprintf(format, args...))
 	}); err != nil {
 		t.Fatalf("ensureContainerImageAvailable: %v", err)
@@ -235,6 +236,49 @@ exit 0
 	}
 	if len(traces) == 0 {
 		t.Fatal("expected preflight traces")
+	}
+}
+
+func TestMatchCarriesFallbackPackRequirementsAndNativeHeavyProfile(t *testing.T) {
+	openblasID := packArtifactID(pack.PackDef{Name: "openblas", Version: "0.3.25"})
+	snap := plan.Snapshot{
+		Plan: []plan.FlatNode{{Name: "scikit-learn", Version: "1.5.2", PythonTag: "cp311", PlatformTag: "manylinux2014_s390x", Action: "build"}},
+		DAG:  []plan.DAGNode{},
+	}
+	w := &Worker{Cfg: Config{
+		ContainerImage:            "refinery-builder:latest",
+		ContainerImageNativeHeavy: "refinery-builder-native:latest",
+		PackCatalog: &pack.Catalog{
+			Packs: map[string]pack.PackDef{
+				"openblas": {Name: "openblas", Version: "0.3.25"},
+			},
+		},
+	}}
+	reqs := []queue.Request{{
+		Package:     "scikit-learn",
+		Version:     "1.5.2",
+		PythonTag:   "cp311",
+		PlatformTag: "manylinux2014_s390x",
+		Metadata: map[string]any{
+			"builder_profile":   builderProfileNativeHeavy,
+			"pack_requirements": []string{"openblas"},
+		},
+	}}
+	jobs := w.match(context.Background(), snap, reqs)
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(jobs))
+	}
+	if jobs[0].BuilderProfile != builderProfileNativeHeavy {
+		t.Fatalf("expected native-heavy profile, got %q", jobs[0].BuilderProfile)
+	}
+	if jobs[0].ContainerImage != "refinery-builder-native:latest" {
+		t.Fatalf("expected native-heavy image, got %q", jobs[0].ContainerImage)
+	}
+	if got := strings.Join(jobs[0].PackRequirements, ","); got != "openblas" {
+		t.Fatalf("expected pack requirements propagated, got %q", got)
+	}
+	if got := strings.Join(jobs[0].PackDigests, ","); got != openblasID.Digest {
+		t.Fatalf("expected fallback pack digest, got %q want %q", got, openblasID.Digest)
 	}
 }
 

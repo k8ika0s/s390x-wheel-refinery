@@ -329,6 +329,12 @@ Fields include:
   - `failure_stage`
   - `failure_excerpt`
   - `remediation_source`
+  - `remediation_tier`
+  - `builder_profile`
+  - `missing_packages`
+  - `pack_requirements`
+  - `pack_resolution_result`
+  - `effective_pack_mounts`
   - `raw_llm_output`
   - `normalized_llm_output`
   - `prompt_version`
@@ -336,6 +342,9 @@ Fields include:
   - `effective_recipes_before`
   - `effective_recipes_after`
   - `effective_env_overrides`
+  - `effective_env_overrides_before`
+  - `effective_env_overrides_after`
+  - `degraded_build_reason`
 
 ### Events (control-plane)
 Each build attempt writes an event with:
@@ -343,6 +352,8 @@ Each build attempt writes an event with:
 - metadata (duration, attempts, artifacts)
 - automation metadata (applied, recipes, hints, blocked hints, impact)
 - remediation source (`known_hint`, `heuristic`, `llm`)
+- remediation tier (`repo_package`, `normalized_alternative`,
+  `dependency_pack`, `feature_degraded`, `blocked`)
 - ignored LLM suggestion reason
 - hint save failure state
 
@@ -351,6 +362,7 @@ Worker heartbeats now report configuration provenance such as:
 - whether inference URL/token are configured
 - prompt version and policy version
 - runtime env loaded and its source path
+- configured builder profiles and builder images
 - config ready / config drift
 
 This data is surfaced through `/api/workers`, `/api/metrics`, and `/metrics`.
@@ -363,15 +375,33 @@ This data is surfaced through `/api/workers`, `/api/metrics`, and `/metrics`.
 ## UX Visibility (Where to Look)
 The system is automated but visible at every step:
 - **Events table** shows an automation summary per attempt.
-- **Automation timeline** (package view) shows attempts, recipes, hint IDs, and blocks.
+- **Automation timeline** (package view) shows attempts, recipes, hint IDs,
+  builder profile, remediation tier, missing packages, dependency packs, and blocks.
 - **Event detail panel** shows full automation metadata and log links.
-- **Build queue view** includes a recipes column for queued jobs.
-- **Build queue row details** show timestamps, plan/run IDs, and failure summaries.
+- **Build queue view** includes recipes and reason chips for queued jobs.
+- **Build queue row details** show timestamps, plan/run IDs, failure summaries,
+  builder profile, remediation tier, pack requirements, and effective pack mounts.
 - **Log viewer** supports live tailing with search, wrap, highlights, and download links.
 - **Hints view** shows catalog entries and any auto-saved hints.
 - **Workers / metrics views** show whether workers are configured correctly
   before scale-up (`configured`, `config_drift`, remediation source counters,
-  retry success rates, ignored LLM suggestions).
+  retry success rates, package-unavailable counters, pack-fallback outcomes,
+  builder-profile usage, ignored LLM suggestions).
+
+## Resilient dependency fallback
+For native scientific packages, unavailable distro packages are now treated as
+their own remediation stage instead of a terminal error.
+
+Fallback ladder:
+1) Try the original repo package recipes.
+2) Normalize known alternatives for the active builder profile.
+3) Resolve dependency intent into reusable packs from the pack catalog.
+4) Mount resolved packs and retry with updated dependency env.
+5) If no supported fallback exists, mark the build blocked with explicit tier evidence.
+
+The first supported pack fallback path targets BLAS/LAPACK-style misses through
+logical pack requirements such as `openblas`, which can be reused across
+packages and runs through CAS.
 
 ## Seed Build Workflow (Quick Iteration)
 For fast iteration, use the seed script to upload a tiny requirements file, enqueue planning, enqueue builds, and tail logs.

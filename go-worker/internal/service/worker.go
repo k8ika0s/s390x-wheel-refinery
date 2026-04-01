@@ -199,8 +199,8 @@ func (w *Worker) Drain(ctx context.Context) error {
 					_, _ = job.LogWriter.Write([]byte(line))
 				}
 			}
-			w.reportBuildStatus(ctx, job, "building", nil, "", attempt, 0, failureReason{}, backoffMeta{}, job.Recipes, nil, nil)
-			if err := w.ensureContainerImageAvailable(ctx, tracef); err != nil {
+			w.reportBuildStatus(ctx, job, "building", nil, "", attempt, 0, failureReason{}, backoffMeta{}, job.Recipes, nil, buildStatusMetadataForJob(job))
+			if err := w.ensureContainerImageAvailable(ctx, job, tracef); err != nil {
 				results[i] = result{
 					job:      job,
 					duration: 0,
@@ -329,6 +329,13 @@ func (w *Worker) Drain(ctx context.Context) error {
 		if len(recipesForStatus) > 0 {
 			meta["recipes"] = recipesForStatus
 		}
+		if profile := normalizeBuilderProfile(firstNonEmpty(autoFix.BuilderProfile, res.job.BuilderProfile)); profile != "" {
+			meta["builder_profile"] = profile
+		}
+		if len(res.job.PackRequirements) > 0 || len(autoFix.PackRequirements) > 0 {
+			meta["pack_requirements_before"] = dedupeStrings(res.job.PackRequirements)
+			meta["pack_requirements"] = dedupeStrings(firstNonEmptySlice(autoFix.PackRequirements, res.job.PackRequirements))
+		}
 		recipesAfter := dedupeStrings(recipesForStatus)
 		if len(recipesBefore) > 0 {
 			meta["effective_recipes_before"] = recipesBefore
@@ -351,6 +358,20 @@ func (w *Worker) Drain(ctx context.Context) error {
 		if res.attempt > 1 {
 			meta["prior_attempt"] = res.attempt - 1
 		}
+		if tier := firstNonEmpty(autoFix.RemediationTier, metadataString(res.job.Metadata, "remediation_tier")); tier != "" {
+			meta["remediation_tier"] = tier
+		}
+		if missing := firstNonEmptySlice(autoFix.MissingPackages, metadataStringSlice(res.job.Metadata, "missing_packages")); len(missing) > 0 {
+			meta["missing_packages"] = dedupeStrings(missing)
+		}
+		if autoFix.PackResolutionResult != nil {
+			meta["pack_resolution_result"] = autoFix.PackResolutionResult
+		} else if existing := normalizeForMetadata(res.job.Metadata["pack_resolution_result"]); existing != nil {
+			meta["pack_resolution_result"] = existing
+		}
+		if degraded := firstNonEmpty(autoFix.DegradedReason, metadataString(res.job.Metadata, "degraded_build_reason")); degraded != "" {
+			meta["degraded_build_reason"] = degraded
+		}
 		if status == "retry" && backoff.Until > 0 {
 			meta["backoff_reason"] = backoff.Reason
 			meta["backoff_seconds"] = backoff.Seconds
@@ -367,6 +388,9 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if autoFix.Source != "" {
 			meta["remediation_source"] = autoFix.Source
+		}
+		if len(res.job.EffectivePackMounts) > 0 {
+			meta["effective_pack_mounts"] = res.job.EffectivePackMounts
 		}
 		if autoFix.RawLLMOutput != "" {
 			meta["raw_llm_output"] = autoFix.RawLLMOutput
@@ -392,6 +416,13 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"saved_hint_ids":         autoFix.SavedHintIDs,
 				"reason":                 autoFix.Reason,
 				"remediation_source":     autoFix.Source,
+				"remediation_tier":       autoFix.RemediationTier,
+				"builder_profile":        firstNonEmpty(autoFix.BuilderProfile, res.job.BuilderProfile),
+				"missing_packages":       autoFix.MissingPackages,
+				"pack_requirements":      dedupeStrings(firstNonEmptySlice(autoFix.PackRequirements, res.job.PackRequirements)),
+				"pack_resolution_result": autoFix.PackResolutionResult,
+				"effective_pack_mounts":  res.job.EffectivePackMounts,
+				"degraded_build_reason":  autoFix.DegradedReason,
 				"blocked":                autoFix.BlockedReason,
 				"blocked_hints":          autoFix.BlockedHints,
 				"impact":                 autoFix.Impact,
@@ -679,6 +710,7 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 		job          runner.Job
 		req          queue.Request
 		orderedPacks []artifact.ID
+		packNames    []string
 		runtimeID    artifact.ID
 	}
 
@@ -717,16 +749,34 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 				continue
 			}
 			orderedPacks := topoSortFromDag(packIDs, snap.DAG)
+			fallbackPackIDs, fallbackActions, fallbackMeta, unresolvedFallbackPacks := w.expandPackRequirements(packRequirementsFromMetadata(req.Metadata))
+			if len(fallbackPackIDs) > 0 {
+				orderedPacks = mergePackIDs(orderedPacks, fallbackPackIDs)
+				for digest, action := range fallbackActions {
+					packActions[digest] = action
+				}
+				for digest, itemMeta := range fallbackMeta {
+					packMeta[digest] = itemMeta
+				}
+			}
 			recipes := mergeRecipes(req.Recipes, recipeNames(node.Recipes))
+			builderProfile := normalizeBuilderProfile(metadataString(req.Metadata, "builder_profile"))
+			if builderProfile == "" {
+				builderProfile = defaultBuilderProfileForPackage(node.Name)
+			}
 			job := runner.Job{
 				Name:              node.Name,
 				Version:           node.Version,
 				PlanID:            req.PlanID,
 				NodeID:            firstNonEmpty(req.NodeID, node.NodeID, wheelDigest),
+				BuilderProfile:    builderProfile,
+				ContainerImage:    builderImageForProfile(w.Cfg, builderProfile),
+				Metadata:          req.Metadata,
 				PythonVersion:     firstNonEmpty(req.PythonVersion, node.PythonVersion),
 				PythonTag:         firstNonEmpty(node.PythonTag, pyTagFromVersion(firstNonEmpty(req.PythonVersion, node.PythonVersion))),
 				PlatformTag:       node.PlatformTag,
 				Recipes:           recipes,
+				PackRequirements:  packRequirementsFromMetadata(req.Metadata),
 				WheelDigest:       wheelDigest,
 				WheelAction:       wheelAction,
 				WheelSourceDigest: findWheelSourceDigest(snap.DAG, wheelDigest),
@@ -735,10 +785,27 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 				RuntimeDigest:     runtimeID.Digest,
 				PackDigests:       packDigests(orderedPacks),
 			}
+			packNames := make([]string, 0, len(orderedPacks))
+			for _, packID := range orderedPacks {
+				if itemMeta := packMeta[packID.Digest]; itemMeta != nil {
+					if name, ok := itemMeta["name"].(string); ok && strings.TrimSpace(name) != "" {
+						packNames = append(packNames, name)
+						continue
+					}
+				}
+				packNames = append(packNames, packID.Digest)
+			}
+			if len(unresolvedFallbackPacks) > 0 {
+				if job.Metadata == nil {
+					job.Metadata = map[string]any{}
+				}
+				job.Metadata["unresolved_pack_requirements"] = unresolvedFallbackPacks
+			}
 			matched = append(matched, matchedJob{
 				job:          job,
 				req:          req,
 				orderedPacks: orderedPacks,
+				packNames:    packNames,
 				runtimeID:    runtimeID,
 			})
 		}
@@ -747,7 +814,7 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 	for _, item := range matched {
 		// Dependency bootstrap can take long enough to exceed the leased timeout,
 		// so mark the full leased batch building before pack/runtime resolution begins.
-		w.reportBuildStatus(ctx, item.job, "building", nil, "", item.req.Attempts, 0, failureReason{}, backoffMeta{}, item.job.Recipes, nil, nil)
+		w.reportBuildStatus(ctx, item.job, "building", nil, "", item.req.Attempts, 0, failureReason{}, backoffMeta{}, item.job.Recipes, nil, buildStatusMetadataForJob(item.job))
 	}
 
 	jobs := make([]runner.Job, 0, len(matched))
@@ -760,6 +827,7 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 		}
 		packPaths := w.resolvePacks(ctx, item.orderedPacks, packActions, packMeta, job.LogWriter)
 		job.PackPaths = packPaths
+		job.EffectivePackMounts = effectivePackMounts(item.packNames, packPaths)
 		job.RuntimePath = w.fetchRuntime(ctx, firstNonEmpty(item.req.PythonVersion, job.PythonVersion), item.runtimeID, runtimeActions[item.runtimeID.Digest], runtimeMeta[item.runtimeID.Digest], packPaths, job.LogWriter)
 		jobs = append(jobs, job)
 	}
@@ -826,6 +894,51 @@ func mergeRecipes(a, b []string) []string {
 		return nil
 	}
 	return out
+}
+
+func firstNonEmptySlice(vals ...[]string) []string {
+	for _, vals := range vals {
+		if len(vals) == 0 {
+			continue
+		}
+		return vals
+	}
+	return nil
+}
+
+func buildStatusMetadataForJob(job runner.Job) map[string]any {
+	meta := map[string]any{}
+	if profile := normalizeBuilderProfile(job.BuilderProfile); profile != "" {
+		meta["builder_profile"] = profile
+	}
+	if image := strings.TrimSpace(job.ContainerImage); image != "" {
+		meta["container_image"] = image
+	}
+	if len(job.PackRequirements) > 0 {
+		meta["pack_requirements"] = dedupeStrings(job.PackRequirements)
+	}
+	if tier := metadataString(job.Metadata, "remediation_tier"); tier != "" {
+		meta["remediation_tier"] = tier
+	}
+	if missing := metadataStringSlice(job.Metadata, "missing_packages"); len(missing) > 0 {
+		meta["missing_packages"] = missing
+	}
+	if value := normalizeForMetadata(job.Metadata["pack_resolution_result"]); value != nil {
+		meta["pack_resolution_result"] = value
+	}
+	if degraded := metadataString(job.Metadata, "degraded_build_reason"); degraded != "" {
+		meta["degraded_build_reason"] = degraded
+	}
+	if len(job.EffectivePackMounts) > 0 {
+		meta["effective_pack_mounts"] = job.EffectivePackMounts
+	}
+	if len(job.PackDigests) > 0 {
+		meta["pack_digests"] = job.PackDigests
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
 }
 
 func findWheelArtifact(dag []plan.DAGNode, node plan.FlatNode, req queue.Request) (digest, action string, packIDs []artifact.ID, runtimeID artifact.ID) {
@@ -1062,8 +1175,11 @@ func BuildWorker(cfg Config) (*Worker, error) {
 	}, nil
 }
 
-func (w *Worker) ensureContainerImageAvailable(ctx context.Context, tracef func(format string, args ...any)) error {
-	image := strings.TrimSpace(w.Cfg.ContainerImage)
+func (w *Worker) ensureContainerImageAvailable(ctx context.Context, job runner.Job, tracef func(format string, args ...any)) error {
+	image := strings.TrimSpace(job.ContainerImage)
+	if image == "" {
+		image = strings.TrimSpace(w.Cfg.ContainerImage)
+	}
 	if image == "" {
 		return nil
 	}
@@ -1195,16 +1311,17 @@ func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
 	}
 	var payload struct {
 		Builds []struct {
-			NodeID      string   `json:"node_id,omitempty"`
-			Package     string   `json:"package"`
-			Version     string   `json:"version"`
-			PythonTag   string   `json:"python_tag"`
-			PlatformTag string   `json:"platform_tag"`
-			Attempts    int      `json:"attempts"`
-			RunID       string   `json:"run_id,omitempty"`
-			PlanID      int64    `json:"plan_id,omitempty"`
-			Recipes     []string `json:"recipes,omitempty"`
-			HintIDs     []string `json:"hint_ids,omitempty"`
+			NodeID      string         `json:"node_id,omitempty"`
+			Package     string         `json:"package"`
+			Version     string         `json:"version"`
+			PythonTag   string         `json:"python_tag"`
+			PlatformTag string         `json:"platform_tag"`
+			Attempts    int            `json:"attempts"`
+			RunID       string         `json:"run_id,omitempty"`
+			PlanID      int64          `json:"plan_id,omitempty"`
+			Recipes     []string       `json:"recipes,omitempty"`
+			HintIDs     []string       `json:"hint_ids,omitempty"`
+			Metadata    map[string]any `json:"metadata,omitempty"`
 		} `json:"builds"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -1223,6 +1340,7 @@ func (w *Worker) popBuildQueue(ctx context.Context) ([]queue.Request, error) {
 			RunID:         b.RunID,
 			PlanID:        b.PlanID,
 			Recipes:       b.Recipes,
+			Metadata:      b.Metadata,
 		})
 	}
 	return out, nil

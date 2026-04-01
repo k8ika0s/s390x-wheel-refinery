@@ -15,24 +15,29 @@ import (
 
 // Job describes a build job the worker executes.
 type Job struct {
-	Name              string
-	Version           string
-	PlanID            int64
-	NodeID            string
-	PythonVersion     string
-	PythonTag         string
-	PlatformTag       string
-	Recipes           []string
-	WheelDigest       string
-	WheelAction       string
-	RuntimePath       string
-	PackPaths         []string
-	RuntimeDigest     string
-	PackDigests       []string
-	WheelSourceDigest string
-	RepairToolVersion string
-	RepairPolicyHash  string
-	LogWriter         io.WriteCloser
+	Name                string
+	Version             string
+	PlanID              int64
+	NodeID              string
+	BuilderProfile      string
+	ContainerImage      string
+	Metadata            map[string]any
+	PythonVersion       string
+	PythonTag           string
+	PlatformTag         string
+	Recipes             []string
+	PackRequirements    []string
+	WheelDigest         string
+	WheelAction         string
+	RuntimePath         string
+	PackPaths           []string
+	EffectivePackMounts []string
+	RuntimeDigest       string
+	PackDigests         []string
+	WheelSourceDigest   string
+	RepairToolVersion   string
+	RepairPolicyHash    string
+	LogWriter           io.WriteCloser
 }
 
 // Runner executes build jobs.
@@ -121,6 +126,9 @@ func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string,
 			writeChunk(append(append([]byte{}, line...), '\n'))
 		}
 		if err := scanner.Err(); err != nil {
+			if errors.Is(runCtx.Err(), context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "file already closed") {
+				return
+			}
 			writeChunk([]byte(fmt.Sprintf("runner: log stream error: %v\n", err)))
 		}
 	}
@@ -144,6 +152,7 @@ func (p *PodmanRunner) Run(ctx context.Context, job Job) (time.Duration, string,
 		reason = "error"
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			reason = "timeout"
+			writeChunk([]byte(fmt.Sprintf("runner: command exceeded timeout elapsed_ms=%d\n", elapsed.Milliseconds())))
 		}
 		statusLine = fmt.Sprintf("status=error reason=%s elapsed_ms=%d\n", reason, elapsed.Milliseconds())
 	} else {
@@ -338,6 +347,9 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 		args = append(args, "-e", fmt.Sprintf("REPAIR_POLICY_HASH=%s", job.RepairPolicyHash))
 	}
 	image := p.defaultImage()
+	if strings.TrimSpace(job.ContainerImage) != "" {
+		image = strings.TrimSpace(job.ContainerImage)
+	}
 	cmdArgs := p.buildCmd(job)
 	args = append(args, image)
 	args = append(args, cmdArgs...)

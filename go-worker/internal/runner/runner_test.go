@@ -1,7 +1,9 @@
 package runner
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -153,3 +155,34 @@ func TestPodmanRunnerFailure(t *testing.T) {
 		t.Logf("no output returned (expected with %s)", bin)
 	}
 }
+
+func TestPodmanRunnerTimeoutEmitsTimeoutMarkerWithoutPipeNoise(t *testing.T) {
+	var sink bytes.Buffer
+	script := t.TempDir() + "/fake-podman.sh"
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 1\n"), 0o755); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	r := &PodmanRunner{
+		Bin:       script,
+		InputDir:  "/in",
+		OutputDir: "/out",
+		CacheDir:  "/cache",
+		Timeout:   50 * time.Millisecond,
+	}
+	_, logContent, err := r.Run(context.Background(), Job{Name: "pkg", Version: "1.0.0", LogWriter: nopWriteCloser{Writer: &sink}})
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+	if !strings.Contains(logContent, "runner: command exceeded timeout") {
+		t.Fatalf("expected timeout marker, got %q", logContent)
+	}
+	if strings.Contains(logContent, "file already closed") {
+		t.Fatalf("expected closed-pipe noise suppressed, got %q", logContent)
+	}
+}
+
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (n nopWriteCloser) Close() error { return nil }

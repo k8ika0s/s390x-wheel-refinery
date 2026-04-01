@@ -56,6 +56,12 @@ func TestClassifyFailureReason(t *testing.T) {
 			detail:  "libffi",
 		},
 		{
+			name:    "package unavailable",
+			logText: "No match for argument: openblas-devel\nError: Unable to find a match: openblas-devel",
+			code:    "package_unavailable",
+			detail:  "openblas-devel",
+		},
+		{
 			name:    "cmake missing",
 			logText: "Could not find Foo (missing: Foo_DIR)",
 			code:    "cmake_missing",

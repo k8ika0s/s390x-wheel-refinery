@@ -32,7 +32,9 @@ export const API_BASE_DEFAULT = inferApiBase();
 
 export const getApiBase = () => {
   if (typeof window !== "undefined") {
-    const stored = window.localStorage.getItem("refinery_api_base");
+    const stored = typeof window.localStorage?.getItem === "function"
+      ? window.localStorage.getItem("refinery_api_base")
+      : "";
     if (stored) return stored;
   }
   return API_BASE_DEFAULT;

@@ -14,7 +14,7 @@ This draft captures the intended endpoints for the Go control plane, matching th
 - `GET /health` → `{status:"ok"}`
 - `GET /ready` → readiness (DB/queue reachable).
 - `GET /config` → current strategy, target python/platform, index settings, queue backend, db info (sanitized).
-- `GET /metrics` → Prometheus if enabled; otherwise 501 (explicitly stubbed until metrics wiring is added; returns hint text).
+- `GET /metrics` → Prometheus-style counters and gauges for retries, worker readiness, package-unavailable failures, dependency-pack fallback, degraded-build outcomes, and builder-profile usage.
 
 **Summary/History**
 - `GET /summary` → status counts (recent window), recent failures list.
@@ -29,7 +29,7 @@ This draft captures the intended endpoints for the Go control plane, matching th
 
 **Builds**
 - `GET /builds?status=&plan_id=&package=&version=&limit=` → build status rows.
-- `GET /builds/attempts?package=&version=&limit=` → per-attempt history for a package/version.
+- `GET /builds/attempts?package=&version=&limit=` → per-attempt history for a package/version, including remediation metadata such as builder profile, remediation tier, missing packages, pack requirements, and effective pack mounts.
 - `POST /builds/status` → worker status updates (attempts/backoff/failure metadata, optional `worker_id`).
 - `POST /build-queue/pop` → lease build items (worker; accepts optional `X-Worker-Id` header).
 - `POST /build-queue/requeue-stale` → requeue stale leases/building items.
@@ -62,6 +62,7 @@ This draft captures the intended endpoints for the Go control plane, matching th
 - `POST /worker/heartbeat` → upsert worker status (worker_id, pools, active builds). Requires `X-Worker-Token` when configured.
 - `GET /workers` → list worker heartbeat statuses and last-seen timestamps.
 - `POST /worker/smoke` (optional) → validate mounts/config without draining. Same token behavior.
+- Worker heartbeat metadata includes config readiness, inference/runtime provenance, and configured builder profiles/images.
 
 **Hints**
 - `GET /hints` → list hints.
@@ -80,7 +81,7 @@ This draft captures the intended endpoints for the Go control plane, matching th
 - `GET /simple/{name}` → HTML package index listing wheel files (PEP 503).
 
 ### Data shapes (coarse)
-- Event: `{run_id,name,version,python_tag,platform_tag,status,detail,metadata,timestamp,matched_hint_ids?}`
+- Event: `{run_id,name,version,python_tag,platform_tag,status,detail,metadata,timestamp,matched_hint_ids?}` where `metadata` may include `builder_profile`, `remediation_tier`, `missing_packages`, `pack_requirements`, `pack_resolution_result`, and `effective_pack_mounts`.
 - Hint: `{id,pattern,recipes:{dnf:[],apt:[]},note}`
 - Queue item: `{package,version,python_tag,platform_tag,recipes,enqueued_at}`
 - Plan node: `{name,version,python_tag,platform_tag,action:"build"|"reuse"|"skip"}`

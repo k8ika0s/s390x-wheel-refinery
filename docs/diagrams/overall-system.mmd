@@ -20,8 +20,10 @@ flowchart LR
     subgraph Builder
         WKR[Go worker<br/>heartbeat + settings overlay]
         RUN[Podman runner]
+        RES[Fallback resolver<br/>profile + pack policy]
         REC[Recipes pack runtime repair]
         BASE[Cached builder and worker UBI8 bases]
+        NATIVE[Native-heavy builder profile]
     end
     UI[React UI]
 
@@ -35,8 +37,12 @@ flowchart LR
     Q --> WKR
     WKR -->|fetch artifacts| ZOT
     WKR -->|push artifacts| ZOT
+    WKR --> RES
+    RES -->|pack requirement| ZOT
+    RES -->|select image| NATIVE
     WKR --> RUN
     BASE --> RUN
+    NATIVE --> RUN
     RUN -->|build outputs| MINIO
     WKR -->|status attempts events manifest| CP
     WKR -->|log chunks| CP

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/pack"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
 )
@@ -24,18 +25,18 @@ func TestAutoFixRateLimitAndDedupe(t *testing.T) {
 		},
 	}
 
-	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:gcc-toolset-12"}, "heuristic")
+	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:gcc-toolset-12"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
 	if ok || !strings.Contains(reason, "rate limit") {
 		t.Fatalf("expected rate limit block, got ok=%v reason=%q", ok, reason)
 	}
 
 	w.autoFixState[key] = autoFixState{lastApplied: now.Add(-40 * time.Minute), lastSignature: "sig-a"}
-	ok, reason = w.canApplyAutoFix(job, "sig-a", []string{"dnf:gcc-toolset-12"}, "heuristic")
+	ok, reason = w.canApplyAutoFix(job, "sig-a", []string{"dnf:gcc-toolset-12"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
 	if ok || !strings.Contains(reason, "duplicate") {
 		t.Fatalf("expected duplicate block, got ok=%v reason=%q", ok, reason)
 	}
 
-	ok, reason = w.canApplyAutoFix(job, "sig-b", []string{"dnf:gcc-toolset-12"}, "heuristic")
+	ok, reason = w.canApplyAutoFix(job, "sig-b", []string{"dnf:gcc-toolset-12"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
 	if !ok || reason != "" {
 		t.Fatalf("expected allow after cooldown, got ok=%v reason=%q", ok, reason)
 	}
@@ -51,32 +52,106 @@ func TestAutoFixCooldownBypassForLowRiskUtilityRecipes(t *testing.T) {
 			key: {lastApplied: now.Add(-2 * time.Minute), lastSignature: "sig-a"},
 		},
 	}
-	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:findutils"}, "heuristic")
+	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:findutils"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
 	if !ok || reason != "" {
 		t.Fatalf("expected low-risk utility fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
-	ok, reason = w.canApplyAutoFix(job, "sig-b", []string{"dnf:findutils", "env:PATH=/tmp"}, "heuristic")
+	ok, reason = w.canApplyAutoFix(job, "sig-b", []string{"dnf:findutils", "env:PATH=/tmp"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
 	if ok || !strings.Contains(reason, "rate limit") {
 		t.Fatalf("expected env-bearing fix not to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
-	ok, reason = w.canApplyAutoFix(job, "sig-a", []string{"dnf:findutils"}, "heuristic")
+	ok, reason = w.canApplyAutoFix(job, "sig-a", []string{"dnf:findutils"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
 	if ok || !strings.Contains(reason, "duplicate") {
 		t.Fatalf("expected duplicate signature to stay blocked, got ok=%v reason=%q", ok, reason)
 	}
 
-	ok, reason = w.canApplyAutoFix(job, "sig-c", []string{"env:LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:${LD_LIBRARY_PATH:-}"}, "heuristic")
+	ok, reason = w.canApplyAutoFix(job, "sig-c", []string{"env:LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:${LD_LIBRARY_PATH:-}"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
 	if !ok || reason != "" {
 		t.Fatalf("expected runtime libpath fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
 
-	ok, reason = w.canApplyAutoFix(job, "sig-d", []string{"dnf:openblas-devel"}, "heuristic")
+	ok, reason = w.canApplyAutoFix(job, "sig-d", []string{"dnf:openblas-devel"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
 	if !ok || reason != "" {
 		t.Fatalf("expected low-risk system library fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
 	}
 
-	ok, reason = w.canApplyAutoFix(job, "sig-e", []string{"apt:libopenblas-dev"}, "heuristic")
+	ok, reason = w.canApplyAutoFix(job, "sig-e", []string{"apt:libopenblas-dev"}, nil, "heuristic", failureReason{}, remediationTierRepoPackage)
 	if !ok || reason != "" {
 		t.Fatalf("expected apt low-risk system library fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestAutoFixCooldownBypassForLLMPackageUnavailableRecovery(t *testing.T) {
+	job := runner.Job{Name: "demo", Version: "1.0.0"}
+	key := autoFixKey(job)
+	now := time.Now()
+	w := &Worker{
+		Cfg: Config{AutoFixRateLimitMin: 30},
+		autoFixState: map[string]autoFixState{
+			key: {lastApplied: now.Add(-2 * time.Minute), lastSignature: "sig-a"},
+		},
+	}
+	ok, reason := w.canApplyAutoFix(job, "sig-b", []string{"dnf:openblas", "dnf:gcc-gfortran"}, nil, "llm", failureReason{Code: "package_unavailable", Detail: "openblas-devel"}, remediationTierNormalizedAlternative)
+	if !ok || reason != "" {
+		t.Fatalf("expected llm package-unavailable recovery to bypass cooldown, got ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestAutoFixCooldownBypassForDependencyPackFallback(t *testing.T) {
+	job := runner.Job{Name: "scikit-learn", Version: "1.5.2"}
+	key := autoFixKey(job)
+	now := time.Now()
+	w := &Worker{
+		Cfg: Config{AutoFixRateLimitMin: 30},
+		autoFixState: map[string]autoFixState{
+			key: {lastApplied: now.Add(-2 * time.Minute), lastSignature: "sig-a"},
+		},
+	}
+	ok, reason := w.canApplyAutoFix(job, "sig-pack", nil, []string{"openblas"}, "heuristic", failureReason{Code: "package_unavailable", Detail: "openblas-devel"}, remediationTierDependencyPack)
+	if !ok || reason != "" {
+		t.Fatalf("expected dependency-pack fallback to bypass cooldown, got ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestResolveRemediationPlanUsesPackFallbackForUnavailableBLASPackages(t *testing.T) {
+	w := &Worker{Cfg: Config{PackCatalog: &pack.Catalog{
+		Packs: map[string]pack.PackDef{
+			"openblas": {Name: "openblas", Version: "0.3.25"},
+		},
+	}}}
+	job := runner.Job{Name: "scikit-learn", Version: "1.5.2"}
+	plan := w.resolveRemediationPlan(
+		job,
+		failureReason{Code: "package_unavailable", Detail: "openblas-devel"},
+		[]string{"dnf:openblas-devel", "dnf:lapack-devel"},
+		`Error: Unable to find a match: openblas-devel lapack-devel`,
+	)
+	if plan.RemediationTier != remediationTierDependencyPack {
+		t.Fatalf("expected dependency-pack tier, got %q", plan.RemediationTier)
+	}
+	if got := strings.Join(plan.PackRequirements, ","); got != "openblas" {
+		t.Fatalf("expected openblas fallback, got %q", got)
+	}
+	if len(plan.Recipes) != 0 {
+		t.Fatalf("expected unavailable repo packages removed before pack fallback, got %v", plan.Recipes)
+	}
+}
+
+func TestSanitizeRecipesForFailureDropsUnavailablePackages(t *testing.T) {
+	recipes, dropped := sanitizeRecipesForFailure(
+		[]string{"dnf:openblas-devel", "dnf:openblas", "apt:libopenblas-dev", "env:CC=/tmp/gcc"},
+		failureReason{Code: "package_unavailable", Detail: "openblas-devel"},
+		"No match for argument: openblas-devel\nError: Unable to find a match: openblas-devel",
+	)
+	got := strings.Join(recipes, ",")
+	if strings.Contains(got, "dnf:openblas-devel") {
+		t.Fatalf("expected unavailable dnf package dropped, got %q", got)
+	}
+	if !strings.Contains(got, "dnf:openblas") || !strings.Contains(got, "apt:libopenblas-dev") || !strings.Contains(got, "env:CC=/tmp/gcc") {
+		t.Fatalf("expected remaining recipes preserved, got %q", got)
+	}
+	if drop := strings.Join(dropped, ","); !strings.Contains(drop, "dnf:openblas-devel") {
+		t.Fatalf("expected dropped list to include unavailable package, got %q", drop)
 	}
 }
 

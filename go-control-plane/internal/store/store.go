@@ -282,6 +282,13 @@ type BuildAttemptStats struct {
 	LLMSuggestionsIgnored int     `json:"llm_suggestions_ignored,omitempty"`
 	HintSaveFailed        int     `json:"hint_save_failed,omitempty"`
 	StaleRequeues         int     `json:"stale_requeues,omitempty"`
+	PackageUnavailable    int     `json:"package_unavailable,omitempty"`
+	PackFallbackAttempts  int     `json:"pack_fallback_attempts,omitempty"`
+	PackFallbackSuccesses int     `json:"pack_fallback_successes,omitempty"`
+	DegradedAttempts      int     `json:"degraded_attempts,omitempty"`
+	DegradedSuccesses     int     `json:"degraded_successes,omitempty"`
+	DefaultProfileCount   int     `json:"default_profile_count,omitempty"`
+	NativeHeavyCount      int     `json:"native_heavy_count,omitempty"`
 }
 
 // LogChunkStats summarizes streaming throughput.

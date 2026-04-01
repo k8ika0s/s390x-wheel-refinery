@@ -100,8 +100,8 @@ See `docs/diagrams/queue-status-lifecycle.mmd` for the full flow.
 - Plans:
   - `GET /api/plans`
   - `GET /api/plans/{id}`
-  - `POST /api/plans/{id}/enqueue-builds`
-  - `POST /api/plans/{id}/enqueue-build`
+  - `POST /api/plan/{id}/enqueue-builds`
+  - `POST /api/plan/{id}/enqueue-build`
 - Builds:
   - `POST /api/build-queue/pop`
   - `POST /api/builds/status`

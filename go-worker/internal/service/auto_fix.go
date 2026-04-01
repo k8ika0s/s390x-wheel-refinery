@@ -20,10 +20,16 @@ type autoFixResult struct {
 	Applied              bool
 	Recipes              []string
 	ProposedRecipes      []string
+	PackRequirements     []string
 	HintIDs              []string
 	SavedHintIDs         []string
 	Reason               string
 	Source               string
+	RemediationTier      string
+	BuilderProfile       string
+	MissingPackages      []string
+	PackResolutionResult map[string]any
+	DegradedReason       string
 	BlockedReason        string
 	BlockedHints         []string
 	Impact               string
@@ -201,24 +207,60 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		}
 	}
 
+	recipes, droppedRecipes := sanitizeRecipesForFailure(recipes, failure, logScan)
+	if len(droppedRecipes) > 0 {
+		addTrace("dropped unavailable recipes: %s", strings.Join(droppedRecipes, ", "))
+	}
+	resolution := w.resolveRemediationPlan(job, failure, recipes, logScan)
+	if resolution.BuilderProfile != "" {
+		addTrace("selected builder profile: %s", resolution.BuilderProfile)
+	}
+	if resolution.RemediationTier != "" {
+		addTrace("remediation tier: %s", resolution.RemediationTier)
+	}
+	if len(resolution.MissingPackages) > 0 {
+		addTrace("missing packages: %s", strings.Join(resolution.MissingPackages, ", "))
+	}
+	if len(resolution.PackRequirements) > 0 {
+		addTrace("dependency packs: %s", strings.Join(resolution.PackRequirements, ", "))
+	}
+	if resolution.DegradedReason != "" {
+		addTrace("degraded mode: %s", resolution.DegradedReason)
+	}
+	recipes = resolution.Recipes
+
 	merged := mergeRecipes(job.Recipes, recipes)
-	applied := len(merged) > len(job.Recipes)
-	signature := recipeSignature(merged)
+	currentRecipeSig := recipeSignature(job.Recipes)
+	mergedRecipeSig := recipeSignature(merged)
+	packChanged := strings.Join(dedupeStrings(job.PackRequirements), "|") != strings.Join(dedupeStrings(resolution.PackRequirements), "|")
+	profileChanged := normalizeBuilderProfile(job.BuilderProfile) != normalizeBuilderProfile(resolution.BuilderProfile)
+	applied := mergedRecipeSig != currentRecipeSig || packChanged || profileChanged || strings.TrimSpace(resolution.DegradedReason) != ""
+	signature := autoFixSignature(merged, resolution.PackRequirements, resolution.BuilderProfile, resolution.DegradedReason)
 	blockedReason := ""
+	if applied && reason == "" {
+		if len(resolution.PackRequirements) > 0 {
+			reason = "applied dependency pack fallback"
+		} else if resolution.DegradedReason != "" {
+			reason = resolution.DegradedReason
+		}
+	}
 	if applied && reason == "" {
 		reason = "applied hint recipes"
 	}
 	if applied {
-		if ok, guardReason := w.canApplyAutoFix(job, signature, merged, remediationSource); !ok {
+		if ok, guardReason := w.canApplyAutoFix(job, signature, merged, resolution.PackRequirements, remediationSource, failure, resolution.RemediationTier); !ok {
 			applied = false
 			blockedReason = guardReason
 		}
 	}
 	if applied {
 		addTrace("applied recipes: %s", strings.Join(merged, ", "))
+		if len(resolution.PackRequirements) > 0 {
+			addTrace("applied pack requirements: %s", strings.Join(resolution.PackRequirements, ", "))
+		}
 	} else if blockedReason != "" {
 		addTrace("auto-fix blocked: %s", blockedReason)
-	} else if len(recipes) == 0 {
+	} else if len(recipes) == 0 && len(resolution.PackRequirements) == 0 {
 		addTrace("no hint recipes matched")
 	} else {
 		addTrace("recipes already present; no change")
@@ -235,14 +277,26 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 			addTrace("high impact recipes detected")
 		}
 	}
+	var normalizedPackResolution map[string]any
+	if normalized := normalizeForMetadata(resolution.PackResolutionResult); normalized != nil {
+		if m, ok := normalized.(map[string]any); ok {
+			normalizedPackResolution = m
+		}
+	}
 	return autoFixResult{
 		Applied:              applied,
 		Recipes:              merged,
 		ProposedRecipes:      dedupeStrings(recipes),
+		PackRequirements:     dedupeStrings(resolution.PackRequirements),
 		HintIDs:              dedupeStrings(matchedIDs),
 		SavedHintIDs:         dedupeStrings(saved),
 		Reason:               reason,
 		Source:               remediationSource,
+		RemediationTier:      resolution.RemediationTier,
+		BuilderProfile:       resolution.BuilderProfile,
+		MissingPackages:      dedupeStrings(resolution.MissingPackages),
+		PackResolutionResult: normalizedPackResolution,
+		DegradedReason:       resolution.DegradedReason,
 		BlockedReason:        blockedReason,
 		BlockedHints:         dedupeStrings(blocked),
 		Impact:               impact,
@@ -306,7 +360,7 @@ func recipeSignature(recipes []string) string {
 	return strings.ToLower(strings.Join(deduped, "|"))
 }
 
-func (w *Worker) canApplyAutoFix(job runner.Job, signature string, recipes []string, source string) (bool, string) {
+func (w *Worker) canApplyAutoFix(job runner.Job, signature string, recipes []string, packRequirements []string, source string, failure failureReason, tier string) (bool, string) {
 	if signature == "" {
 		return true, ""
 	}
@@ -322,19 +376,28 @@ func (w *Worker) canApplyAutoFix(job runner.Job, signature string, recipes []str
 			return false, "duplicate auto-fix already applied"
 		}
 		window := time.Duration(w.Cfg.AutoFixRateLimitMin) * time.Minute
-		if window > 0 && !state.lastApplied.IsZero() && time.Since(state.lastApplied) < window && !canBypassAutoFixCooldown(recipes, source) {
+		if window > 0 && !state.lastApplied.IsZero() && time.Since(state.lastApplied) < window && !canBypassAutoFixCooldown(recipes, packRequirements, source, failure, tier) {
 			return false, "rate limit: auto-fix cooldown active"
 		}
 	}
 	return true, ""
 }
 
-func canBypassAutoFixCooldown(recipes []string, source string) bool {
+func canBypassAutoFixCooldown(recipes []string, packRequirements []string, source string, failure failureReason, tier string) bool {
 	if strings.TrimSpace(source) != "heuristic" {
+		if strings.TrimSpace(source) == "llm" && strings.TrimSpace(failure.Code) == "package_unavailable" {
+			return true
+		}
 		return false
 	}
+	if strings.TrimSpace(failure.Code) == "package_unavailable" &&
+		(strings.TrimSpace(tier) == remediationTierNormalizedAlternative ||
+			strings.TrimSpace(tier) == remediationTierDependencyPack ||
+			(strings.TrimSpace(tier) == remediationTierFeatureDegraded && len(packRequirements) == 0)) {
+		return true
+	}
 	if len(recipes) == 0 {
-		return false
+		return len(packRequirements) > 0
 	}
 	safe := map[string]bool{
 		"findutils":   true,
@@ -380,6 +443,72 @@ func canBypassAutoFixCooldown(recipes []string, source string) bool {
 		}
 	}
 	return true
+}
+
+func sanitizeRecipesForFailure(recipes []string, failure failureReason, logContent string) ([]string, []string) {
+	if len(recipes) == 0 {
+		return nil, nil
+	}
+	unavailable := unavailablePackages(failure, logContent)
+	if len(unavailable) == 0 {
+		return recipes, nil
+	}
+	out := make([]string, 0, len(recipes))
+	var dropped []string
+	for _, recipe := range recipes {
+		trimmed := strings.TrimSpace(recipe)
+		if trimmed == "" {
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) != 2 {
+			out = append(out, trimmed)
+			continue
+		}
+		mgr := strings.ToLower(strings.TrimSpace(parts[0]))
+		arg := strings.ToLower(strings.TrimSpace(parts[1]))
+		if mgr == "dnf" || mgr == "apt" {
+			if unavailable[arg] || unavailable[mgr+":"+arg] {
+				dropped = append(dropped, trimmed)
+				continue
+			}
+		}
+		out = append(out, trimmed)
+	}
+	return dedupeStrings(out), dedupeStrings(dropped)
+}
+
+func unavailablePackages(failure failureReason, logContent string) map[string]bool {
+	out := map[string]bool{}
+	if strings.TrimSpace(failure.Code) == "package_unavailable" {
+		detail := strings.ToLower(strings.TrimSpace(failure.Detail))
+		if detail != "" {
+			out[detail] = true
+			out["dnf:"+detail] = true
+			out["apt:"+detail] = true
+		}
+	}
+	re := regexp.MustCompile(`(?im)(?:no match for argument|unable to find a match):\s*([a-z0-9_+.\- ,]+)`)
+	for _, m := range re.FindAllStringSubmatch(strings.ToLower(logContent), -1) {
+		if len(m) != 2 {
+			continue
+		}
+		for _, pkg := range strings.FieldsFunc(strings.TrimSpace(m[1]), func(r rune) bool {
+			return r == ',' || r == ' ' || r == '\t'
+		}) {
+			pkg = strings.TrimSpace(pkg)
+			if pkg == "" {
+				continue
+			}
+			out[pkg] = true
+			out["dnf:"+pkg] = true
+			out["apt:"+pkg] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func isLowRiskSystemLibraryPackage(mgr, pkg string) bool {

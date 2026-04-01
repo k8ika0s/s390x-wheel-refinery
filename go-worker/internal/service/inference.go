@@ -19,8 +19,72 @@ type inferenceSuggestion struct {
 	ReasonCode string              `json:"reason_code"`
 	Summary    string              `json:"summary"`
 	Recipes    map[string][]string `json:"recipes"`
-	Notes      string              `json:"notes"`
+	Notes      inferenceNotes      `json:"notes"`
 	Tags       []string            `json:"tags"`
+}
+
+type inferenceNotes []string
+
+func (n *inferenceNotes) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*n = nil
+		return nil
+	}
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		single = strings.TrimSpace(single)
+		if single == "" {
+			*n = nil
+		} else {
+			*n = inferenceNotes{single}
+		}
+		return nil
+	}
+	var multi []string
+	if err := json.Unmarshal(data, &multi); err == nil {
+		out := make([]string, 0, len(multi))
+		for _, item := range multi {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			out = append(out, item)
+		}
+		*n = inferenceNotes(out)
+		return nil
+	}
+	var generic []any
+	if err := json.Unmarshal(data, &generic); err == nil {
+		out := make([]string, 0, len(generic))
+		for _, item := range generic {
+			text := strings.TrimSpace(fmt.Sprint(item))
+			if text == "" || text == "<nil>" {
+				continue
+			}
+			out = append(out, text)
+		}
+		*n = inferenceNotes(out)
+		return nil
+	}
+	return fmt.Errorf("unsupported notes payload")
+}
+
+func (n inferenceNotes) String() string {
+	if len(n) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(n))
+	for _, item := range n {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[strings.ToLower(item)] {
+			continue
+		}
+		seen[strings.ToLower(item)] = true
+		out = append(out, item)
+	}
+	return strings.Join(out, " ")
 }
 
 type inferenceMessage struct {
@@ -193,7 +257,7 @@ func (w *Worker) inferHintFromLLMDecision(ctx context.Context, logContent string
 			hint.Tags = append(hint.Tags, suggestion.Tags...)
 		}
 		hint.Confidence = confLabel
-		hint.Note = firstNonEmpty(suggestion.Summary, suggestion.Notes)
+		hint.Note = firstNonEmpty(suggestion.Summary, suggestion.Notes.String())
 		hint.Recipes = suggestion.Recipes
 		return llmInferenceDecision{
 			Hint:             hint,
@@ -263,7 +327,11 @@ func normalizeSuggestion(s inferenceSuggestion) inferenceSuggestion {
 	s.Pattern = strings.TrimSpace(s.Pattern)
 	s.ReasonCode = strings.TrimSpace(s.ReasonCode)
 	s.Summary = strings.TrimSpace(s.Summary)
-	s.Notes = strings.TrimSpace(s.Notes)
+	if notes := strings.TrimSpace(s.Notes.String()); notes == "" {
+		s.Notes = nil
+	} else {
+		s.Notes = inferenceNotes{notes}
+	}
 	s.Tags = dedupeStrings(s.Tags)
 	if s.Confidence > 1 {
 		if s.Confidence <= 100 {

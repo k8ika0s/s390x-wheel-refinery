@@ -1,6 +1,8 @@
 package pack
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -16,6 +18,7 @@ func TestCatalogSelect(t *testing.T) {
 			{PackagePattern: "foo", Backend: "setuptools", Packs: []string{"openssl", "rust"}},
 			{PackagePattern: "foo", Backend: "setuptools", Packs: []string{"openssl"}}, // duplicate should be filtered
 			{PackagePattern: "foo", Backend: "maturin", Packs: []string{"rust"}},
+			{PackagePatterns: []string{"bar", "baz"}, Backend: "setuptools", Packs: []string{"openssl"}},
 			{PackagePattern: "missing", Packs: []string{"not_in_catalog"}}, // ignored
 		},
 	}
@@ -50,6 +53,12 @@ func TestCatalogSelect(t *testing.T) {
 			backend:  "setuptools",
 			expected: nil,
 		},
+		{
+			name:     "package_patterns yaml shape works too",
+			pkg:      "bar-tool",
+			expected: []string{"openssl"},
+			backend:  "setuptools",
+		},
 	}
 
 	for _, tt := range tests {
@@ -60,6 +69,42 @@ func TestCatalogSelect(t *testing.T) {
 				t.Fatalf("Select(%q, %q)=%v, expected %v", tt.pkg, tt.backend, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestLoadCatalogSupportsPackagePatternsAndDependencies(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pack-catalog.yaml")
+	data := []byte(`
+packs:
+  openblas:
+    version: "0.3.25"
+    recipe: "openblas.sh"
+    dependencies: []
+rules:
+  - package_patterns: ["scikit", "scipy"]
+    packs: ["openblas"]
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cat == nil {
+		t.Fatal("expected catalog")
+	}
+	def, ok := cat.GetPack("openblas")
+	if !ok {
+		t.Fatal("expected openblas pack")
+	}
+	if def.Recipe != "openblas.sh" {
+		t.Fatalf("expected recipe loaded, got %q", def.Recipe)
+	}
+	got := packNames(cat.Select("scikit-learn", ""))
+	if !reflect.DeepEqual(got, []string{"openblas"}) {
+		t.Fatalf("expected selection via package_patterns, got %v", got)
 	}
 }
 

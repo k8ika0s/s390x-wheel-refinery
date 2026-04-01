@@ -49,6 +49,27 @@ const ENV_LABEL = import.meta.env.VITE_ENV_LABEL || "Local";
 const LOGO_SRC = "/s390x-wheel-refinery-logo.png";
 
 const toArray = (value) => (Array.isArray(value) ? value : []);
+const safeStorageGet = (key) => {
+  try {
+    return typeof localStorage?.getItem === "function" ? localStorage.getItem(key) || "" : "";
+  } catch {
+    return "";
+  }
+};
+const safeStorageSet = (key, value) => {
+  try {
+    if (typeof localStorage?.setItem === "function") localStorage.setItem(key, value);
+  } catch {
+    // ignore storage failures in tests and restricted browsers
+  }
+};
+const safeStorageRemove = (key) => {
+  try {
+    if (typeof localStorage?.removeItem === "function") localStorage.removeItem(key);
+  } catch {
+    // ignore storage failures in tests and restricted browsers
+  }
+};
 const formatEpoch = (value) => {
   if (!value) return "";
   const date = new Date(Number(value) * 1000);
@@ -290,6 +311,71 @@ const formatAutomationSummary = (meta) => {
   if (!parts.length) return "auto-fix attempted";
   return `auto-fix: ${parts.join(", ")}`;
 };
+const toObject = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
+const toStringList = (value) => {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+const formatLabel = (value) => String(value || "")
+  .replace(/[_-]+/g, " ")
+  .replace(/\s+/g, " ")
+  .trim();
+const formatPackResolution = (value) => {
+  const obj = toObject(value);
+  const parts = Object.entries(obj)
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([key, v]) => {
+      if (Array.isArray(v)) return `${formatLabel(key)}: ${v.join(", ")}`;
+      if (typeof v === "object") return `${formatLabel(key)}: ${JSON.stringify(v)}`;
+      return `${formatLabel(key)}: ${v}`;
+    });
+  return parts.join(" · ");
+};
+const buildRemediationDetails = (meta) => {
+  const remediationTier = meta.remediation_tier || "";
+  const builderProfile = meta.builder_profile || "";
+  const missingPackages = toStringList(meta.missing_packages);
+  const packRequirements = toStringList(meta.pack_requirements);
+  const effectivePackMounts = toStringList(meta.effective_pack_mounts);
+  const effectiveRecipesBefore = toStringList(meta.effective_recipes_before);
+  const effectiveRecipesAfter = toStringList(meta.effective_recipes_after);
+  const effectiveEnvBefore = toStringList(meta.effective_env_overrides_before || meta.effective_env_overrides);
+  const effectiveEnvAfter = toStringList(meta.effective_env_overrides_after);
+  const degradedReason = meta.degraded_build_reason || "";
+  const packResolution = formatPackResolution(meta.pack_resolution_result);
+  return [
+    builderProfile ? { label: "Builder profile", value: builderProfile } : null,
+    remediationTier ? { label: "Remediation tier", value: remediationTier } : null,
+    missingPackages.length ? { label: "Missing packages", value: missingPackages.join(", ") } : null,
+    packRequirements.length ? { label: "Pack requirements", value: packRequirements.join(", ") } : null,
+    effectivePackMounts.length ? { label: "Pack mounts", value: effectivePackMounts.join(", ") } : null,
+    effectiveRecipesBefore.length ? { label: "Recipes before", value: effectiveRecipesBefore.join(", ") } : null,
+    effectiveRecipesAfter.length ? { label: "Recipes after", value: effectiveRecipesAfter.join(", ") } : null,
+    effectiveEnvBefore.length ? { label: "Env before", value: effectiveEnvBefore.join(", ") } : null,
+    effectiveEnvAfter.length ? { label: "Env after", value: effectiveEnvAfter.join(", ") } : null,
+    packResolution ? { label: "Pack resolution", value: packResolution } : null,
+    degradedReason ? { label: "Degraded mode", value: degradedReason } : null,
+  ].filter(Boolean);
+};
+const renderRemediationDetails = (meta, className = "text-slate-400") => {
+  const details = buildRemediationDetails(toObject(meta));
+  if (!details.length) return null;
+  return (
+    <div className={`space-y-1 ${className}`}>
+      {details.map((detail) => (
+        <div key={`${detail.label}-${detail.value}`}>
+          {detail.label}: {detail.value}
+        </div>
+      ))}
+    </div>
+  );
+};
 
 const escapeRegExp = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -321,6 +407,13 @@ const normalizeAttemptValue = (value) => {
 const getEventAttempt = (event) => {
   const meta = event?.metadata || {};
   return normalizeAttemptValue(meta.attempt ?? meta.attempts ?? event?.attempt ?? event?.attempts);
+};
+const normalizeAttempt = (attempt) => {
+  if (!attempt || typeof attempt !== "object") return attempt;
+  return {
+    ...attempt,
+    metadata: toObject(attempt.metadata ?? attempt.Metadata),
+  };
 };
 const reasonLabels = {
   missing_module: "Missing module",
@@ -1303,7 +1396,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
     return { total, slice };
   };
 
-  const attemptsArr = useMemo(() => toArray(data?.attempts), [data]);
+  const attemptsArr = useMemo(() => toArray(data?.attempts).map(normalizeAttempt), [data]);
   const attemptsTimeline = useMemo(() => {
     const sorted = attemptsArr
       .filter((a) => Number.isFinite(a.attempt))
@@ -1314,7 +1407,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
       const recipes = toArray(entry.recipes);
       const added = recipes.filter((r) => !prevRecipes.includes(r));
       const removed = prevRecipes.filter((r) => !recipes.includes(r));
-      const out = { ...entry, recipes, added, removed };
+      const out = { ...entry, metadata: toObject(entry.metadata), recipes, added, removed };
       prevRecipes = recipes;
       return out;
     });
@@ -1399,6 +1492,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
   const buildPackageName = buildStatus?.package || summary?.name || name;
   const buildVersionLabel = buildStatus?.version || summary?.latest?.version || "";
   const failureSummary = buildStatus?.failure_summary || "";
+  const buildMetadata = toObject(buildStatus?.metadata);
   const logTailLabel = logStreamStatus === "replay" ? "replay" : logStreamStatus;
   const overviewGridClass = buildStatus ? "grid grid-cols-1 md:grid-cols-3 gap-4" : "grid grid-cols-1 md:grid-cols-2 gap-4";
   const statusValue = (buildStatus?.status || "").toLowerCase();
@@ -1542,6 +1636,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                     Recipes: {buildStatus.recipes.join(", ")}
                   </div>
                 )}
+                {renderRemediationDetails(buildMetadata, "text-slate-400 text-xs")}
                 {failureSummary && (
                   <div className="text-amber-200 text-xs">
                     Summary: {failureSummary}
@@ -1690,6 +1785,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                       </div>
                     )}
                     {entry.recipes.length > 0 && <div className="text-slate-400">Recipes: {entry.recipes.join(", ")}</div>}
+                    {renderRemediationDetails(entry.event.metadata, "text-slate-400")}
                     {entry.hints.length > 0 && <div className="text-slate-400">Hints: {entry.hints.join(", ")}</div>}
                     {entry.savedHints.length > 0 && <div className="text-slate-400">Saved hints: {entry.savedHints.join(", ")}</div>}
                     {entry.blockedHints.length > 0 && <div className="text-amber-200">Blocked hints: {entry.blockedHints.join(", ")}</div>}
@@ -1739,6 +1835,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                         </div>
                       </div>
                       <div className="mt-2 text-slate-400">Recipes: <span className="text-slate-200">{recipesLabel}</span></div>
+                      {renderRemediationDetails(attempt.metadata, "mt-2 text-slate-400")}
                       {(attempt.added.length > 0 || attempt.removed.length > 0) && (
                         <div className="mt-1 flex flex-wrap gap-3 text-slate-400">
                           <span className="text-slate-500">Recipe changes:</span>
@@ -1879,6 +1976,7 @@ function PackageDetail({ token, pushToast, apiBase }) {
                   )}
                 </div>
               )}
+              {renderRemediationDetails(selectedEvent?.metadata, "glass subtle px-3 py-2 rounded-lg text-xs text-slate-200")}
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
                 <div className="flex items-center gap-2">
                   <input
@@ -1973,7 +2071,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   const navigate = useNavigate();
   const location = useLocation();
   const [authToken, setAuthToken] = useState(
-    localStorage.getItem("refinery_ui_token") || localStorage.getItem("refinery_token") || token || ""
+    safeStorageGet("refinery_ui_token") || safeStorageGet("refinery_token") || token || ""
   );
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -3069,7 +3167,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
   };
 
   const handleSaveToken = async () => {
-    localStorage.setItem("refinery_ui_token", authToken);
+    safeStorageSet("refinery_ui_token", authToken);
     onTokenChange?.(authToken);
     if (authToken) {
       try {
@@ -3432,9 +3530,9 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
     try {
       const trimmedBase = apiBaseInput.trim();
       if (trimmedBase) {
-        localStorage.setItem("refinery_api_base", trimmedBase);
+        safeStorageSet("refinery_api_base", trimmedBase);
       } else {
-        localStorage.removeItem("refinery_api_base");
+        safeStorageRemove("refinery_api_base");
       }
       onApiBaseChange?.(trimmedBase || getApiBase());
       const body = {
@@ -4741,12 +4839,13 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                         const isExpanded = Boolean(expandedBuilds[rowKey]);
                         const isSelected = Boolean(selectedBuilds[rowKey]);
                         const recipesLabel = (b.recipes || []).join(", ") || "-";
-                        const impact = recipeImpact(b.recipes || []);
-                        const impactLabel = impact.impact === "high" ? "High impact" : "";
-                        const hintsLabel = (b.hint_ids || []).join(", ") || "-";
-                        const logHref = b.package && b.version
-                          ? `${apiBase || getApiBase()}/api/logs/${encodeURIComponent(b.package)}/${encodeURIComponent(b.version)}`
-                          : "";
+                      const impact = recipeImpact(b.recipes || []);
+                      const impactLabel = impact.impact === "high" ? "High impact" : "";
+                      const hintsLabel = (b.hint_ids || []).join(", ") || "-";
+                      const buildMeta = toObject(b.metadata);
+                      const logHref = b.package && b.version
+                        ? `${apiBase || getApiBase()}/api/logs/${encodeURIComponent(b.package)}/${encodeURIComponent(b.version)}`
+                        : "";
                         return (
                           <Fragment key={rowKey}>
                             <tr className={`border-t border-slate-800 ${buildPulse[pulseKey] ? "flash-in" : ""}`}>
@@ -4820,6 +4919,7 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
                                     <div className="md:col-span-2"><span className="text-slate-500">Hints:</span> {hintsLabel}</div>
                                     <div className="md:col-span-3"><span className="text-slate-500">Recipes:</span> {recipesLabel}</div>
                                   </div>
+                                  {renderRemediationDetails(buildMeta, "mt-2 text-xs text-slate-300")}
                                   {errorLabel !== "-" && (
                                     <div className="mt-2 text-xs text-amber-200">
                                       Error: {errorLabel}
@@ -5619,10 +5719,10 @@ function Dashboard({ token, onTokenChange, pushToast, onMetrics, onApiStatus, ap
 
 export default function App() {
   const [token, setToken] = useState(
-    localStorage.getItem("refinery_ui_token") || localStorage.getItem("refinery_token") || ""
+    safeStorageGet("refinery_ui_token") || safeStorageGet("refinery_token") || ""
   );
   const [toasts, setToasts] = useState([]);
-  const [theme, setTheme] = useState(() => localStorage.getItem("refinery_theme") || "dark");
+  const [theme, setTheme] = useState(() => safeStorageGet("refinery_theme") || "dark");
   const [metrics, setMetrics] = useState(null);
   const [apiBase, setApiBase] = useState(getApiBase());
   const [apiStatus, setApiStatus] = useState("unknown");
@@ -5637,7 +5737,7 @@ export default function App() {
   const toggleTheme = () => {
     setTheme((t) => {
       const next = t === "light" ? "dark" : "light";
-      localStorage.setItem("refinery_theme", next);
+      safeStorageSet("refinery_theme", next);
       return next;
     });
   };

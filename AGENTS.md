@@ -18,6 +18,8 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
   builder image, streams logs live, and posts status/events/logs with structured
   remediation evidence.
 - Builder image: contains toolchains and recipes for packs/runtimes/repair.
+- Builder profiles: `default` plus `native-heavy` for scientific/native-heavy
+  packages. Both still use the same remediation ladder and pack reuse flow.
 - UI (React/Vite): Inputs, Plans, Builds, Hints, Settings, log viewer, and DAG
   graph visualization.
 - Storage: Zot for CAS (packs/runtimes/wheels/repairs), MinIO for inputs and
@@ -36,6 +38,7 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
 ## Common commands (local)
 - Start stack: podman compose -f podman-compose.yml up
 - Build builder image: ./scripts/build-stack-images-hostnet.sh builder
+- Build native-heavy builder image: ./scripts/build-stack-images-hostnet.sh builder-native
 - Publish the builder image to local Zot for nested Podman workers: ./scripts/publish-builder-image.sh
 - Build all s390x service images with host networking: ./scripts/build-stack-images-hostnet.sh
   - Cached UBI8 base images are auto-reused. Set `REBUILD_BASES=1` only when OS/toolchain deps change.
@@ -83,11 +86,15 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
   secrets; prompts and retry/model tuning are controlled through `/api/settings`.
 - Build status and build attempts now carry structured metadata for remediation
   analysis, including failure stage/excerpt, remediation source, prompt/policy
-  versions, before/after recipes, env overrides, and raw vs normalized LLM
-  output.
+  versions, builder profile, remediation tier, missing packages, pack
+  requirements, pack resolution, effective pack mounts, before/after recipes,
+  env overrides, and raw vs normalized LLM output.
 - Worker heartbeats now report configuration provenance and readiness metadata
   (inference configured, prompt version, runtime env source, config drift) so
   `/api/metrics`, `/metrics`, and `/api/workers` can be used as scale gates.
+- Worker dependency fallback now uses the pack catalog (`PACK_CATALOG_PATH`,
+  default `data/pack-catalog.yaml`) to escalate unavailable repo packages into
+  reusable dependency packs before falling back to degraded mode or blocked.
 - `zkd0` currently needs direct host-networked `podman build --network host`
   per image. `podman compose build` still hits netavark bridge failures on some
   second-stage image steps there.
@@ -100,7 +107,11 @@ log streaming, and artifact publishing to CAS (Zot) and object storage (MinIO).
 - `zkd0` bridge startup can fail in netavark with `create veth pair: Invalid
   argument`. `podman-compose.hostnet.yml` moves the forge stack onto host
   networking and shifts control-plane/worker ports to `18080`/`19000`.
-- Host-network workers on `zkd0` should use `CONTAINER_IMAGE=127.0.0.1:5000/refinery-builder:latest`; run `./scripts/publish-builder-image.sh` after rebuilding the builder image so nested Podman can pull it.
+- Host-network workers on `zkd0` should use
+  `CONTAINER_IMAGE=127.0.0.1:5000/refinery-builder:latest` and may also set
+  `CONTAINER_IMAGE_NATIVE_HEAVY=127.0.0.1:5000/refinery-builder-native:latest`;
+  run `./scripts/publish-builder-image.sh` after rebuilding either image so
+  nested Podman can pull it.
 - Control-plane request logging is now live on the HTTP path and emits
   structured logs with `X-Correlation-ID` / `X-Request-ID` response headers.
 - UI uses cache-busting index + immutable assets; hard refresh should update.

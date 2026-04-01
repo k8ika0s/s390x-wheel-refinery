@@ -36,6 +36,21 @@ func TestDecodeInferenceSuggestionChat(t *testing.T) {
 	}
 }
 
+func TestDecodeInferenceSuggestionArrayNotes(t *testing.T) {
+	raw := []byte(`{"choices":[{"message":{"content":"{\"pattern\":\"timeout during scikit-learn build\",\"confidence\":0.9,\"reason_code\":\"BUILD_TIMEOUT\",\"recipes\":{\"dnf\":[\"openblas-devel\"],\"env\":[\"SKLEARN_BUILD_PARALLEL=4\"]},\"notes\":[\"Increase parallelism.\",\"Ensure OpenBLAS headers are installed.\"],\"tags\":[\"timeout\"]}"}}]}`)
+	s, err := decodeInferenceSuggestion(raw)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	s = normalizeSuggestion(s)
+	if got := s.Notes.String(); !strings.Contains(got, "Increase parallelism.") || !strings.Contains(got, "Ensure OpenBLAS headers are installed.") {
+		t.Fatalf("expected joined notes, got %q", got)
+	}
+	if got := strings.Join(s.Recipes["dnf"], ","); got != "openblas-devel" {
+		t.Fatalf("expected dnf recipe preserved, got %q", got)
+	}
+}
+
 func TestParseInferenceJSONCodeFence(t *testing.T) {
 	content := "```json\n{\"pattern\":\"missing\",\"confidence\":95,\"recipes\":{\"dnf\":[\"openssl-devel\"]}}\n```"
 	s, err := parseInferenceJSON(content)

@@ -198,7 +198,7 @@ if [[ -z "$plan_id" ]]; then
 fi
 
 echo "Plan id: ${plan_id}"
-enqueue_resp="$(curl -sS -f "${curl_ui_args[@]}" -X POST "${API_BASE}/api/plans/${plan_id}/enqueue-builds")"
+enqueue_resp="$(curl -sS -f "${curl_ui_args[@]}" -X POST "${API_BASE}/api/plan/${plan_id}/enqueue-builds")"
 echo "Builds enqueued: ${enqueue_resp}"
 
 if [[ -n "${WORKER_TOKEN:-}" ]]; then

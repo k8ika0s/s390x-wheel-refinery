@@ -15,9 +15,10 @@ flowchart TD
   K --> L
   L -->|blocked| E
   L -->|allowed| M[Auto-save hint - rate limited]
-  M --> N[Merge recipes with existing]
+  M --> N[Resolve fallback ladder]
   F --> N
-  N --> O{Recipes increased?}
-  O -->|yes| P[Persist before after recipes and env overrides]
-  P --> Q[Apply auto-fix + requeue]
-  O -->|no| X
+  N --> O["Repo package -> alternative -> dependency pack -> degraded -> blocked"]
+  O --> P[Persist remediation tier profile packs and env deltas]
+  P --> Q{State changed?}
+  Q -->|yes| R[Apply auto-fix + requeue]
+  Q -->|no| X
