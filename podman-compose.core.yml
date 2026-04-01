@@ -97,6 +97,7 @@ services:
       PYTHON_RECIPES_DIR: /recipes
       PACK_CATALOG_PATH: /data/pack-catalog.yaml
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
+      UI_TOKEN: ${UI_TOKEN:-}
     ports:
       - "8080:8080"
     volumes:
@@ -171,67 +172,8 @@ services:
     depends_on:
       - control-plane
 
-  prometheus:
-    image: quay.io/prometheus/prometheus:latest
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-      - '--web.enable-lifecycle'
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/alerts:/etc/prometheus/alerts:ro
-      - prometheus-data:/prometheus
-    depends_on:
-      - control-plane
-      - worker
-
-  alertmanager:
-    image: quay.io/prometheus/alertmanager:latest
-    command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
-      - '--storage.path=/alertmanager'
-    ports:
-      - "9093:9093"
-    volumes:
-      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      - alertmanager-data:/alertmanager
-
-  grafana:
-    image: docker.io/grafana/grafana:latest
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_SERVER_ROOT_URL: http://localhost:3001
-      GF_INSTALL_PLUGINS: ""
-    ports:
-      - "3001:3000"
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/etc/grafana/dashboards:ro
-      - grafana-data:/var/lib/grafana
-    depends_on:
-      - prometheus
-
-  postgres-exporter:
-    image: quay.io/prometheuscommunity/postgres-exporter:latest
-    environment:
-      DATA_SOURCE_NAME: postgresql://refinery:refinery@postgres:5432/refinery?sslmode=disable
-    ports:
-      - "9187:9187"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
 volumes:
   pgdata:
   zotdata:
   miniodata:
   podman-storage:
-  prometheus-data:
-  alertmanager-data:
-  grafana-data:

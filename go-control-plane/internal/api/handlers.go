@@ -166,20 +166,40 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	type workerMetrics struct {
 		Total         int   `json:"total"`
 		Online        int   `json:"online"`
+		Configured    int   `json:"configured"`
+		ConfigDrift   int   `json:"config_drift"`
 		Stale         int   `json:"stale"`
 		LatestSeenSec int64 `json:"latest_seen_seconds,omitempty"`
 		CASHits       int64 `json:"cas_hits,omitempty"`
 		CASMisses     int64 `json:"cas_misses,omitempty"`
 	}
 	type attemptMetrics struct {
-		Total         int     `json:"total"`
-		Built         int     `json:"built"`
-		Failed        int     `json:"failed"`
-		Retry         int     `json:"retry"`
-		Quarantined   int     `json:"quarantined"`
-		AvgDurationMs float64 `json:"avg_duration_ms"`
-		FailureRate   float64 `json:"failure_rate"`
-		RetryChurn    float64 `json:"retry_churn"`
+		Total                   int     `json:"total"`
+		Built                   int     `json:"built"`
+		Failed                  int     `json:"failed"`
+		Retry                   int     `json:"retry"`
+		Quarantined             int     `json:"quarantined"`
+		AvgDurationMs           float64 `json:"avg_duration_ms"`
+		FailureRate             float64 `json:"failure_rate"`
+		RetryChurn              float64 `json:"retry_churn"`
+		FirstAttemptBuilt       int     `json:"first_attempt_built"`
+		FirstAttemptFailed      int     `json:"first_attempt_failed"`
+		RetryAttemptBuilt       int     `json:"retry_attempt_built"`
+		RetryAttemptFailed      int     `json:"retry_attempt_failed"`
+		FirstAttemptSuccessRate float64 `json:"first_attempt_success_rate"`
+		RetrySuccessRate        float64 `json:"retry_success_rate"`
+		HintApplied             int     `json:"hint_applied"`
+		KnownHintApplied        int     `json:"known_hint_applied"`
+		HeuristicApplied        int     `json:"heuristic_applied"`
+		LLMApplied              int     `json:"llm_applied"`
+		HintApplicationRate     float64 `json:"hint_application_rate"`
+		LLMFallbackRate         float64 `json:"llm_fallback_rate"`
+		LLMSuggestionsIgnored   int     `json:"llm_suggestions_ignored"`
+		LLMIgnoredRate          float64 `json:"llm_ignored_rate"`
+		HintSaveFailed          int     `json:"hint_save_failed"`
+		HintSaveFailureRate     float64 `json:"hint_save_failure_rate"`
+		StaleRequeues           int     `json:"stale_requeues"`
+		StaleRequeueRate        float64 `json:"stale_requeue_rate"`
 	}
 	type logMetrics struct {
 		RecentChunks int     `json:"recent_chunks"`
@@ -275,6 +295,12 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 				} else {
 					wm.Stale++
 				}
+				if workerMetadataBool(ws.Metadata, "config_ready") {
+					wm.Configured++
+				}
+				if workerMetadataBool(ws.Metadata, "config_drift") {
+					wm.ConfigDrift++
+				}
 				wm.CASHits += ws.CASHits
 				wm.CASMisses += ws.CASMisses
 			}
@@ -306,12 +332,36 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 			am.Retry = stats.Retry
 			am.Quarantined = stats.Quarantined
 			am.AvgDurationMs = stats.AvgDurationMs
+			am.FirstAttemptBuilt = stats.FirstAttemptBuilt
+			am.FirstAttemptFailed = stats.FirstAttemptFailed
+			am.RetryAttemptBuilt = stats.RetryAttemptBuilt
+			am.RetryAttemptFailed = stats.RetryAttemptFailed
+			am.HintApplied = stats.HintApplied
+			am.KnownHintApplied = stats.KnownHintApplied
+			am.HeuristicApplied = stats.HeuristicApplied
+			am.LLMApplied = stats.LLMApplied
+			am.LLMSuggestionsIgnored = stats.LLMSuggestionsIgnored
+			am.HintSaveFailed = stats.HintSaveFailed
+			am.StaleRequeues = stats.StaleRequeues
 			denom := stats.Built + stats.Failed + stats.Quarantined
 			if denom > 0 {
 				am.FailureRate = float64(stats.Failed+stats.Quarantined) / float64(denom)
 			}
 			if stats.Total > 0 {
 				am.RetryChurn = float64(stats.Retry) / float64(stats.Total)
+				am.HintApplicationRate = float64(stats.HintApplied) / float64(stats.Total)
+				am.LLMFallbackRate = float64(stats.LLMApplied) / float64(stats.Total)
+				am.LLMIgnoredRate = float64(stats.LLMSuggestionsIgnored) / float64(stats.Total)
+				am.HintSaveFailureRate = float64(stats.HintSaveFailed) / float64(stats.Total)
+				am.StaleRequeueRate = float64(stats.StaleRequeues) / float64(stats.Total)
+			}
+			firstAttemptDenom := stats.FirstAttemptBuilt + stats.FirstAttemptFailed
+			if firstAttemptDenom > 0 {
+				am.FirstAttemptSuccessRate = float64(stats.FirstAttemptBuilt) / float64(firstAttemptDenom)
+			}
+			retryAttemptDenom := stats.RetryAttemptBuilt + stats.RetryAttemptFailed
+			if retryAttemptDenom > 0 {
+				am.RetrySuccessRate = float64(stats.RetryAttemptBuilt) / float64(retryAttemptDenom)
 			}
 		}
 	}
@@ -412,6 +462,8 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 	if list, err := h.Store.ListWorkers(ctx); err == nil {
 		total := 0
 		online := 0
+		configured := 0
+		configDrift := 0
 		var casHits int64
 		var casMisses int64
 		now := time.Now().Unix()
@@ -428,6 +480,12 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 			if now-ws.LastSeen <= threshold {
 				online++
 			}
+			if workerMetadataBool(ws.Metadata, "config_ready") {
+				configured++
+			}
+			if workerMetadataBool(ws.Metadata, "config_drift") {
+				configDrift++
+			}
 			casHits += ws.CASHits
 			casMisses += ws.CASMisses
 		}
@@ -437,6 +495,12 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&buf, "# HELP refinery_workers_online Workers seen within heartbeat window.\n")
 		fmt.Fprintf(&buf, "# TYPE refinery_workers_online gauge\n")
 		fmt.Fprintf(&buf, "refinery_workers_online %d\n", online)
+		fmt.Fprintf(&buf, "# HELP refinery_workers_configured Workers reporting ready configuration.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_workers_configured gauge\n")
+		fmt.Fprintf(&buf, "refinery_workers_configured %d\n", configured)
+		fmt.Fprintf(&buf, "# HELP refinery_worker_config_drift_incidents Workers reporting config drift or missing critical config.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_worker_config_drift_incidents gauge\n")
+		fmt.Fprintf(&buf, "refinery_worker_config_drift_incidents %d\n", configDrift)
 		fmt.Fprintf(&buf, "# HELP refinery_cas_hits Total CAS fetch hits reported by workers.\n")
 		fmt.Fprintf(&buf, "# TYPE refinery_cas_hits gauge\n")
 		fmt.Fprintf(&buf, "refinery_cas_hits %d\n", casHits)
@@ -482,6 +546,39 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_avg_duration_ms Average build duration in ms.\n")
 		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_avg_duration_ms gauge\n")
 		fmt.Fprintf(&buf, "refinery_build_attempts_avg_duration_ms %.2f\n", stats.AvgDurationMs)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_first_built First-attempt successful builds in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_first_built gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_first_built %d\n", stats.FirstAttemptBuilt)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_first_failed First-attempt failed/quarantined builds in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_first_failed gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_first_failed %d\n", stats.FirstAttemptFailed)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_retry_built Retry-attempt successful builds in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_retry_built gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_retry_built %d\n", stats.RetryAttemptBuilt)
+		fmt.Fprintf(&buf, "# HELP refinery_build_attempts_retry_failed Retry-attempt failed/quarantined builds in the metrics window.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_build_attempts_retry_failed gauge\n")
+		fmt.Fprintf(&buf, "refinery_build_attempts_retry_failed %d\n", stats.RetryAttemptFailed)
+		fmt.Fprintf(&buf, "# HELP refinery_hint_applied_total Attempts where automation applied a remediation.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_hint_applied_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_hint_applied_total %d\n", stats.HintApplied)
+		fmt.Fprintf(&buf, "# HELP refinery_remediation_source_known_hint Attempts remediated by known hints.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_remediation_source_known_hint gauge\n")
+		fmt.Fprintf(&buf, "refinery_remediation_source_known_hint %d\n", stats.KnownHintApplied)
+		fmt.Fprintf(&buf, "# HELP refinery_remediation_source_heuristic Attempts remediated by deterministic heuristics.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_remediation_source_heuristic gauge\n")
+		fmt.Fprintf(&buf, "refinery_remediation_source_heuristic %d\n", stats.HeuristicApplied)
+		fmt.Fprintf(&buf, "# HELP refinery_remediation_source_llm Attempts remediated by LLM fallback.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_remediation_source_llm gauge\n")
+		fmt.Fprintf(&buf, "refinery_remediation_source_llm %d\n", stats.LLMApplied)
+		fmt.Fprintf(&buf, "# HELP refinery_llm_suggestions_ignored_total LLM suggestions rejected or ignored by normalization/policy.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_llm_suggestions_ignored_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_llm_suggestions_ignored_total %d\n", stats.LLMSuggestionsIgnored)
+		fmt.Fprintf(&buf, "# HELP refinery_hint_save_failed_total Hint save failures observed during automation.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_hint_save_failed_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_hint_save_failed_total %d\n", stats.HintSaveFailed)
+		fmt.Fprintf(&buf, "# HELP refinery_stale_requeues_total Retry attempts caused by stale build recycle.\n")
+		fmt.Fprintf(&buf, "# TYPE refinery_stale_requeues_total gauge\n")
+		fmt.Fprintf(&buf, "refinery_stale_requeues_total %d\n", stats.StaleRequeues)
 		denom := stats.Built + stats.Failed + stats.Quarantined
 		if denom > 0 {
 			fmt.Fprintf(&buf, "# HELP refinery_build_failure_rate Failure rate in the metrics window.\n")
@@ -492,6 +589,33 @@ func (h *Handler) promMetrics(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(&buf, "# HELP refinery_build_retry_churn Retry ratio in the metrics window.\n")
 			fmt.Fprintf(&buf, "# TYPE refinery_build_retry_churn gauge\n")
 			fmt.Fprintf(&buf, "refinery_build_retry_churn %.4f\n", float64(stats.Retry)/float64(stats.Total))
+			fmt.Fprintf(&buf, "# HELP refinery_hint_application_rate Hint application ratio in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_hint_application_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_hint_application_rate %.4f\n", float64(stats.HintApplied)/float64(stats.Total))
+			fmt.Fprintf(&buf, "# HELP refinery_llm_fallback_rate LLM remediation ratio in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_llm_fallback_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_llm_fallback_rate %.4f\n", float64(stats.LLMApplied)/float64(stats.Total))
+			fmt.Fprintf(&buf, "# HELP refinery_llm_ignored_rate Ignored LLM suggestion ratio in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_llm_ignored_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_llm_ignored_rate %.4f\n", float64(stats.LLMSuggestionsIgnored)/float64(stats.Total))
+			fmt.Fprintf(&buf, "# HELP refinery_hint_save_failure_rate Hint save failure ratio in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_hint_save_failure_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_hint_save_failure_rate %.4f\n", float64(stats.HintSaveFailed)/float64(stats.Total))
+			fmt.Fprintf(&buf, "# HELP refinery_stale_requeue_rate Stale build recycle ratio in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_stale_requeue_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_stale_requeue_rate %.4f\n", float64(stats.StaleRequeues)/float64(stats.Total))
+		}
+		firstAttemptDenom := stats.FirstAttemptBuilt + stats.FirstAttemptFailed
+		if firstAttemptDenom > 0 {
+			fmt.Fprintf(&buf, "# HELP refinery_first_attempt_success_rate First-attempt success ratio in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_first_attempt_success_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_first_attempt_success_rate %.4f\n", float64(stats.FirstAttemptBuilt)/float64(firstAttemptDenom))
+		}
+		retryAttemptDenom := stats.RetryAttemptBuilt + stats.RetryAttemptFailed
+		if retryAttemptDenom > 0 {
+			fmt.Fprintf(&buf, "# HELP refinery_retry_success_rate Retry-attempt success ratio in the metrics window.\n")
+			fmt.Fprintf(&buf, "# TYPE refinery_retry_success_rate gauge\n")
+			fmt.Fprintf(&buf, "refinery_retry_success_rate %.4f\n", float64(stats.RetryAttemptBuilt)/float64(retryAttemptDenom))
 		}
 	}
 	if stats, err := h.Store.LogChunkStats(ctx, since); err == nil {
@@ -1362,23 +1486,24 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Package        string   `json:"package"`
-		Version        string   `json:"version"`
-		Status         string   `json:"status"`
-		Error          string   `json:"error,omitempty"`
-		FailureSummary string   `json:"failure_summary,omitempty"`
-		Attempts       int      `json:"attempts,omitempty"`
-		PlanID         int64    `json:"plan_id,omitempty"`
-		NodeID         string   `json:"node_id,omitempty"`
-		BackoffUntil   int64    `json:"backoff_until,omitempty"`
-		BackoffReason  string   `json:"backoff_reason,omitempty"`
-		BackoffSeconds int      `json:"backoff_seconds,omitempty"`
-		DurationMS     int64    `json:"duration_ms,omitempty"`
-		ReasonCode     string   `json:"reason_code,omitempty"`
-		ReasonDetail   string   `json:"reason_detail,omitempty"`
-		Recipes        []string `json:"recipes,omitempty"`
-		HintIDs        []string `json:"hint_ids,omitempty"`
-		WorkerID       string   `json:"worker_id,omitempty"`
+		Package        string         `json:"package"`
+		Version        string         `json:"version"`
+		Status         string         `json:"status"`
+		Error          string         `json:"error,omitempty"`
+		FailureSummary string         `json:"failure_summary,omitempty"`
+		Attempts       int            `json:"attempts,omitempty"`
+		PlanID         int64          `json:"plan_id,omitempty"`
+		NodeID         string         `json:"node_id,omitempty"`
+		BackoffUntil   int64          `json:"backoff_until,omitempty"`
+		BackoffReason  string         `json:"backoff_reason,omitempty"`
+		BackoffSeconds int            `json:"backoff_seconds,omitempty"`
+		DurationMS     int64          `json:"duration_ms,omitempty"`
+		ReasonCode     string         `json:"reason_code,omitempty"`
+		ReasonDetail   string         `json:"reason_detail,omitempty"`
+		Recipes        []string       `json:"recipes,omitempty"`
+		HintIDs        []string       `json:"hint_ids,omitempty"`
+		Metadata       map[string]any `json:"metadata,omitempty"`
+		WorkerID       string         `json:"worker_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
@@ -1392,7 +1517,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 	if workerID == "" {
 		workerID = strings.TrimSpace(r.Header.Get("X-Worker-Id"))
 	}
-	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.BackoffReason, body.BackoffSeconds, body.ReasonCode, body.ReasonDetail, body.Recipes, body.HintIDs, body.PlanID, body.NodeID, workerID); err != nil {
+	if err := h.Store.UpdateBuildStatus(r.Context(), body.Package, body.Version, body.Status, body.Error, body.FailureSummary, body.Attempts, body.BackoffUntil, body.BackoffReason, body.BackoffSeconds, body.ReasonCode, body.ReasonDetail, body.Recipes, body.HintIDs, body.Metadata, body.PlanID, body.NodeID, workerID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -1412,6 +1537,7 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 			ReasonDetail:   body.ReasonDetail,
 			Recipes:        body.Recipes,
 			HintIDs:        body.HintIDs,
+			Metadata:       body.Metadata,
 			NodeID:         body.NodeID,
 			PlanID:         body.PlanID,
 		})
@@ -1450,6 +1576,11 @@ func (h *Handler) buildStatusUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		if workerID != "" {
 			meta["worker_id"] = workerID
+		}
+		for k, v := range body.Metadata {
+			if _, exists := meta[k]; !exists {
+				meta[k] = v
+			}
 		}
 		_ = h.Store.RecordEvent(r.Context(), store.Event{
 			Name:           body.Package,
@@ -2358,14 +2489,15 @@ func (h *Handler) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		WorkerID             string `json:"worker_id"`
-		RunID                string `json:"run_id,omitempty"`
-		ActiveBuilds         int    `json:"active_builds,omitempty"`
-		BuildPoolSize        int    `json:"build_pool_size,omitempty"`
-		PlanPoolSize         int    `json:"plan_pool_size,omitempty"`
-		HeartbeatIntervalSec int    `json:"heartbeat_interval_sec,omitempty"`
-		CASHits              int64  `json:"cas_hits,omitempty"`
-		CASMisses            int64  `json:"cas_misses,omitempty"`
+		WorkerID             string         `json:"worker_id"`
+		RunID                string         `json:"run_id,omitempty"`
+		ActiveBuilds         int            `json:"active_builds,omitempty"`
+		BuildPoolSize        int            `json:"build_pool_size,omitempty"`
+		PlanPoolSize         int            `json:"plan_pool_size,omitempty"`
+		HeartbeatIntervalSec int            `json:"heartbeat_interval_sec,omitempty"`
+		CASHits              int64          `json:"cas_hits,omitempty"`
+		CASMisses            int64          `json:"cas_misses,omitempty"`
+		Metadata             map[string]any `json:"metadata,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
@@ -2388,6 +2520,7 @@ func (h *Handler) workerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		HeartbeatIntervalSec: body.HeartbeatIntervalSec,
 		CASHits:              body.CASHits,
 		CASMisses:            body.CASMisses,
+		Metadata:             body.Metadata,
 	}
 	if err := h.Store.UpsertWorkerStatus(r.Context(), status); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -2409,6 +2542,24 @@ func (h *Handler) workerSmoke(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	stats, _ := h.Queue.Stats(ctx)
 	writeJSON(w, http.StatusOK, map[string]any{"detail": "smoke-ok", "queue_length": stats.Length})
+}
+
+func workerMetadataBool(meta map[string]any, key string) bool {
+	if len(meta) == 0 {
+		return false
+	}
+	v, ok := meta[key]
+	if !ok {
+		return false
+	}
+	switch typed := v.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
 }
 
 func (h *Handler) hints(w http.ResponseWriter, r *http.Request) {
@@ -2707,6 +2858,7 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 		seqFallback := int64(0)
 		trimEvery := 50
 		trimCounter := 0
+		lastTouched := time.Time{}
 		scanner := bufio.NewScanner(r.Body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
@@ -2745,6 +2897,27 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
+			}
+			if attempt > 0 {
+				now := time.Now()
+				if lastTouched.IsZero() || now.Sub(lastTouched) >= 15*time.Second {
+					active, err := h.shouldTouchBuildFromLogStream(r.Context(), name, version)
+					if err != nil {
+						writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+						return
+					}
+					if active {
+						if err := h.Store.UpdateBuildStatus(r.Context(), name, version, "building", "", "", attempt, 0, "", 0, "", "", nil, nil, nil, 0, "", ""); err != nil {
+							writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+							return
+						}
+					}
+					if active {
+						lastTouched = now
+					} else {
+						lastTouched = time.Time{}
+					}
+				}
 			}
 			if h.Config.LogChunkMax > 0 {
 				trimCounter++
@@ -2817,6 +2990,25 @@ func (h *Handler) logsStream(w http.ResponseWriter, r *http.Request) {
 		}).ServeHTTP(w, r)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (h *Handler) shouldTouchBuildFromLogStream(ctx context.Context, name, version string) (bool, error) {
+	if h.Store == nil {
+		return false, nil
+	}
+	builds, err := h.Store.ListBuilds(ctx, "", 1, 0, name, version)
+	if err != nil {
+		return false, err
+	}
+	if len(builds) == 0 {
+		return true, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(builds[0].Status)) {
+	case "built", "failed", "quarantined":
+		return false, nil
+	default:
+		return true, nil
 	}
 }
 

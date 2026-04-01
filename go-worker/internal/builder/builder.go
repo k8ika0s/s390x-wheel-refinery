@@ -17,7 +17,8 @@ type PackBuildOpts struct {
 	Digest string
 	Meta   map[string]any
 	// Shell command to run before tar creation; receives PACK_OUTPUT dir in env.
-	Cmd string
+	Cmd       string
+	LogWriter io.Writer
 }
 
 // RuntimeBuildOpts describes inputs for building a runtime artifact.
@@ -27,7 +28,8 @@ type RuntimeBuildOpts struct {
 	Policy        string
 	Meta          map[string]any
 	// Shell command to run before tar creation; receives PACK_OUTPUT dir in env.
-	Cmd string
+	Cmd       string
+	LogWriter io.Writer
 }
 
 // BuildPack executes a pack recipe into a real output tree and archives that tree.
@@ -37,7 +39,7 @@ func BuildPack(path string, opts PackBuildOpts) error {
 	}
 	return buildArtifact(path, opts.Cmd, []string{
 		"PACK_DIGEST=" + opts.Digest,
-	}, validatePackOutput)
+	}, validatePackOutput, opts.LogWriter)
 }
 
 // BuildRuntime executes a runtime recipe into a real output tree and archives that tree.
@@ -49,10 +51,10 @@ func BuildRuntime(path string, opts RuntimeBuildOpts) error {
 		"PACK_DIGEST=" + opts.Digest,
 		"PYTHON_VERSION=" + opts.PythonVersion,
 		"RUNTIME_POLICY=" + opts.Policy,
-	}, validateRuntimeOutput)
+	}, validateRuntimeOutput, opts.LogWriter)
 }
 
-func buildArtifact(path, cmd string, extraEnv []string, validate func(string) error) error {
+func buildArtifact(path, cmd string, extraEnv []string, validate func(string) error, logWriter io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -61,7 +63,7 @@ func buildArtifact(path, cmd string, extraEnv []string, validate func(string) er
 		return err
 	}
 	defer os.RemoveAll(outputDir)
-	if err := runCommand(cmd, outputDir, extraEnv); err != nil {
+	if err := runCommand(cmd, outputDir, extraEnv, logWriter); err != nil {
 		return err
 	}
 	if validate != nil {
@@ -104,7 +106,14 @@ func archiveTree(tw *tar.Writer, sourceDir string) error {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		hdr, err := tar.FileInfoHeader(info, "")
+		linkTarget := ""
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err = os.Readlink(path)
+			if err != nil {
+				return err
+			}
+		}
+		hdr, err := tar.FileInfoHeader(info, linkTarget)
 		if err != nil {
 			return err
 		}
@@ -183,7 +192,7 @@ func validateCommonOutput(outputDir string) error {
 }
 
 // runCommand executes a shell command, setting PACK_OUTPUT and extra env vars.
-func runCommand(cmd, outputDir string, extraEnv []string) error {
+func runCommand(cmd, outputDir string, extraEnv []string, logWriter io.Writer) error {
 	c := exec.Command("sh", "-c", cmd)
 	env := filterEnv(os.Environ(), "PACK_OUTPUT")
 	for _, entry := range extraEnv {
@@ -199,6 +208,11 @@ func runCommand(cmd, outputDir string, extraEnv []string) error {
 	c.Env = append(c.Env, extraEnv...)
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
+	if logWriter != nil {
+		mw := io.MultiWriter(os.Stdout, logWriter)
+		c.Stdout = mw
+		c.Stderr = io.MultiWriter(os.Stderr, logWriter)
+	}
 	return c.Run()
 }
 

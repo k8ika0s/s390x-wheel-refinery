@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/plan"
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/runner"
 )
 
@@ -47,5 +48,37 @@ func TestCompactTracePreservesOrder(t *testing.T) {
 	}
 	if out[0] != "matched hint A" || out[1] != "blocked hint B" || out[2] != "applied recipes" {
 		t.Fatalf("unexpected trace order: %v", out)
+	}
+}
+
+func TestInferHintFromLogPrefersCompilerToolsetForNumPyGCCMismatch(t *testing.T) {
+	ctxHint := plan.HintContext{
+		Package:       "pandas",
+		Version:       "2.2.3",
+		PythonVersion: "3.11",
+		PlatformTag:   "manylinux2014_s390x",
+	}
+	logContent := "error: subprocess-exited-with-error\nNumPy requires GCC >= 9.3"
+	hint, recipes, note, ok := inferHintFromLog(logContent, ctxHint)
+	if !ok {
+		t.Fatal("expected heuristic match")
+	}
+	if hint.Confidence != "high" {
+		t.Fatalf("expected high confidence, got %q", hint.Confidence)
+	}
+	if !strings.Contains(note, "compiler toolset") {
+		t.Fatalf("expected compiler toolset note, got %q", note)
+	}
+	got := strings.Join(recipes, ",")
+	want := strings.Join([]string{
+		"dnf:gcc-toolset-12",
+		"dnf:gcc-toolset-12-gcc",
+		"dnf:gcc-toolset-12-gcc-c++",
+		"env:CC=/opt/rh/gcc-toolset-12/root/usr/bin/gcc",
+		"env:CXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++",
+		"env:NPY_ALLOW_BLAS_UNSAFE=1",
+	}, ",")
+	if got != want {
+		t.Fatalf("unexpected recipes: got %q want %q", got, want)
 	}
 }

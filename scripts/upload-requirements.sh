@@ -6,7 +6,7 @@ API_BASE="${API_BASE:-http://localhost:8080}"
 REQ_FILE="${REQ_FILE:-}"
 REQ_FILENAME="${REQ_FILENAME:-}"
 UI_TOKEN="${UI_TOKEN:-}"
-ENQUEUE_PLAN="${ENQUEUE_PLAN:-1}"
+ENQUEUE_PLAN="${ENQUEUE_PLAN:-auto}"
 
 if [[ -z "$REQ_FILE" ]]; then
   echo "REQ_FILE is required." >&2
@@ -35,10 +35,6 @@ upload_resp="$(
 
 echo "$upload_resp"
 
-if [[ "$ENQUEUE_PLAN" != "1" ]]; then
-  exit 0
-fi
-
 pending_id="$(python3 - <<'PY' "$upload_resp"
 import json, sys
 data = json.loads(sys.argv[1])
@@ -49,6 +45,31 @@ PY
 if [[ -z "$pending_id" ]]; then
   echo "requirements upload did not return a pending_id" >&2
   exit 1
+fi
+
+should_enqueue="$ENQUEUE_PLAN"
+if [[ "$ENQUEUE_PLAN" == "auto" ]]; then
+  auto_plan="$(
+    curl "${curl_args[@]}" "${API_BASE}/api/settings" | python3 - <<'PY'
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("")
+    raise SystemExit(0)
+print("1" if data.get("auto_plan") else "0")
+PY
+  )"
+  if [[ "$auto_plan" == "1" ]]; then
+    should_enqueue="0"
+  else
+    should_enqueue="1"
+  fi
+fi
+
+if [[ "$should_enqueue" != "1" ]]; then
+  echo "auto_plan is enabled; skipped manual enqueue for pending input ${pending_id}"
+  exit 0
 fi
 
 curl "${curl_args[@]}" -X POST \

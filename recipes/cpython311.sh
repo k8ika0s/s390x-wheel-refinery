@@ -39,7 +39,9 @@ cd "$src_dir/Python-$PACK_VERSION"
 
 export CFLAGS="${CFLAGS:-} -O2 -fPIC"
 # Make the installed python find its libpython without LD_LIBRARY_PATH.
-export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,'\\$ORIGIN/../lib'"
+# Use $$ so the generated Makefile preserves a literal $ORIGIN for the linker.
+origin_rpath='$$ORIGIN/../lib'
+export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,${origin_rpath}"
 
 ./configure \
   --prefix="$PREFIX" \

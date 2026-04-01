@@ -1,28 +1,18 @@
 # Build stage: UBI + distro Go, targeting s390x to avoid Docker Hub pulls.
 FROM registry.access.redhat.com/ubi9/ubi:9.3 AS builder
-RUN dnf -y update && \
-    dnf -y install golang git make gcc && \
+RUN dnf -y install golang git make gcc && \
     dnf clean all
 WORKDIR /app
 COPY go-worker/ ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=s390x go build -trimpath -o /go-worker ./cmd/worker
 
-# Runtime stage with embedded podman (UBI9)
-FROM registry.access.redhat.com/ubi9/ubi:9.3
-RUN dnf -y update && \
-    dnf -y install podman fuse-overlayfs && \
-    dnf clean all
-
-# Configure podman storage to use vfs (safer for nested builds)
-RUN mkdir -p /etc/containers && \
-    cat > /etc/containers/storage.conf <<'EOF'
-[storage]
-driver = "vfs"
-graphroot = "/var/lib/containers/storage"
-runroot = "/run/containers/storage"
-mount_program = ""
-EOF
+# Runtime stage with embedded podman. Keep this aligned with the
+# refinery-builder image baseline so bootstrapped runtimes run inside the
+# nested build container without glibc mismatches.
+FROM localhost/s390x-wheel-refinery_worker-base:ubi8
 
 COPY --from=builder /go-worker /usr/local/bin/worker
+COPY containers/go-worker/entrypoint.sh /usr/local/bin/worker-entrypoint
+RUN chmod +x /usr/local/bin/worker-entrypoint
 EXPOSE 9000
-ENTRYPOINT ["/usr/local/bin/worker"]
+ENTRYPOINT ["/usr/local/bin/worker-entrypoint"]
