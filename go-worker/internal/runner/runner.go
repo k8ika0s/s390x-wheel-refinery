@@ -204,6 +204,32 @@ run_host_tool() {
     LD_LIBRARY_PATH="" \
     "$@"
 }
+expand_env_recipe_value() {
+  local value="$1"
+  value="${value//\$\{LD_LIBRARY_PATH:-\}/${LD_LIBRARY_PATH:-}}"
+  value="${value//\$LD_LIBRARY_PATH/${LD_LIBRARY_PATH:-}}"
+  value="${value//\$\{PATH:-\}/${PATH:-}}"
+  value="${value//\$PATH/${PATH:-}}"
+  value="${value//\$\{CFLAGS:-\}/${CFLAGS:-}}"
+  value="${value//\$CFLAGS/${CFLAGS:-}}"
+  value="${value//\$\{CXXFLAGS:-\}/${CXXFLAGS:-}}"
+  value="${value//\$CXXFLAGS/${CXXFLAGS:-}}"
+  value="${value//\$\{FFLAGS:-\}/${FFLAGS:-}}"
+  value="${value//\$FFLAGS/${FFLAGS:-}}"
+  value="${value//\$\{LDFLAGS:-\}/${LDFLAGS:-}}"
+  value="${value//\$LDFLAGS/${LDFLAGS:-}}"
+  printf '%s' "$value"
+}
+apply_env_recipe() {
+  local assignment="$1"
+  local key="${assignment%%=*}"
+  local value="${assignment#*=}"
+  if [ -z "$key" ] || [ "$key" = "$assignment" ]; then
+    return 1
+  fi
+  value="$(expand_env_recipe_value "$value")"
+  export "$key=$value"
+}
 if [ -n "${DEPS_PREFIXES:-}" ]; then
   pc_paths=""
   for pfx in $(echo "${DEPS_PREFIXES}" | tr ':' ' '); do
@@ -234,7 +260,7 @@ if [ -n "${RECIPES:-}" ]; then
       apt:*) apt_pkgs+=("${r#apt:}") ;;
       dnf:*) dnf_pkgs+=("${r#dnf:}") ;;
       pip:*) pip_pkgs+=("${r#pip:}") ;;
-      env:*) export "${r#env:}" ;;
+      env:*) apply_env_recipe "${r#env:}" || true ;;
       *) ;;
     esac
   done

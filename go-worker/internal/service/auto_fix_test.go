@@ -62,6 +62,11 @@ func TestAutoFixCooldownBypassForLowRiskUtilityRecipes(t *testing.T) {
 	if ok || !strings.Contains(reason, "duplicate") {
 		t.Fatalf("expected duplicate signature to stay blocked, got ok=%v reason=%q", ok, reason)
 	}
+
+	ok, reason = w.canApplyAutoFix(job, "sig-c", []string{"env:LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:${LD_LIBRARY_PATH:-}"}, "heuristic")
+	if !ok || reason != "" {
+		t.Fatalf("expected runtime libpath fix to bypass cooldown, got ok=%v reason=%q", ok, reason)
+	}
 }
 
 func TestInferHintFromLogMapsXargsToFindutils(t *testing.T) {
@@ -81,6 +86,26 @@ func TestInferHintFromLogMapsXargsToFindutils(t *testing.T) {
 	got := strings.Join(recipes, ",")
 	if !strings.Contains(got, "dnf:findutils") {
 		t.Fatalf("expected dnf:findutils recipe, got %q", got)
+	}
+}
+
+func TestInferHintFromLogMapsLibpythonLoadFailureToRuntimeLibPathFix(t *testing.T) {
+	hint, recipes, note, ok := inferHintFromLog(
+		"/opt/runtime/bin/python3: error while loading shared libraries: libpython3.11.so.1.0: cannot open shared object file: No such file or directory",
+		plan.HintContext{Package: "scikit-learn", PythonVersion: "3.11", PlatformTag: "manylinux2014_s390x"},
+	)
+	if !ok {
+		t.Fatal("expected heuristic match")
+	}
+	if hint.Confidence != "high" {
+		t.Fatalf("expected high confidence, got %q", hint.Confidence)
+	}
+	if !strings.Contains(note, "runtime libpython shared library path") {
+		t.Fatalf("unexpected note: %q", note)
+	}
+	got := strings.Join(recipes, ",")
+	if !strings.Contains(got, "env:LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:${LD_LIBRARY_PATH:-}") {
+		t.Fatalf("expected runtime libpath recipe, got %q", got)
 	}
 }
 

@@ -328,6 +328,9 @@ func canBypassAutoFixCooldown(recipes []string, source string) bool {
 		"pkg-config":  true,
 		"make":        true,
 	}
+	safeEnv := map[string]bool{
+		"LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:${LD_LIBRARY_PATH:-}": true,
+	}
 	for _, recipe := range recipes {
 		trimmed := strings.TrimSpace(recipe)
 		if trimmed == "" {
@@ -341,6 +344,12 @@ func canBypassAutoFixCooldown(recipes []string, source string) bool {
 		case strings.HasPrefix(trimmed, "dnf:"):
 			mgr = "dnf"
 			pkg = strings.TrimSpace(strings.TrimPrefix(trimmed, "dnf:"))
+		case strings.HasPrefix(trimmed, "env:"):
+			envRecipe := strings.TrimSpace(strings.TrimPrefix(trimmed, "env:"))
+			if !safeEnv[envRecipe] {
+				return false
+			}
+			continue
 		default:
 			return false
 		}
@@ -505,6 +514,21 @@ func inferHintFromLog(logContent string, ctx plan.HintContext) (plan.Hint, []str
 			},
 		}
 		hint.Examples = []string{m[0]}
+		return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
+	}
+
+	libpythonMissing := regexp.MustCompile(`(?i)libpython3(?:\.[0-9]+)?\.so(?:\.[0-9.]+)?: cannot open shared object file`)
+	if m := libpythonMissing.FindString(logContent); m != "" {
+		hint := baseAutoHint(ctx, regexp.QuoteMeta(m))
+		hint.Tags = append(hint.Tags, "runtime", "shared-library", "python")
+		hint.Confidence = "high"
+		hint.Note = "Auto-detected missing runtime libpython shared library path during Python startup. Re-prepend the mounted runtime library directories before running build steps."
+		hint.Recipes = map[string][]string{
+			"env": {
+				"LD_LIBRARY_PATH=/opt/runtime/lib:/opt/runtime/lib64:${LD_LIBRARY_PATH:-}",
+			},
+		}
+		hint.Examples = []string{m}
 		return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
 	}
 

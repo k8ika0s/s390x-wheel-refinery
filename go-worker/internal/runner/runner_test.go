@@ -59,11 +59,14 @@ func TestPodmanRunnerBuildCmdSanitizesHostPackageManagerEnv(t *testing.T) {
 	for _, want := range []string{
 		`run_host_tool()`,
 		`trim_spaces()`,
+		`expand_env_recipe_value()`,
+		`apply_env_recipe()`,
 		`env -u PYTHONHOME -u PYTHONPATH -u PYTHON_BIN -u PYTHON_PATH`,
 		`run_host_tool dnf -y install`,
 		`run_host_tool apt-get update`,
 		`run_host_tool apt-get install -y`,
 		`r="$(trim_spaces "$r")"`,
+		`apply_env_recipe "${r#env:}" || true`,
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("expected build command to contain %q", want)
@@ -71,6 +74,19 @@ func TestPodmanRunnerBuildCmdSanitizesHostPackageManagerEnv(t *testing.T) {
 	}
 	if strings.Contains(cmd, `xargs`) {
 		t.Fatalf("expected build command not to depend on xargs: %s", cmd)
+	}
+}
+
+func TestPodmanRunnerBuildCmdExpandsEnvRecipeVariables(t *testing.T) {
+	cmd := strings.Join((&PodmanRunner{}).buildCmd(Job{}), "\n")
+	for _, want := range []string{
+		`${value//\$\{LD_LIBRARY_PATH:-\}/${LD_LIBRARY_PATH:-}}`,
+		`${value//\$PATH/${PATH:-}}`,
+		`export "$key=$value"`,
+	} {
+		if !strings.Contains(cmd, want) {
+			t.Fatalf("expected env expansion fragment %q in command", want)
+		}
 	}
 }
 
