@@ -2,13 +2,11 @@ version: "3.9"
 
 services:
   postgres:
-    image: registry.redhat.io/rhel9/postgresql-16
+    image: docker.io/library/postgres:16
     environment:
-      POSTGRESQL_USER: refinery
-      POSTGRESQL_PASSWORD: refinery
-      POSTGRESQL_DATABASE: refinery
-      POSTGRESQL_ADMIN_PASSWORD: refinery-admin
-      POSTGRESQL_EXTENSIONS: pg_trgm
+      POSTGRES_USER: refinery
+      POSTGRES_PASSWORD: refinery
+      POSTGRES_DB: refinery
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
@@ -20,7 +18,7 @@ services:
       retries: 5
 
   redis:
-    image: registry.redhat.io/rhel9/redis-7
+    image: docker.io/library/redis:7
     ports:
       - "6379:6379"
 
@@ -85,13 +83,17 @@ services:
       WORKER_TOKEN: ${WORKER_TOKEN:-}
       CAS_REGISTRY_URL: http://zot:5000
       CAS_REGISTRY_REPO: artifacts
+      CAS_PUSH_ENABLED: ${CAS_PUSH_ENABLED:-0}
+      RUNTIME_PUSH_ENABLED: ${RUNTIME_PUSH_ENABLED:-0}
+      PACK_PUSH_ENABLED: ${PACK_PUSH_ENABLED:-0}
+      REPAIR_PUSH_ENABLED: ${REPAIR_PUSH_ENABLED:-0}
       OBJECT_STORE_ENDPOINT: http://minio:9000
       OBJECT_STORE_BUCKET: wheelhouse
       OBJECT_STORE_ACCESS_KEY: minio
       OBJECT_STORE_SECRET_KEY: minio123
       INPUT_OBJECT_PREFIX: inputs
       HINTS_DIR: /hints
-      HINTS_SEED: "1"
+      HINTS_SEED: ${HINTS_SEED:-1}
       PYTHON_RECIPES_DIR: /recipes
       PACK_CATALOG_PATH: /data/pack-catalog.yaml
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
@@ -140,12 +142,27 @@ services:
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379
       PODMAN_BIN: podman
+      CONTAINER_IMAGE: ${CONTAINER_IMAGE:-refinery-builder:latest}
+      CONTAINER_IMAGE_TLS_VERIFY: ${CONTAINER_IMAGE_TLS_VERIFY:-false}
       CAS_REGISTRY_URL: http://zot:5000
       CAS_REGISTRY_REPO: artifacts
+      CAS_PUSH_ENABLED: ${CAS_PUSH_ENABLED:-0}
+      RUNTIME_PUSH_ENABLED: ${RUNTIME_PUSH_ENABLED:-0}
+      PACK_PUSH_ENABLED: ${PACK_PUSH_ENABLED:-0}
+      REPAIR_PUSH_ENABLED: ${REPAIR_PUSH_ENABLED:-0}
       OBJECT_STORE_ENDPOINT: http://minio:9000
       OBJECT_STORE_BUCKET: wheelhouse
       OBJECT_STORE_ACCESS_KEY: minio
       OBJECT_STORE_SECRET_KEY: minio123
+      INFER_ENABLED: ${INFER_ENABLED:-1}
+      INFER_URL: ${INFER_URL:-}
+      INFER_TOKEN: ${INFER_TOKEN:-}
+      INFER_MODEL: ${INFER_MODEL:-}
+      INFER_TIMEOUT_SEC: ${INFER_TIMEOUT_SEC:-20}
+      INFER_MAX_RETRIES: ${INFER_MAX_RETRIES:-1}
+      DEFAULT_RUNTIME_CMD: ${DEFAULT_RUNTIME_CMD:-/app/recipes/cpython311.sh}
+      REFINERY_RUNTIME_ENV_LOADED: ${REFINERY_RUNTIME_ENV_LOADED:-0}
+      REFINERY_RUNTIME_ENV_SOURCE: ${REFINERY_RUNTIME_ENV_SOURCE:-process-env}
     volumes:
       - ./output:/output
       - ./cache:/cache

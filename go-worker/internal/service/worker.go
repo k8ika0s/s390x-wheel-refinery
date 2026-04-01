@@ -4,8 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,8 +64,15 @@ type result struct {
 	duration time.Duration
 	log      string
 	err      error
-	repair   artifact.ID
 	attempt  int
+}
+
+type uploadedArtifacts struct {
+	WheelURL     string
+	RuntimeURL   string
+	PackURLs     []string
+	RepairURL    string
+	RepairDigest string
 }
 
 // LoadPlan reads plan.json if present.
@@ -175,29 +180,25 @@ func (w *Worker) Drain(ctx context.Context) error {
 					return fmt.Errorf("fetch wheel %s: %w", job.WheelDigest, err)
 				}
 			}
-			logStream := w.openLogStream(ctx, job, attempt)
+			logStream := job.LogWriter
+			if logStream == nil {
+				logStream = w.openLogStream(ctx, job, attempt)
+			}
 			if logStream != nil {
 				defer logStream.Close()
 				job.LogWriter = logStream
 			}
-			w.reportBuildStatus(ctx, job, "building", nil, "", attempt, 0, failureReason{}, backoffMeta{}, job.Recipes, nil)
+			w.reportBuildStatus(ctx, job, "building", nil, "", attempt, 0, failureReason{}, backoffMeta{}, job.Recipes, nil, nil)
 			dur, logContent, err := w.Runner.Run(ctx, job)
 			if err != nil && strings.TrimSpace(logContent) == "" {
 				logContent = fmt.Sprintf("error: %s", err.Error())
 			}
-			repID := artifact.ID{}
 			results[i] = result{
 				job:      job,
 				duration: dur,
 				log:      logContent,
 				err:      err,
-				repair:   repID,
 				attempt:  attempt,
-			}
-			if err == nil && w.Cfg.RepairPushEnabled && job.WheelDigest != "" && w.Pusher.BaseURL != "" {
-				repKey := artifact.RepairKey{InputWheelDigest: job.WheelDigest}
-				repID = artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}
-				results[i].repair = repID
 			}
 			return nil
 		})
@@ -234,9 +235,11 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		detail := ""
 		recipesForStatus := res.job.Recipes
+		recipesBefore := dedupeStrings(res.job.Recipes)
 		autoFix := autoFixResult{}
 		summary := ""
 		reason := failureReason{}
+		failureLog := ""
 		quarantined := false
 		quarantineAfter := w.Cfg.QuarantineAfterAttempts
 		if res.err != nil {
@@ -251,6 +254,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 			if strings.TrimSpace(logForHints) == "" {
 				logForHints = summary
 			}
+			failureLog = logForHints
 			reason = classifyFailureReason(res.err, logForHints)
 			if reason.Code != "" {
 				meta["reason_code"] = reason.Code
@@ -296,39 +300,96 @@ func (w *Worker) Drain(ctx context.Context) error {
 		if len(recipesForStatus) > 0 {
 			meta["recipes"] = recipesForStatus
 		}
+		recipesAfter := dedupeStrings(recipesForStatus)
+		if len(recipesBefore) > 0 {
+			meta["effective_recipes_before"] = recipesBefore
+		}
+		if len(recipesAfter) > 0 {
+			meta["effective_recipes_after"] = recipesAfter
+		}
+		if envBefore := effectiveEnvOverrides(recipesBefore); len(envBefore) > 0 {
+			meta["effective_env_overrides_before"] = envBefore
+		}
+		if envAfter := effectiveEnvOverrides(recipesAfter); len(envAfter) > 0 {
+			meta["effective_env_overrides"] = envAfter
+		}
+		meta["policy_version"] = autoFixPolicyVersion
+		if autoFix.PromptVersion != "" {
+			meta["prompt_version"] = autoFix.PromptVersion
+		} else {
+			meta["prompt_version"] = promptVersion(w.Cfg)
+		}
+		if res.attempt > 1 {
+			meta["prior_attempt"] = res.attempt - 1
+		}
 		if status == "retry" && backoff.Until > 0 {
 			meta["backoff_reason"] = backoff.Reason
 			meta["backoff_seconds"] = backoff.Seconds
+			meta["retry_cause"] = firstNonEmpty(autoFix.Source, backoff.Reason, reason.Code, "retry")
 		}
 		if quarantined {
 			meta["quarantined"] = true
 		}
-		if autoFix.Applied || len(autoFix.HintIDs) > 0 || len(autoFix.SavedHintIDs) > 0 || len(autoFix.BlockedHints) > 0 || autoFix.BlockedReason != "" || len(autoFix.DecisionTrace) > 0 {
-			meta["automation"] = map[string]any{
-				"applied":        autoFix.Applied,
-				"recipes":        recipesForStatus,
-				"hint_ids":       autoFix.HintIDs,
-				"saved_hint_ids": autoFix.SavedHintIDs,
-				"reason":         autoFix.Reason,
-				"blocked":        autoFix.BlockedReason,
-				"blocked_hints":  autoFix.BlockedHints,
-				"impact":         autoFix.Impact,
-				"impact_reason":  autoFix.ImpactReason,
-				"decision_trace": autoFix.DecisionTrace,
+		if res.err != nil {
+			meta["failure_stage"] = failureStage(failureLog)
+			if excerpt := failureExcerpt(failureLog); excerpt != "" {
+				meta["failure_excerpt"] = excerpt
 			}
 		}
-		w.reportBuildStatus(ctx, res.job, status, res.err, summary, res.attempt, res.duration.Milliseconds(), reason, backoff, recipesForStatus, autoFix.HintIDs)
+		if autoFix.Source != "" {
+			meta["remediation_source"] = autoFix.Source
+		}
+		if autoFix.RawLLMOutput != "" {
+			meta["raw_llm_output"] = autoFix.RawLLMOutput
+		}
+		if autoFix.NormalizedLLMOutput != nil {
+			meta["normalized_llm_output"] = autoFix.NormalizedLLMOutput
+		}
+		if autoFix.LLMSuggestionIgnored {
+			meta["llm_suggestion_ignored"] = true
+			if autoFix.LLMIgnoreReason != "" {
+				meta["llm_ignore_reason"] = autoFix.LLMIgnoreReason
+			}
+		}
+		if autoFix.HintSaveFailed {
+			meta["hint_save_failed"] = true
+		}
+		if autoFix.Applied || len(autoFix.HintIDs) > 0 || len(autoFix.SavedHintIDs) > 0 || len(autoFix.BlockedHints) > 0 || autoFix.BlockedReason != "" || len(autoFix.DecisionTrace) > 0 {
+			meta["automation"] = map[string]any{
+				"applied":                autoFix.Applied,
+				"recipes":                recipesForStatus,
+				"proposed_recipes":       autoFix.ProposedRecipes,
+				"hint_ids":               autoFix.HintIDs,
+				"saved_hint_ids":         autoFix.SavedHintIDs,
+				"reason":                 autoFix.Reason,
+				"remediation_source":     autoFix.Source,
+				"blocked":                autoFix.BlockedReason,
+				"blocked_hints":          autoFix.BlockedHints,
+				"impact":                 autoFix.Impact,
+				"impact_reason":          autoFix.ImpactReason,
+				"decision_trace":         autoFix.DecisionTrace,
+				"raw_llm_output":         autoFix.RawLLMOutput,
+				"normalized_llm_output":  autoFix.NormalizedLLMOutput,
+				"prompt_version":         meta["prompt_version"],
+				"policy_version":         autoFixPolicyVersion,
+				"llm_suggestion_ignored": autoFix.LLMSuggestionIgnored,
+				"llm_ignore_reason":      autoFix.LLMIgnoreReason,
+				"hint_save_failed":       autoFix.HintSaveFailed,
+			}
+		}
+		finalizeCtx, finalizeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		w.reportBuildStatus(finalizeCtx, res.job, status, res.err, summary, res.attempt, res.duration.Milliseconds(), reason, backoff, recipesForStatus, autoFix.HintIDs, meta)
+		uploads := uploadedArtifacts{}
+		if res.err == nil {
+			uploads = w.uploadArtifacts(finalizeCtx, res.job)
+		}
 		if res.job.WheelDigest != "" {
 			meta["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
 				meta["wheel_source_digest"] = res.job.WheelSourceDigest
 			}
-			if u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: res.job.WheelDigest}); u != "" {
-				meta["wheel_url"] = u
-			} else if res.job.WheelDigest != "" {
-				if u := w.objectURL(res.job, "wheel"); u != "" {
-					meta["wheel_url"] = u
-				}
+			if uploads.WheelURL != "" {
+				meta["wheel_url"] = uploads.WheelURL
 			}
 		}
 		if res.job.WheelAction != "" {
@@ -336,34 +397,26 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.job.RuntimeDigest != "" {
 			meta["runtime_digest"] = res.job.RuntimeDigest
-			if u := w.casURL(artifact.ID{Type: artifact.RuntimeType, Digest: res.job.RuntimeDigest}); u != "" {
-				meta["runtime_url"] = u
+			if uploads.RuntimeURL != "" {
+				meta["runtime_url"] = uploads.RuntimeURL
 			}
 		}
 		if len(res.job.PackDigests) > 0 {
 			meta["pack_digests"] = res.job.PackDigests
-			var urls []string
-			for _, d := range res.job.PackDigests {
-				if u := w.casURL(artifact.ID{Type: artifact.PackType, Digest: d}); u != "" {
-					urls = append(urls, u)
-				}
-			}
-			if len(urls) > 0 {
-				meta["pack_urls"] = urls
+			if len(uploads.PackURLs) > 0 {
+				meta["pack_urls"] = uploads.PackURLs
 			}
 		}
-		if res.repair.Type == artifact.RepairType && res.repair.Digest != "" {
-			meta["repair_digest"] = res.repair.Digest
+		if uploads.RepairDigest != "" {
+			meta["repair_digest"] = uploads.RepairDigest
 			if w.Cfg.RepairToolVersion != "" {
 				meta["repair_tool_version"] = w.Cfg.RepairToolVersion
 			}
 			if w.Cfg.RepairPolicyHash != "" {
 				meta["repair_policy_hash"] = w.Cfg.RepairPolicyHash
 			}
-			if u := w.casURL(res.repair); u != "" {
-				meta["repair_url"] = u
-			} else if u := w.objectURL(res.job, "repair"); u != "" {
-				meta["repair_url"] = u
+			if uploads.RepairURL != "" {
+				meta["repair_url"] = uploads.RepairURL
 			}
 		}
 
@@ -427,15 +480,14 @@ func (w *Worker) Drain(ctx context.Context) error {
 				"reason":  autoFix.Reason,
 			}
 		}
+		logPayload["metadata"] = meta
 		if res.job.WheelDigest != "" {
 			logPayload["wheel_digest"] = res.job.WheelDigest
 			if res.job.WheelSourceDigest != "" {
 				logPayload["wheel_source_digest"] = res.job.WheelSourceDigest
 			}
-			if u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: res.job.WheelDigest}); u != "" {
-				logPayload["wheel_url"] = u
-			} else if u := w.objectURL(res.job, "wheel"); u != "" {
-				logPayload["wheel_url"] = u
+			if uploads.WheelURL != "" {
+				logPayload["wheel_url"] = uploads.WheelURL
 			}
 		}
 		if res.job.WheelAction != "" {
@@ -443,34 +495,26 @@ func (w *Worker) Drain(ctx context.Context) error {
 		}
 		if res.job.RuntimeDigest != "" {
 			logPayload["runtime_digest"] = res.job.RuntimeDigest
-			if u := w.casURL(artifact.ID{Type: artifact.RuntimeType, Digest: res.job.RuntimeDigest}); u != "" {
-				logPayload["runtime_url"] = u
+			if uploads.RuntimeURL != "" {
+				logPayload["runtime_url"] = uploads.RuntimeURL
 			}
 		}
 		if len(res.job.PackDigests) > 0 {
 			logPayload["pack_digests"] = res.job.PackDigests
-			var urls []string
-			for _, d := range res.job.PackDigests {
-				if u := w.casURL(artifact.ID{Type: artifact.PackType, Digest: d}); u != "" {
-					urls = append(urls, u)
-				}
-			}
-			if len(urls) > 0 {
-				logPayload["pack_urls"] = urls
+			if len(uploads.PackURLs) > 0 {
+				logPayload["pack_urls"] = uploads.PackURLs
 			}
 		}
-		if res.repair.Type == artifact.RepairType && res.repair.Digest != "" {
-			logPayload["repair_digest"] = res.repair.Digest
+		if uploads.RepairDigest != "" {
+			logPayload["repair_digest"] = uploads.RepairDigest
 			if w.Cfg.RepairToolVersion != "" {
 				logPayload["repair_tool_version"] = w.Cfg.RepairToolVersion
 			}
 			if w.Cfg.RepairPolicyHash != "" {
 				logPayload["repair_policy_hash"] = w.Cfg.RepairPolicyHash
 			}
-			if u := w.casURL(res.repair); u != "" {
-				logPayload["repair_url"] = u
-			} else if u := w.objectURL(res.job, "repair"); u != "" {
-				logPayload["repair_url"] = u
+			if uploads.RepairURL != "" {
+				logPayload["repair_url"] = uploads.RepairURL
 			}
 		}
 		if w.Reporter != nil {
@@ -512,9 +556,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 			}
 		}
 
-		if res.err == nil {
-			w.uploadArtifacts(ctx, res.job)
-		}
+		finalizeCancel()
 	}
 
 	if len(manifestEntries) > 0 {
@@ -523,7 +565,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 	return firstErr
 }
 
-func (w *Worker) reportBuildStatus(ctx context.Context, job runner.Job, status string, err error, summary string, attempts int, durationMs int64, reason failureReason, backoff backoffMeta, recipes []string, hintIDs []string) {
+func (w *Worker) reportBuildStatus(ctx context.Context, job runner.Job, status string, err error, summary string, attempts int, durationMs int64, reason failureReason, backoff backoffMeta, recipes []string, hintIDs []string, metadata map[string]any) {
 	if w.Cfg.ControlPlaneURL == "" {
 		return
 	}
@@ -570,6 +612,9 @@ func (w *Worker) reportBuildStatus(ctx context.Context, job runner.Job, status s
 	if len(hintIDs) > 0 {
 		body["hint_ids"] = hintIDs
 	}
+	if len(metadata) > 0 {
+		body["metadata"] = metadata
+	}
 	if w.Cfg.WorkerID != "" {
 		body["worker_id"] = w.Cfg.WorkerID
 	}
@@ -601,6 +646,13 @@ func (w *Worker) reportBuildStatus(ctx context.Context, job runner.Job, status s
 }
 
 func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Request) []runner.Job {
+	type matchedJob struct {
+		job          runner.Job
+		req          queue.Request
+		orderedPacks []artifact.ID
+		runtimeID    artifact.ID
+	}
+
 	packActions := map[string]string{}
 	packMeta := map[string]map[string]any{}
 	runtimeActions := map[string]string{}
@@ -616,7 +668,7 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 		}
 	}
 
-	var jobs []runner.Job
+	var matched []matchedJob
 	for _, req := range reqs {
 		for _, node := range snap.Plan {
 			if node.Name == "" || node.Version == "" {
@@ -637,7 +689,7 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 			}
 			orderedPacks := topoSortFromDag(packIDs, snap.DAG)
 			recipes := mergeRecipes(req.Recipes, recipeNames(node.Recipes))
-			jobs = append(jobs, runner.Job{
+			job := runner.Job{
 				Name:              node.Name,
 				Version:           node.Version,
 				PlanID:            req.PlanID,
@@ -651,12 +703,36 @@ func (w *Worker) match(ctx context.Context, snap plan.Snapshot, reqs []queue.Req
 				WheelSourceDigest: findWheelSourceDigest(snap.DAG, wheelDigest),
 				RepairToolVersion: findRepairToolVersion(snap.DAG, wheelDigest),
 				RepairPolicyHash:  findRepairPolicyHash(snap.DAG, wheelDigest),
-				PackPaths:         w.resolvePacks(ctx, orderedPacks, packActions, packMeta),
-				RuntimePath:       w.fetchRuntime(ctx, firstNonEmpty(req.PythonVersion, node.PythonVersion), runtimeID, runtimeActions[runtimeID.Digest], runtimeMeta[runtimeID.Digest]),
 				RuntimeDigest:     runtimeID.Digest,
 				PackDigests:       packDigests(orderedPacks),
+			}
+			matched = append(matched, matchedJob{
+				job:          job,
+				req:          req,
+				orderedPacks: orderedPacks,
+				runtimeID:    runtimeID,
 			})
 		}
+	}
+
+	for _, item := range matched {
+		// Dependency bootstrap can take long enough to exceed the leased timeout,
+		// so mark the full leased batch building before pack/runtime resolution begins.
+		w.reportBuildStatus(ctx, item.job, "building", nil, "", item.req.Attempts, 0, failureReason{}, backoffMeta{}, item.job.Recipes, nil, nil)
+	}
+
+	jobs := make([]runner.Job, 0, len(matched))
+	for _, item := range matched {
+		job := item.job
+		logStream := w.openLogStream(ctx, job, item.req.Attempts)
+		if logStream != nil {
+			job.LogWriter = logStream
+			writeBootstrapLog(job.LogWriter, "bootstrap: preparing dependencies for %s==%s", job.Name, job.Version)
+		}
+		packPaths := w.resolvePacks(ctx, item.orderedPacks, packActions, packMeta, job.LogWriter)
+		job.PackPaths = packPaths
+		job.RuntimePath = w.fetchRuntime(ctx, firstNonEmpty(item.req.PythonVersion, job.PythonVersion), item.runtimeID, runtimeActions[item.runtimeID.Digest], runtimeMeta[item.runtimeID.Digest], packPaths, job.LogWriter)
+		jobs = append(jobs, job)
 	}
 	return jobs
 }
@@ -815,7 +891,7 @@ func (w *Worker) casURL(id artifact.ID) string {
 	if repo == "" {
 		repo = "artifacts"
 	}
-	return fmt.Sprintf("%s/v2/%s/blobs/%s", strings.TrimRight(w.Cfg.CASRegistryURL, "/"), strings.Trim(repo, "/"), id.Digest)
+	return fmt.Sprintf("%s/v2/%s/manifests/%s", strings.TrimRight(w.Cfg.CASRegistryURL, "/"), strings.Trim(repo, "/"), strings.ReplaceAll(id.Digest, ":", "-"))
 }
 
 func (w *Worker) objectURL(job runner.Job, kind string) string {
@@ -1265,36 +1341,13 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 }
 
 // uploadArtifacts pushes built wheel files to object storage (best effort).
-func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
+func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) uploadedArtifacts {
 	store := w.Store
-	if store == nil {
-		return
-	}
 	entries, err := os.ReadDir(w.Cfg.OutputDir)
 	if err != nil {
-		return
+		return uploadedArtifacts{}
 	}
-	var objectTasks []func(context.Context) error
-	var casTasks []func(context.Context) error
-	runTasks := func(label string, limit int, tasks []func(context.Context) error) {
-		if len(tasks) == 0 {
-			return
-		}
-		if limit <= 0 {
-			limit = 1
-		}
-		g, ctx := errgroup.WithContext(ctx)
-		g.SetLimit(limit)
-		for _, task := range tasks {
-			task := task
-			g.Go(func() error {
-				return task(ctx)
-			})
-		}
-		if err := g.Wait(); err != nil {
-			log.Printf("upload %s tasks: %v", label, err)
-		}
-	}
+	result := uploadedArtifacts{}
 
 	// Pack publish is not tied to specific files; packs are metadata-only here.
 	for _, e := range entries {
@@ -1310,22 +1363,27 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		if err != nil {
 			continue
 		}
-		if job.WheelDigest != "" {
-			if ok, err := verifyBytesDigest(data, job.WheelDigest); err != nil || !ok {
-				log.Printf("skip CAS push for wheel: digest mismatch %s", job.WheelDigest)
-				continue
+		key := fmt.Sprintf("%s/%s/%s", strings.ToLower(job.Name), job.Version, e.Name())
+		objectOK := false
+		if store != nil {
+			if err := store.Put(ctx, key, data, "application/octet-stream"); err != nil {
+				log.Printf("object store push for wheel failed: %v", err)
+			} else {
+				objectOK = true
 			}
 		}
-		key := fmt.Sprintf("%s/%s/%s", strings.ToLower(job.Name), job.Version, e.Name())
-		payload := data
-		objectTasks = append(objectTasks, func(ctx context.Context) error {
-			return store.Put(ctx, key, payload, "application/octet-stream")
-		})
 		if w.Cfg.CASPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
 			id := artifact.ID{Type: artifact.WheelType, Digest: job.WheelDigest}
-			casTasks = append(casTasks, func(ctx context.Context) error {
-				return w.casPush(ctx, id, payload, "application/octet-stream")
-			})
+			if err := w.casPush(ctx, id, data, "application/octet-stream"); err != nil {
+				log.Printf("CAS push for wheel failed: %v", err)
+			} else {
+				result.WheelURL = w.casURL(id)
+			}
+		}
+		if result.WheelURL == "" && objectOK {
+			if osWithURL, ok := store.(interface{ URL(string) string }); ok {
+				result.WheelURL = osWithURL.URL(key)
+			}
 		}
 	}
 	if w.Cfg.RepairPushEnabled && w.Pusher.BaseURL != "" && job.WheelDigest != "" {
@@ -1333,10 +1391,9 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 		repData, err := os.ReadFile(repPath)
 		if err != nil {
 			if wheelPath := w.wheelFileForJob(job); wheelPath != "" {
-				_ = w.runRepair(wheelPath, repPath)
-				repData, _ = os.ReadFile(repPath)
-			} else {
-				if err := w.writeStubArtifact(repPath, "repair", job.WheelDigest, map[string]any{"name": job.Name, "version": job.Version}); err == nil {
+				if err := w.runRepair(wheelPath, repPath); err != nil {
+					log.Printf("skip repair artifact: %v", err)
+				} else {
 					repData, _ = os.ReadFile(repPath)
 				}
 			}
@@ -1347,84 +1404,57 @@ func (w *Worker) uploadArtifacts(ctx context.Context, job runner.Job) {
 				RepairToolVersion: w.Cfg.RepairToolVersion,
 				PolicyRulesDigest: w.Cfg.RepairPolicyHash,
 			}
-			if ok, err := verifyBytesDigest(repData, repKey.Digest()); err == nil && !ok {
-				log.Printf("skip CAS push for repair: digest mismatch %s", repKey.Digest())
+			id := artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}
+			if err := w.casPush(ctx, id, repData, "application/octet-stream"); err != nil {
+				log.Printf("CAS push for repair failed: %v", err)
 			} else {
-				id := artifact.ID{Type: artifact.RepairType, Digest: repKey.Digest()}
-				payload := repData
-				casTasks = append(casTasks, func(ctx context.Context) error {
-					return w.casPush(ctx, id, payload, "application/octet-stream")
-				})
-				repairKey := fmt.Sprintf("%s/%s/repair-%s.whl", strings.ToLower(job.Name), job.Version, job.WheelDigest)
-				objectTasks = append(objectTasks, func(ctx context.Context) error {
-					return store.Put(ctx, repairKey, payload, "application/octet-stream")
-				})
+				result.RepairDigest = id.Digest
+				result.RepairURL = w.casURL(id)
+			}
+			repairKey := fmt.Sprintf("%s/%s/repair-%s.whl", strings.ToLower(job.Name), job.Version, job.WheelDigest)
+			if store != nil {
+				if err := store.Put(ctx, repairKey, repData, "application/octet-stream"); err != nil {
+					log.Printf("object store push for repair failed: %v", err)
+				} else if result.RepairURL == "" {
+					if osWithURL, ok := store.(interface{ URL(string) string }); ok {
+						result.RepairURL = osWithURL.URL(repairKey)
+					}
+					result.RepairDigest = id.Digest
+				}
 			}
 		}
 	}
-	// Optional pack/runtime publish (empty placeholder payload)
+	// Optional pack/runtime publish from local CAS tar archives.
 	if w.Cfg.PackPushEnabled && len(job.PackDigests) > 0 {
-		for idx, d := range job.PackDigests {
-			if idx < len(job.PackPaths) && job.PackPaths[idx] != "" {
-				if data, err := os.ReadFile(job.PackPaths[idx]); err == nil {
-					if ok, err := verifyBytesDigest(data, d); err == nil && !ok {
-						log.Printf("skip CAS push for pack: digest mismatch %s", d)
-						continue
-					}
-					id := artifact.ID{Type: artifact.PackType, Digest: d}
-					payload := data
-					casTasks = append(casTasks, func(ctx context.Context) error {
-						return w.casPush(ctx, id, payload, "application/octet-stream")
-					})
-					continue
+		for _, d := range job.PackDigests {
+			id := artifact.ID{Type: artifact.PackType, Digest: d}
+			archivePath := w.localCASArchivePath(id)
+			data, err := os.ReadFile(archivePath)
+			if err == nil {
+				if err := w.casPush(ctx, id, data, "application/octet-stream"); err != nil {
+					log.Printf("CAS push for pack failed: %v", err)
+				} else {
+					result.PackURLs = append(result.PackURLs, w.casURL(id))
 				}
+				continue
 			}
-			if stub, err := w.stubPayload("pack", d, nil); err == nil {
-				id := artifact.ID{Type: artifact.PackType, Digest: d}
-				payload := stub
-				casTasks = append(casTasks, func(ctx context.Context) error {
-					return w.casPush(ctx, id, payload, "application/octet-stream")
-				})
-			}
+			log.Printf("skip CAS push for pack: no built artifact available %s", d)
 		}
 	}
 	if w.Cfg.RuntimePushEnabled && job.RuntimeDigest != "" {
-		if job.RuntimePath != "" {
-			if data, err := os.ReadFile(job.RuntimePath); err == nil {
-				if ok, err := verifyBytesDigest(data, job.RuntimeDigest); err == nil && !ok {
-					log.Printf("skip CAS push for runtime: digest mismatch %s", job.RuntimeDigest)
-					goto finalize
-				}
-				id := artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}
-				payload := data
-				casTasks = append(casTasks, func(ctx context.Context) error {
-					return w.casPush(ctx, id, payload, "application/octet-stream")
-				})
-				goto finalize
+		id := artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}
+		archivePath := w.localCASArchivePath(id)
+		if data, err := os.ReadFile(archivePath); err == nil {
+			if err := w.casPush(ctx, id, data, "application/octet-stream"); err != nil {
+				log.Printf("CAS push for runtime failed: %v", err)
+			} else {
+				result.RuntimeURL = w.casURL(id)
 			}
-		}
-		if stub, err := w.stubPayload("runtime", job.RuntimeDigest, nil); err == nil {
-			id := artifact.ID{Type: artifact.RuntimeType, Digest: job.RuntimeDigest}
-			payload := stub
-			casTasks = append(casTasks, func(ctx context.Context) error {
-				return w.casPush(ctx, id, payload, "application/octet-stream")
-			})
+		} else {
+			log.Printf("skip CAS push for runtime: no built artifact available %s", job.RuntimeDigest)
 		}
 	}
-finalize:
-	runTasks("object store", w.Cfg.ObjectStoreMaxParallel, objectTasks)
-	runTasks("cas", w.Cfg.CASMaxParallel, casTasks)
-}
-
-func (w *Worker) stubPayload(kind, digest string, meta map[string]any) ([]byte, error) {
-	data := map[string]any{
-		"kind":   kind,
-		"digest": digest,
-	}
-	for k, v := range meta {
-		data[k] = v
-	}
-	return json.MarshalIndent(data, "", "  ")
+	return result
 }
 
 func (w *Worker) wheelFileForJob(job runner.Job) string {
@@ -1441,6 +1471,14 @@ func (w *Worker) wheelFileForJob(job runner.Job) string {
 		}
 	}
 	return ""
+}
+
+func (w *Worker) localCASArchivePath(id artifact.ID) string {
+	destDir := w.Cfg.LocalCASDir
+	if destDir == "" {
+		destDir = filepath.Join(w.Cfg.CacheDir, "cas")
+	}
+	return filepath.Join(destDir, strings.ReplaceAll(id.Digest, ":", "_")+".tar")
 }
 
 func copyFile(src, dst string) error {
@@ -1518,11 +1556,15 @@ func extractTar(src, dest string) error {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
 			}
-		case tar.TypeReg:
+		case tar.TypeReg, tar.TypeRegA:
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
-			out, err := os.Create(target)
+			mode := hdr.FileInfo().Mode().Perm()
+			if mode == 0 {
+				mode = 0o644
+			}
+			out, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
 			if err != nil {
 				return err
 			}
@@ -1530,32 +1572,27 @@ func extractTar(src, dest string) error {
 				out.Close()
 				return err
 			}
-			out.Close()
+			if err := out.Close(); err != nil {
+				return err
+			}
+			if err := os.Chmod(target, mode); err != nil {
+				return err
+			}
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			if err := os.RemoveAll(target); err != nil {
+				return err
+			}
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return err
+			}
 		default:
 			// skip other types for now
 		}
 	}
 	return nil
-}
-
-func verifyFileDigest(path, expected string) (bool, error) {
-	if expected == "" || !strings.HasPrefix(expected, "sha256:") {
-		return true, nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false, err
-	}
-	return verifyBytesDigest(data, expected)
-}
-
-func verifyBytesDigest(data []byte, expected string) (bool, error) {
-	if expected == "" || !strings.HasPrefix(expected, "sha256:") {
-		return true, nil
-	}
-	sum := sha256.Sum256(data)
-	actual := "sha256:" + hex.EncodeToString(sum[:])
-	return actual == expected, nil
 }
 
 func (w *Worker) runRepair(wheelPath, repairPath string) error {
@@ -1604,18 +1641,11 @@ func (w *Worker) fetchWheel(ctx context.Context, job runner.Job) error {
 		w.recordCASMiss()
 		return err
 	}
-	if ok, err := verifyFileDigest(destPath, job.WheelDigest); err != nil || !ok {
-		w.recordCASMiss()
-		if err != nil {
-			return err
-		}
-		return fmt.Errorf("wheel digest mismatch: expected %s", job.WheelDigest)
-	}
 	w.recordCASHit()
 	return nil
 }
 
-func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions map[string]string, meta map[string]map[string]any) []string {
+func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions map[string]string, meta map[string]map[string]any, logWriter io.Writer) []string {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -1643,9 +1673,7 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 		if w.Fetcher.BaseURL != "" {
 			if err := w.casFetch(ctx, id, destPath); err == nil {
 				if _, err := os.Stat(destPath); err == nil {
-					if ok, err := verifyFileDigest(destPath, id.Digest); err == nil && ok {
-						fetched = true
-					}
+					fetched = true
 				}
 			}
 			if fetched {
@@ -1675,23 +1703,31 @@ func (w *Worker) resolvePacks(ctx context.Context, ids []artifact.ID, actions ma
 			if depsPrefixes != "" {
 				envCmd = fmt.Sprintf("DEPS_PREFIXES=%s %s", depsPrefixes, cmd)
 			}
-			if err := builder.BuildPack(destPath, builder.PackBuildOpts{Digest: id.Digest, Meta: meta[id.Digest], Cmd: envCmd}); err == nil {
+			writeBootstrapLog(logWriter, "bootstrap: building pack %s", id.Digest)
+			if err := builder.BuildPack(destPath, builder.PackBuildOpts{Digest: id.Digest, Meta: meta[id.Digest], Cmd: envCmd, LogWriter: logWriter}); err == nil {
 				fetched = true
 				depsBuilt = append(depsBuilt, destPath)
+			} else {
+				writeBootstrapLog(logWriter, "bootstrap: pack build failed for %s: %v", id.Digest, err)
 			}
 		}
 		if fetched {
 			if err := extractTar(destPath, extractDir); err != nil {
 				continue
 			}
-			w.packPath[id.Digest] = extractDir
-			paths = append(paths, extractDir)
+			prefix := artifactPrefix(extractDir)
+			if prefix == "" {
+				log.Printf("pack artifact missing prefix dir: %s", id.Digest)
+				continue
+			}
+			w.packPath[id.Digest] = prefix
+			paths = append(paths, prefix)
 		}
 	}
 	return paths
 }
 
-func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID artifact.ID, action string, meta map[string]any) string {
+func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID artifact.ID, action string, meta map[string]any, depPaths []string, logWriter io.Writer) string {
 	if pythonVersion == "" || rtID.Digest == "" {
 		return ""
 	}
@@ -1707,10 +1743,11 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 	if w.Fetcher.BaseURL != "" {
 		if err := w.casFetch(ctx, rtID, destPath); err == nil {
 			if _, err := os.Stat(destPath); err == nil {
-				if ok, err := verifyFileDigest(destPath, rtID.Digest); err == nil && ok {
-					if err := extractTar(destPath, extractDir); err == nil && !isManifestOnly(extractDir) {
+				if err := extractTar(destPath, extractDir); err == nil {
+					prefix := artifactPrefix(extractDir)
+					if runtimeReady(prefix) {
 						w.recordCASHit()
-						return extractDir
+						return prefix
 					}
 				}
 			}
@@ -1722,12 +1759,21 @@ func (w *Worker) fetchRuntime(ctx context.Context, pythonVersion string, rtID ar
 		if cmd == "" {
 			cmd = w.Cfg.DefaultRuntimeCmd
 		}
-		if err := builder.BuildRuntime(destPath, builder.RuntimeBuildOpts{Digest: rtID.Digest, PythonVersion: pythonVersion, Meta: meta, Cmd: cmd}); err == nil {
+		envCmd := cmd
+		if depsPrefixes := strings.Join(depPrefixes(depPaths), ":"); depsPrefixes != "" {
+			envCmd = fmt.Sprintf("DEPS_PREFIXES=%s %s", depsPrefixes, cmd)
+		}
+		writeBootstrapLog(logWriter, "bootstrap: building runtime %s for python %s", rtID.Digest, pythonVersion)
+		if err := builder.BuildRuntime(destPath, builder.RuntimeBuildOpts{Digest: rtID.Digest, PythonVersion: pythonVersion, Meta: meta, Cmd: envCmd, LogWriter: logWriter}); err == nil {
 			if err := extractTar(destPath, extractDir); err == nil {
-				if !isManifestOnly(extractDir) || action == "build" {
-					return extractDir
+				prefix := artifactPrefix(extractDir)
+				if runtimeReady(prefix) {
+					return prefix
 				}
 			}
+			writeBootstrapLog(logWriter, "bootstrap: runtime artifact extracted but interpreter validation failed for %s", rtID.Digest)
+		} else {
+			writeBootstrapLog(logWriter, "bootstrap: runtime build failed for %s: %v", rtID.Digest, err)
 		}
 	}
 	return ""
@@ -1777,7 +1823,7 @@ func depPrefixes(groups ...[]string) []string {
 			if p == "" {
 				continue
 			}
-			out = append(out, filepath.Join(p, "usr", "local"))
+			out = append(out, p)
 		}
 	}
 	return out
@@ -1813,18 +1859,81 @@ func sortPacksByPriority(ids []artifact.ID, meta map[string]map[string]any) []ar
 	return ids
 }
 
-func isManifestOnly(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+func artifactPrefix(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	prefix := filepath.Join(dir, "usr", "local")
+	if fi, err := os.Stat(prefix); err == nil && fi.IsDir() {
+		return prefix
+	}
+	return ""
+}
+
+func runtimeReady(prefix string) bool {
+	if prefix == "" {
 		return false
 	}
-	for _, e := range entries {
-		if e.Name() == "manifest.json" {
+	libDirs := []string{}
+	for _, dir := range []string{
+		filepath.Join(prefix, "lib"),
+		filepath.Join(prefix, "lib64"),
+	} {
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			libDirs = append(libDirs, dir)
+		}
+	}
+	for _, candidate := range []string{
+		filepath.Join(prefix, "bin", "python3"),
+		filepath.Join(prefix, "bin", "python"),
+	} {
+		if strings.HasSuffix(candidate, "python3") {
+			matches, _ := filepath.Glob(filepath.Join(prefix, "bin", "python3.*"))
+			for _, match := range matches {
+				if _, err := os.Stat(match); err == nil {
+					cmd := exec.Command(match, "-V")
+					cmd.Env = runtimeProbeEnv(filepath.Dir(match), libDirs)
+					if err := cmd.Run(); err == nil {
+						return true
+					}
+				}
+			}
+		}
+		if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
+			cmd := exec.Command(candidate, "-V")
+			cmd.Env = runtimeProbeEnv(filepath.Dir(candidate), libDirs)
+			if err := cmd.Run(); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func runtimeProbeEnv(binDir string, libDirs []string) []string {
+	env := filterEnvKey(os.Environ(), "PATH")
+	env = filterEnvKey(env, "LD_LIBRARY_PATH")
+	env = append(env, "PATH="+binDir)
+	ldParts := append([]string{}, libDirs...)
+	if existing := strings.TrimSpace(os.Getenv("LD_LIBRARY_PATH")); existing != "" {
+		ldParts = append(ldParts, existing)
+	}
+	if len(ldParts) > 0 {
+		env = append(env, "LD_LIBRARY_PATH="+strings.Join(ldParts, ":"))
+	}
+	return env
+}
+
+func filterEnvKey(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
 			continue
 		}
-		return false
+		out = append(out, entry)
 	}
-	return true
+	return out
 }
 
 // topoSortFromDag orders pack IDs using DAG edges (dependencies first).

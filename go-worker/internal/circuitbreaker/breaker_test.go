@@ -171,17 +171,27 @@ func TestCircuitBreakerTooManyRequests(t *testing.T) {
 	// Wait for half-open
 	time.Sleep(timeout + time.Millisecond*10)
 
-	// First request should be allowed
-	_ = cb.Execute(func() error {
-		return nil
-	})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- cb.Execute(func() error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
 
-	// Second request should be rejected (MaxRequests=1)
-	err := cb.Execute(func() error {
-		return nil
-	})
+	// Concurrent request in half-open should be rejected (MaxRequests=1).
+	err := cb.Execute(func() error { return nil })
 	if !errors.Is(err, ErrTooManyRequests) {
 		t.Errorf("expected ErrTooManyRequests, got %v", err)
+	}
+
+	close(release)
+	if err := <-errCh; err != nil {
+		t.Errorf("expected first request to succeed, got %v", err)
 	}
 }
 

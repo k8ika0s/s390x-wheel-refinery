@@ -34,9 +34,10 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 ## Overview
 - **Planner (Go)** turns uploaded wheels or a `requirements.txt` (stored in object storage) into a DAG: runtimes → packs → wheels → repair. It checks CAS (Zot) to mark nodes as `reuse` vs `build`.
 - **Worker (Go)** drains the queue, fetches/mounts artifacts, runs builds inside a dedicated builder image via Podman, and uploads wheels/repairs back to CAS and object storage.
-- **Builder image** (`containers/refinery-builder/Containerfile`) carries toolchains, auditwheel/patchelf, and a recipe book for packs and CPython runtimes.
+- **Builder image** (`containers/refinery-builder/Containerfile`) carries the recipe book for packs and CPython runtimes on top of a cached UBI8 toolchain base (`containers/refinery-builder-base/Containerfile`).
 - **Artifact stores**: Zot (CAS) for digested blobs; MinIO (optional) for a wheelhouse mirror.
-- **Observability**: metrics, events, manifest, control-plane API, and React UI showing artifacts, queue controls, and history.
+- **Observability**: metrics, events, manifest, control-plane API, and React UI showing artifacts, queue controls, history, worker readiness, and remediation evidence.
+- **Automation evidence**: build rows, attempt rows, events, and worker heartbeats now carry structured metadata for failure stage/excerpt, remediation source, prompt/policy versions, and worker config readiness.
 - **Safety**: content-addressed everything, explicit dependency edges for packs/runtimes, and default auditwheel repair to enforce policy tags.
 
 ## End-to-end flow
@@ -50,7 +51,7 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 ## System components
 - **Go control-plane**: APIs for manifests, logs, queue, metrics, artifact metadata, and worker triggers (`containers/go-control-plane/Containerfile`).
 - **Go worker**: Podman-only runner plus CAS/object-store client, executes build/repair steps (`containers/go-worker/Containerfile`). Worker image embeds podman.
-- **Builder image**: `refinery-builder:latest` built from `containers/refinery-builder/Containerfile`; houses recipes and toolchains.
+- **Builder image**: `refinery-builder:latest` built from `containers/refinery-builder/Containerfile`; it inherits toolchains from the cached `refinery-builder-base` image and adds recipes. On `zkd0`, publish it to Zot and point workers at `127.0.0.1:5000/refinery-builder:latest`.
 - **UI (React)**: dashboards for queue, artifacts, metrics, events, and log viewing (`containers/ui/Containerfile`).
 - **External services**: Postgres, Redis (or Kafka) for queue/history; Zot for CAS; MinIO for wheelhouse object storage.
 
@@ -67,14 +68,18 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - Use: the worker mounts dependencies, sets `DEPS_PREFIXES`, runs the recipe, tars `PACK_OUTPUT`, and pushes the blob to CAS.
 
 ## Builder image
-- Built from `containers/refinery-builder/Containerfile`; includes build essentials, auditwheel, patchelf, and the recipe book at `/app/recipes`.
-- Defaults injected into the worker: `CONTAINER_IMAGE=refinery-builder:latest`, `PACK_RECIPES_DIR=/app/recipes`, `DEFAULT_RUNTIME_CMD=/app/recipes/cpython311.sh`, `DEFAULT_REPAIR_CMD=/app/recipes/repair.sh`.
-- Build it locally: `podman build -f containers/refinery-builder/Containerfile -t refinery-builder:latest .` (or `docker build` if needed).
+- Built from `containers/refinery-builder/Containerfile`; includes the recipe book at `/app/recipes` on top of the cached `containers/refinery-builder-base/Containerfile` UBI8 toolchain layer.
+- The worker runtime image follows the same pattern via `containers/go-worker-base/Containerfile`, so normal worker rebuilds only recompile/copy the binary instead of reinstalling the full UBI8 dependency set.
+- Defaults injected into the worker: `CONTAINER_IMAGE=refinery-builder:latest`, `PACK_RECIPES_DIR=/app/recipes`, `DEFAULT_RUNTIME_CMD=/app/recipes/cpython311.sh`, `DEFAULT_REPAIR_CMD=/app/recipes/repair.sh`. The worker entrypoint pre-pulls `CONTAINER_IMAGE` into nested Podman when needed.
+- Build it locally: `./scripts/build-stack-images-hostnet.sh builder` (auto-builds the cached base first if needed). Use `REBUILD_BASES=1` only when the toolchain layer changes.
 
 ## Control-plane and UI
 - API on `:8080` (compose wiring): manifests, artifacts, metrics (`/metrics` Prometheus), queue ops, logs, and worker trigger.
 - UI on `:3000` (compose wiring): artifacts with digests/URLs, queue depth, metrics panels, and log viewers.
 - Auth: optional `UI_TOKEN` protects UI write endpoints; `WORKER_TOKEN` protects worker posts. UI can set `UI_TOKEN` via `POST /api/session/ui-token?token=...`.
+- The control-plane emits structured HTTP request logs and returns `X-Correlation-ID` / `X-Request-ID` headers so API failures can be traced quickly through logs.
+- Worker heartbeats also persist configuration provenance such as inference readiness, prompt/policy version, and runtime env source so `/api/workers`, `/api/metrics`, and `/metrics` can be used as scale gates.
+- Build rows, build attempts, and events now carry structured remediation evidence such as failure stage/excerpt, remediation source, effective recipe/env changes, and normalized LLM output when available.
 
 ## Worker and queue
 - Queue backends: `file`, `redis`, or `kafka` (compose defaults to Redis).
@@ -94,16 +99,37 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
   podman compose -f podman-compose.yml up
   ```
   Builds the control-plane, worker, and UI images; uses Zot for CAS and MinIO for wheelhouse.
-- **Builder image**: build once locally (`refinery-builder:latest`) before running real workers:
+- **s390x host workflow**: build images explicitly with host networking, then start without rebuilding:
   ```bash
-  podman build -f containers/refinery-builder/Containerfile -t refinery-builder:latest .
+  ./scripts/build-stack-images-hostnet.sh
+  ./scripts/stack-up-no-build.sh
   ```
+  The script auto-reuses cached `builder-base` and `worker-base` images and only rebuilds them when they are missing. Set `REBUILD_BASES=1` if you changed UBI8 package lists or embedded toolchains.
+- **Core runtime on flaky registries**: if optional monitoring pulls are failing, start the forge stack without Prometheus/Alertmanager/Grafana extras:
+  ```bash
+  COMPOSE_FILE=podman-compose.core.yml ./scripts/stack-up-no-build.sh
+  ```
+- **Host-network runtime on `zkd0`**: if `netavark` bridge startup is failing, use the host-network forge stack instead:
+  ```bash
+  ./scripts/publish-builder-image.sh
+  COMPOSE_FILE=podman-compose.hostnet.yml ./scripts/stack-up-no-build.sh
+  ```
+- **Cached remote rebuilds**: on `zkd0`, the first `builder-base` / `worker-base` build is heavy because it installs the UBI8 toolchain and nested Podman runtime. After that, normal service iterations should only rebuild the thin app layers unless `REBUILD_BASES=1` is set.
 - **Data dirs**: outputs appear in `./output`, cache/logs in `./cache`. Inputs are uploaded to object storage (MinIO) instead of a local `/input` folder.
+- **Non-s390x hosts**: service images are built for `linux/s390x`, so image builds can succeed while runtime containers fail with `Exec format error`. Use non-s390x machines for local tests and image assembly, and an s390x host for full-stack runtime validation.
 
 ## Configuration reference
 - **Control-plane**: `HTTP_ADDR`, `POSTGRES_DSN`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `WORKER_WEBHOOK_URL`, `WORKER_PLAN_URL`, `UI_TOKEN`, `WORKER_TOKEN`, `CAS_REGISTRY_URL`, `CAS_REGISTRY_REPO`, `OBJECT_STORE_*`.
-- **Worker**: `OUTPUT_DIR`, `CACHE_DIR`, `CACHE_MAX_BYTES`, `CACHE_PRUNE_INTERVAL_SEC`, `PYTHON_VERSION`, `PLATFORM_TAG`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `PODMAN_BIN`, `CONTAINER_IMAGE`, `WORKER_RUN_CMD` (override container entrypoint), `PACK_RECIPES_DIR`, `DEFAULT_RUNTIME_CMD`, `DEFAULT_REPAIR_CMD`, `CAS_REGISTRY_URL/REPO`, `LOCAL_CAS_DIR`, `CAS_MAX_PARALLEL`, `OBJECT_STORE_MAX_PARALLEL`, `OBJECT_STORE_*` (compose-only limits: `WORKER_CPU_LIMIT`, `WORKER_MEM_LIMIT`).
+- **Worker**: `OUTPUT_DIR`, `CACHE_DIR`, `CACHE_MAX_BYTES`, `CACHE_PRUNE_INTERVAL_SEC`, `PYTHON_VERSION`, `PLATFORM_TAG`, `QUEUE_BACKEND`, `REDIS_URL`, `KAFKA_BROKERS`, `PODMAN_BIN`, `CONTAINER_IMAGE`, `WORKER_RUN_CMD` (override container entrypoint), `PACK_RECIPES_DIR`, `DEFAULT_RUNTIME_CMD`, `DEFAULT_REPAIR_CMD`, `CAS_REGISTRY_URL/REPO`, `LOCAL_CAS_DIR`, `CAS_MAX_PARALLEL`, `OBJECT_STORE_MAX_PARALLEL`, `OBJECT_STORE_*`, `INFER_ENABLED`, `INFER_URL`, `INFER_TOKEN`, `INFER_MODEL`, `INFER_TIMEOUT_SEC`, `INFER_MAX_RETRIES` (compose-only limits: `WORKER_CPU_LIMIT`, `WORKER_MEM_LIMIT`).
+- **Inference prompting**: `INFER_URL` and `INFER_TOKEN` remain worker-only secrets. The system prompt and user prompt template are managed through `/api/settings` so prompt tuning does not require rebuilding the worker image.
+- **Readiness KPIs**: `/api/metrics` and `/metrics` expose configured-worker counts, config drift, first-attempt and retry success, hint application, LLM fallback/ignore rates, hint save failures, and stale requeue rates for controlled horizontal scaling.
 - **Repair metadata**: `REPAIR_POLICY_HASH`, `REPAIR_TOOL_VERSION` are attached to repair artifacts for provenance.
+
+## First-Run Kit
+- Example validation inputs live in [examples/requirements/README.md](/Users/kaitlyndavis/dev/github.com/k8ika0s/s390x-wheel-refinery/examples/requirements/README.md).
+- [scripts/upload-requirements.sh](/Users/kaitlyndavis/dev/github.com/k8ika0s/s390x-wheel-refinery/scripts/upload-requirements.sh) uploads a full `requirements.txt` file and enqueues planning.
+- [scripts/seed-build.sh](/Users/kaitlyndavis/dev/github.com/k8ika0s/s390x-wheel-refinery/scripts/seed-build.sh) runs a single-package smoke build with live log tailing and artifact verification.
+- [scripts/stack-diagnostics.sh](/Users/kaitlyndavis/dev/github.com/k8ika0s/s390x-wheel-refinery/scripts/stack-diagnostics.sh) captures compose state, recent logs, and health/metrics responses into `output/diagnostics/...`.
 
 ## Repair and compliance
 - `recipes/repair.sh` runs auditwheel repair by default; installs auditwheel if missing in the builder image and fails when no repaired wheel is produced.
@@ -138,8 +164,10 @@ Refinery plans and executes reproducible s390x Python wheel builds. Feed it whee
 - Builder image details: `containers/refinery-builder/Containerfile`.
 
 ## Status and known gaps
+- The next deliberate scale step is `2-3` workers on curated package sets, not broad multi-host fan-out. The evidence-quality gate should stay ahead of throughput.
 - Pack dependency metadata is currently hardcoded in the planner; promoting this to a catalog is planned.
 - Ensure real pack/runtime recipes are built and pushed in environments beyond local smoke (builder image must be built/published where workers run).
+- Continue to validate the structured remediation evidence path on hard packages such as `pandas` and `scikit-learn` before increasing worker count beyond the current controlled rollout.
 - Continue to refine repair/policy metadata and catalog-driven pack selection as recipes expand.
 
 ## License

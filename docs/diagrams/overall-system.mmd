@@ -8,18 +8,20 @@ flowchart LR
     Q[Queue backend<br/>file Redis Kafka]
     subgraph Control
         CP[Control plane API]
-        DB[(Postgres)]
+        DB[(Postgres<br/>plans builds attempts events logs workers)]
         HUB[Log hub]
         HINTS[Hint catalog]
+        METRICS[Metrics and readiness KPIs]
     end
     subgraph Storage
         ZOT[CAS registry Zot]
         MINIO[Object store wheelhouse and inputs]
     end
     subgraph Builder
-        WKR[Go worker]
+        WKR[Go worker<br/>heartbeat + settings overlay]
         RUN[Podman runner]
         REC[Recipes pack runtime repair]
+        BASE[Cached builder and worker UBI8 bases]
     end
     UI[React UI]
 
@@ -34,9 +36,12 @@ flowchart LR
     WKR -->|fetch artifacts| ZOT
     WKR -->|push artifacts| ZOT
     WKR --> RUN
+    BASE --> RUN
     RUN -->|build outputs| MINIO
-    WKR -->|status events manifest| CP
+    WKR -->|status attempts events manifest| CP
     WKR -->|log chunks| CP
+    WKR -->|worker heartbeats| CP
     CP --> HUB
     HUB -->|live logs| UI
+    CP --> METRICS
     CP <--> UI

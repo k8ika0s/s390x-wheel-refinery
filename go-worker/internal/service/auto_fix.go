@@ -17,22 +17,32 @@ import (
 )
 
 type autoFixResult struct {
-	Applied       bool
-	Recipes       []string
-	HintIDs       []string
-	SavedHintIDs  []string
-	Reason        string
-	BlockedReason string
-	BlockedHints  []string
-	Impact        string
-	ImpactReason  string
-	DecisionTrace []string
+	Applied              bool
+	Recipes              []string
+	ProposedRecipes      []string
+	HintIDs              []string
+	SavedHintIDs         []string
+	Reason               string
+	Source               string
+	BlockedReason        string
+	BlockedHints         []string
+	Impact               string
+	ImpactReason         string
+	DecisionTrace        []string
+	RawLLMOutput         string
+	NormalizedLLMOutput  any
+	PromptVersion        string
+	LLMSuggestionIgnored bool
+	LLMIgnoreReason      string
+	HintSaveFailed       bool
 }
 
 type autoFixState struct {
 	lastApplied   time.Time
 	lastSignature string
 }
+
+const hintSaveTimeout = 5 * time.Second
 
 func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string, hints []plan.Hint, knownHints map[string]bool) autoFixResult {
 	if !w.Cfg.AutoFixEnabled {
@@ -60,8 +70,15 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 	var recipes []string
 	var saved []string
 	var reason string
-	applyInferred := func(hint plan.Hint, hintRecipes []string, note string, source string) (bool, *autoFixResult) {
-		addTrace("%s inferred hint pattern %s", source, hint.Pattern)
+	var remediationSource string
+	var hintSaveFailed bool
+	var rawLLMOutput string
+	var normalizedLLMOutput any
+	var llmSuggestionIgnored bool
+	var llmIgnoreReason string
+	var currentPromptVersion = promptVersion(w.Cfg)
+	applyInferred := func(hint plan.Hint, hintRecipes []string, note string, sourceLabel string) (bool, *autoFixResult) {
+		addTrace("%s inferred hint pattern %s", sourceLabel, hint.Pattern)
 		if hint.ID == "" {
 			hint.ID = autoHintID(hint, ctxHint)
 		}
@@ -80,7 +97,7 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 			if merged {
 				addTrace("merged inferred hint into %s", hint.ID)
 				if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
-					if err := upsertHint(ctx, nil, w.Cfg, hint); err != nil {
+					if err := w.saveAutoHint(hint); err != nil {
 						log.Printf("auto-fix: hint merge save failed for %s: %v", hint.ID, err)
 					} else {
 						saved = append(saved, hint.ID)
@@ -93,9 +110,10 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		}
 		if w.Cfg.AutoSaveHints && w.Cfg.ControlPlaneURL != "" {
 			if w.canSaveAutoHint(job.Name) && (knownHints == nil || !knownHints[hint.ID]) {
-				if err := upsertHint(ctx, nil, w.Cfg, hint); err != nil {
+				if err := w.saveAutoHint(hint); err != nil {
 					log.Printf("auto-fix: hint save failed for %s: %v", hint.ID, err)
 					addTrace("hint save failed: %s", hint.ID)
+					hintSaveFailed = true
 				} else {
 					knownHints[hint.ID] = true
 					w.markAutoHintSaved(job.Name)
@@ -114,6 +132,9 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		recipes = append(recipes, hintRecipes...)
 		if reason == "" {
 			reason = note
+		}
+		if autoSource := strings.TrimSpace(sourceLabel); autoSource != "" {
+			remediationSource = autoSource
 		}
 		if len(hintRecipes) > 0 {
 			addTrace("inferred recipes: %s", strings.Join(hintRecipes, ", "))
@@ -134,6 +155,9 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 			continue
 		}
 		addTrace("matched hint %s (confidence %.2f)", h.ID, score)
+		if remediationSource == "" {
+			remediationSource = "known_hint"
+		}
 		matchedIDs = append(matchedIDs, h.ID)
 		for _, r := range recs {
 			if r.Name != "" {
@@ -150,15 +174,23 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		}
 	}
 	if len(recipes) == 0 {
-		if hint, hintRecipes, note, ok, llmTrace := w.inferHintFromLLM(ctx, logScan, ctxHint, job.Recipes); ok {
-			if len(llmTrace) > 0 {
-				trace = append(trace, llmTrace...)
-			}
-			if done, result := applyInferred(hint, hintRecipes, note, "llm"); done {
+		decision := w.inferHintFromLLMDecision(ctx, logScan, ctxHint, job.Recipes)
+		if len(decision.Trace) > 0 {
+			trace = append(trace, decision.Trace...)
+		}
+		rawLLMOutput = decision.RawOutput
+		normalizedLLMOutput = decision.NormalizedOutput
+		if decision.PromptVersion != "" {
+			currentPromptVersion = decision.PromptVersion
+		}
+		if decision.Ignored {
+			llmSuggestionIgnored = true
+			llmIgnoreReason = decision.IgnoreReason
+		}
+		if decision.OK {
+			if done, result := applyInferred(decision.Hint, decision.Recipes, decision.Note, "llm"); done {
 				return *result
 			}
-		} else if len(llmTrace) > 0 {
-			trace = append(trace, llmTrace...)
 		}
 	}
 
@@ -197,16 +229,24 @@ func (w *Worker) autoFix(ctx context.Context, job runner.Job, logContent string,
 		}
 	}
 	return autoFixResult{
-		Applied:       applied,
-		Recipes:       merged,
-		HintIDs:       dedupeStrings(matchedIDs),
-		SavedHintIDs:  dedupeStrings(saved),
-		Reason:        reason,
-		BlockedReason: blockedReason,
-		BlockedHints:  dedupeStrings(blocked),
-		Impact:        impact,
-		ImpactReason:  impactReason,
-		DecisionTrace: compactTrace(trace),
+		Applied:              applied,
+		Recipes:              merged,
+		ProposedRecipes:      dedupeStrings(recipes),
+		HintIDs:              dedupeStrings(matchedIDs),
+		SavedHintIDs:         dedupeStrings(saved),
+		Reason:               reason,
+		Source:               remediationSource,
+		BlockedReason:        blockedReason,
+		BlockedHints:         dedupeStrings(blocked),
+		Impact:               impact,
+		ImpactReason:         impactReason,
+		DecisionTrace:        compactTrace(trace),
+		RawLLMOutput:         rawLLMOutput,
+		NormalizedLLMOutput:  normalizedLLMOutput,
+		PromptVersion:        currentPromptVersion,
+		LLMSuggestionIgnored: llmSuggestionIgnored,
+		LLMIgnoreReason:      llmIgnoreReason,
+		HintSaveFailed:       hintSaveFailed,
 	}
 }
 
@@ -493,6 +533,29 @@ func inferHintFromLog(logContent string, ctx plan.HintContext) (plan.Hint, []str
 		}
 	}
 
+	numpyGCCTooLow := regexp.MustCompile(`(?i)NumPy requires GCC\s*>=\s*([0-9.]+)`)
+	if m := numpyGCCTooLow.FindStringSubmatch(logContent); len(m) == 2 {
+		required := strings.TrimSpace(m[1])
+		hint := baseAutoHint(ctx, fmt.Sprintf(`NumPy requires GCC >= %s`, regexp.QuoteMeta(required)))
+		hint.Tags = append(hint.Tags, "compiler-version", "gcc", "numpy")
+		hint.Confidence = "high"
+		hint.Note = fmt.Sprintf("Auto-detected NumPy build dependency requiring GCC >= %s on a builder with an older compiler. Install a newer compiler toolset and force builds to use it.", required)
+		hint.Recipes = map[string][]string{
+			"dnf": {
+				"gcc-toolset-12",
+				"gcc-toolset-12-gcc",
+				"gcc-toolset-12-gcc-c++",
+			},
+			"env": {
+				"CC=/opt/rh/gcc-toolset-12/root/usr/bin/gcc",
+				"CXX=/opt/rh/gcc-toolset-12/root/usr/bin/g++",
+				"NPY_ALLOW_BLAS_UNSAFE=1",
+			},
+		}
+		hint.Examples = []string{m[0]}
+		return hint, flattenRecipeMap(hint.Recipes), hint.Note, true
+	}
+
 	rustMissing := regexp.MustCompile(`(?i)rust compiler not found|rustc.*not found|cargo.*not found`)
 	if m := rustMissing.FindStringSubmatch(logContent); len(m) > 0 {
 		recipes := toolRecipes("cargo")
@@ -508,6 +571,12 @@ func inferHintFromLog(logContent string, ctx plan.HintContext) (plan.Hint, []str
 	}
 
 	return plan.Hint{}, nil, "", false
+}
+
+func (w *Worker) saveAutoHint(hint plan.Hint) error {
+	ctx, cancel := context.WithTimeout(context.Background(), hintSaveTimeout)
+	defer cancel()
+	return upsertHint(ctx, nil, w.Cfg, hint)
 }
 
 func baseAutoHint(ctx plan.HintContext, pattern string) plan.Hint {

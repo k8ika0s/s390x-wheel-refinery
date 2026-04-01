@@ -8,6 +8,7 @@ This guide is written in plain language for day to day use. It explains how to u
 - Retries failed builds with automatic fixes when possible.
 - Streams build logs live in the UI.
 - Stores outputs (wheels, repairs, manifests) in object storage and/or CAS, with local staging for debugging.
+- Records structured remediation evidence for each attempt so you can later see what failed, what changed, and what drove the retry.
 
 If you are new, think of it as a factory: you drop in a shopping list (requirements), and the system produces s390x wheels, while recording every step and retry it makes.
 
@@ -22,6 +23,28 @@ http://localhost:3000
 ```
 3) Upload a `requirements.txt` in the Inputs tab.
 4) Watch the plan and build progress in Plans and Builds.
+
+## Quick start (zkd0)
+Use `zkd0` for real runtime validation because the service images are built for
+`linux/s390x`.
+
+1) Sync the repo to `~/s390x-wheel-refinery`.
+2) Build images with host networking:
+```
+./scripts/build-stack-images-hostnet.sh
+./scripts/publish-builder-image.sh
+```
+3) Start the host-network forge stack:
+```
+COMPOSE_FILE=podman-compose.hostnet.yml ./scripts/stack-up-no-build.sh
+```
+4) Open the control-plane at `http://127.0.0.1:18080` and the UI through its
+host-network port/proxy for that deployment.
+
+If optional monitoring image pulls are flaky, use the forge-only stack:
+```
+COMPOSE_FILE=podman-compose.core.yml ./scripts/stack-up-no-build.sh
+```
 
 ## Core concepts in simple terms
 - **Pending input**: An uploaded requirements file or wheel waiting to be planned.
@@ -56,6 +79,10 @@ Or upload with the API:
 ```
 curl -X POST -F "file=@requirements.txt" http://localhost:8080/api/requirements/upload
 ```
+
+Example input sets for first validation live in:
+- `examples/requirements/easy-common.txt`
+- `examples/requirements/mixed-common-native.txt`
 
 ### Wheel file
 Upload a wheel if you already have one and want it indexed:
@@ -98,10 +125,15 @@ POST /api/plans/{id}/enqueue-build
 ### Builds page
 - Shows queue status and active jobs.
 - Expand a row to see timestamps, plan/run IDs, recipes, and errors.
+- Build rows now keep `leased` distinct from `building`, so long runtime/pack
+  bootstrap work is visible separately from queue ownership.
 
 ### Package view
 - Shows event history and automation timeline.
 - Log viewer includes live tail, search, highlight, wrap, and download.
+- Recent attempts now include richer remediation evidence such as failure stage,
+  failure excerpt, remediation source, prompt/policy version, and effective
+  recipe/env changes when available.
 
 ### Log streaming
 - Live logs stream into the UI while a build runs.
@@ -110,12 +142,19 @@ POST /api/plans/{id}/enqueue-build
 ## Auto fixes, hints, and recipes
 When a build fails, the worker:
 1) Checks the hint catalog for known fixes.
-2) Applies recipes if allowed.
-3) Retries automatically if attempts remain.
+2) Applies deterministic heuristics for obvious classes such as missing tools,
+   compiler mismatches, or missing system dependencies.
+3) Falls back to external inference when configured and the failure is still
+   ambiguous.
+4) Normalizes any accepted suggestion into concrete `apt`, `dnf`, `pip`, and
+   `env` recipes.
+5) Retries automatically if attempts remain.
 
 You can review:
 - Applied recipes and hints in events.
 - Auto-saved hints in the Hints page.
+- Decision traces, remediation source, and ignored/blocked suggestions in event
+  metadata and attempt history.
 
 ## Seed build for quick testing
 Use the seed script to enqueue a known simple package and watch logs:
@@ -149,6 +188,8 @@ This will upload a tiny requirements file, create a plan, enqueue builds, and ta
 - Check auto build in Settings (control-plane).
 - Check worker auto build (worker env `AUTO_BUILD=true`).
 - Verify the worker is running and reporting heartbeats.
+- On `zkd0`, check `/api/workers` or `/api/metrics` for `configured` workers and
+  config drift before assuming the queue is broken.
 
 ### Input stuck in pending
 - Auto plan may be off.
@@ -156,16 +197,25 @@ This will upload a tiny requirements file, create a plan, enqueue builds, and ta
 
 ### Build stuck in leased/building
 - Worker may have died mid-run.
-- Requeue by clearing builds or wait for lease timeout.
+- Long runtime/bootstrap work now refreshes active builds while logs are still
+  streaming, so a genuine stuck build is more likely to be a runner/runtime
+  issue than a stale lease.
 
 ### No logs appear
 - Check worker token in the worker environment (`WORKER_TOKEN`).
 - Confirm the worker can reach `/api/logs/stream`.
 - Try opening `/api/logs/chunks/{name}/{version}` directly.
 
+### A worker is online but not ready
+- Open the Workers view or call `/api/workers`.
+- Check `config_ready`, `config_drift`, `infer_url_configured`, `infer_token_configured`, `prompt_version`, and `runtime_env_source`.
+- If `runtime_env_source` is not your expected env file, restart with `./scripts/stack-up-no-build.sh` so runtime overrides are reloaded.
+
 ### Token issues
 - Set `UI_TOKEN` for UI actions and `WORKER_TOKEN` for worker actions.
 - The UI sends `X-UI-Token` and the worker sends `X-Worker-Token`.
+- External inference uses worker-only `INFER_URL` / `INFER_TOKEN`; the prompt
+  text and retry/model policy are managed through `/api/settings`.
 
 ## File locations
 These paths are inside the worker container or bind mounts:
@@ -185,3 +235,4 @@ The long-term goal is to grow object storage into a large, searchable library of
 - `docs/automatic-build-repair-system.md` for deep technical detail.
 - `docs/plan-build-queues.md` for the queue model.
 - `docs/diagrams/README.md` for diagram index.
+- `/api/metrics` and `/metrics` for readiness counters such as first-attempt success, retry success, hint application rate, and worker configuration drift.

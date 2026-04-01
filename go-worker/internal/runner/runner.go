@@ -32,7 +32,7 @@ type Job struct {
 	WheelSourceDigest string
 	RepairToolVersion string
 	RepairPolicyHash  string
-	LogWriter         io.Writer
+	LogWriter         io.WriteCloser
 }
 
 // Runner executes build jobs.
@@ -187,6 +187,14 @@ if [ -n "${JOB_VERSION:-}" ]; then
   spec="${spec}==${JOB_VERSION}"
 fi
 PYBIN="${PYTHON_BIN:-${PYTHON_PATH:-python3}}"
+if [ -z "${PYTHON_BIN:-}" ] && [ -z "${PYTHON_PATH:-}" ] && [ -n "${RUNTIME_PATH:-}" ]; then
+  for candidate in "${RUNTIME_PATH}/bin/python3" "${RUNTIME_PATH}"/bin/python3.* "${RUNTIME_PATH}/bin/python"; do
+    if [ -x "${candidate}" ]; then
+      PYBIN="${candidate}"
+      break
+    fi
+  done
+fi
 export PIP_NO_INPUT=1
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/cache/pip}"
 if [ -n "${DEPS_PREFIXES:-}" ]; then
@@ -240,7 +248,7 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 	}
 	var depPrefixes []string
 	args := []string{
-		"run", "--rm",
+		"run", "--rm", "--pull=never", "--network", "host",
 		"-v", fmt.Sprintf("%s:/output", p.OutputDir),
 		"-v", fmt.Sprintf("%s:/cache", p.CacheDir),
 		"-e", fmt.Sprintf("JOB_NAME=%s", job.Name),
@@ -270,7 +278,7 @@ func (p *PodmanRunner) buildArgs(job Job) []string {
 	}
 	for i, pth := range job.PackPaths {
 		args = append(args, "-v", fmt.Sprintf("%s:/opt/packs/pack%d:ro", pth, i))
-		depPrefixes = append(depPrefixes, fmt.Sprintf("/opt/packs/pack%d/usr/local", i))
+		depPrefixes = append(depPrefixes, fmt.Sprintf("/opt/packs/pack%d", i))
 	}
 	if job.RuntimeDigest != "" {
 		args = append(args, "-e", fmt.Sprintf("RUNTIME_DIGEST=%s", job.RuntimeDigest))

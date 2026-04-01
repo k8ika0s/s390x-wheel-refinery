@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -68,28 +69,121 @@ func TestUploadArtifactsFiltersWheels(t *testing.T) {
 	}
 }
 
+func TestUploadArtifactsPublishesRuntimeFromLocalCASTar(t *testing.T) {
+	dir := t.TempDir()
+	output := filepath.Join(dir, "out")
+	localCAS := filepath.Join(dir, "cas")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(localCAS, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var manifestPuts atomic.Int32
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v2/artifacts/blobs/uploads/":
+			w.Header().Set("Location", "/upload/test")
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/upload/test"):
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/v2/artifacts/manifests/"):
+			manifestPuts.Add(1)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer registry.Close()
+
+	tarBuf, runtimeDigest := sampleRuntimeTarWithDigest()
+	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: runtimeDigest}
+	archivePath := filepath.Join(localCAS, strings.ReplaceAll(runtimeDigest, ":", "_")+".tar")
+	if err := os.WriteFile(archivePath, tarBuf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runtimeDir := filepath.Join(localCAS, strings.ReplaceAll(runtimeDigest, ":", "_"), "usr", "local")
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	w := &Worker{
+		Cfg: Config{
+			OutputDir:          output,
+			LocalCASDir:        localCAS,
+			RuntimePushEnabled: true,
+			CASRegistryURL:     registry.URL,
+			CASRegistryRepo:    "artifacts",
+		},
+		Pusher: cas.Pusher{
+			BaseURL: registry.URL,
+			Repo:    "artifacts",
+			Client:  registry.Client(),
+		},
+	}
+	uploads := w.uploadArtifacts(context.Background(), runner.Job{
+		Name:          "demo",
+		Version:       "1.0.0",
+		RuntimeDigest: rtID.Digest,
+		RuntimePath:   runtimeDir,
+	})
+	if uploads.RuntimeURL != registry.URL+"/v2/artifacts/manifests/"+strings.ReplaceAll(runtimeDigest, ":", "-") {
+		t.Fatalf("unexpected runtime url: %q", uploads.RuntimeURL)
+	}
+	if manifestPuts.Load() == 0 {
+		t.Fatalf("expected runtime manifest push")
+	}
+}
+
+func TestUploadArtifactsSkipsRepairMetadataWhenRepairNotProduced(t *testing.T) {
+	dir := t.TempDir()
+	output := filepath.Join(dir, "out")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wheelPath := filepath.Join(output, "demo-1.0.0-py3-none-any.whl")
+	if err := os.WriteFile(wheelPath, []byte("wheel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w := &Worker{
+		Cfg: Config{
+			OutputDir:         output,
+			RepairPushEnabled: true,
+			CASRegistryURL:    "http://registry.invalid",
+			CASRegistryRepo:   "artifacts",
+			RepairCmd:         "exit 1",
+		},
+		Pusher: cas.Pusher{BaseURL: "http://registry.invalid", Repo: "artifacts"},
+	}
+	uploads := w.uploadArtifacts(context.Background(), runner.Job{
+		Name:        "demo",
+		Version:     "1.0.0",
+		WheelDigest: "sha256:wheel",
+	})
+	if uploads.RepairDigest != "" || uploads.RepairURL != "" {
+		t.Fatalf("expected no repair metadata, got %+v", uploads)
+	}
+}
+
 func TestFetchArtifactUsesFetcher(t *testing.T) {
 	dir := t.TempDir()
 	fetched := false
+	wheelData := []byte("data")
+	wheelDigest := "sha256:3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
 	w := &Worker{
 		Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")},
 		Fetcher: cas.Fetcher{
 			BaseURL: "http://example",
 			Repo:    "artifacts",
 			Client: &http.Client{
-				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-					fetched = true
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(strings.NewReader("data")),
-						Header:     make(http.Header),
-					}, nil
-				}),
+				Transport: artifactFetchTransport(func() { fetched = true }, wheelDigest, wheelData, "application/octet-stream"),
 			},
 		},
 		packPath: make(map[string]string),
 	}
-	job := runner.Job{WheelDigest: "sha256:3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7", WheelAction: "reuse"}
+	job := runner.Job{WheelDigest: wheelDigest, WheelAction: "reuse"}
 	if err := w.fetchWheel(context.Background(), job); err != nil {
 		t.Fatalf("fetchWheel: %v", err)
 	}
@@ -98,10 +192,137 @@ func TestFetchArtifactUsesFetcher(t *testing.T) {
 	}
 }
 
+func TestExtractTarRestoresRegularFilesAndSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(filepath.Join(srcDir, "usr", "local", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(srcDir, "usr", "local", "lib", "python3.11", "site-packages", "pip"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "manifest.json"), []byte(`{"name":"cpython311"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "usr", "local", "bin", "python3.11"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("python3.11", filepath.Join(srcDir, "usr", "local", "bin", "python3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "usr", "local", "lib", "python3.11", "site-packages", "pip", "__init__.py"), []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tarPath := filepath.Join(dir, "runtime.tar")
+	if err := writeTestTarFromDir(tarPath, srcDir); err != nil {
+		t.Fatalf("writeTar: %v", err)
+	}
+
+	destDir := filepath.Join(dir, "dest")
+	if err := extractTar(tarPath, destDir); err != nil {
+		t.Fatalf("extractTar: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "usr", "local", "bin", "python3.11")); err != nil {
+		t.Fatalf("expected extracted python3.11: %v", err)
+	}
+	if got, err := os.Readlink(filepath.Join(destDir, "usr", "local", "bin", "python3")); err != nil {
+		t.Fatalf("expected extracted python3 symlink: %v", err)
+	} else if got != "python3.11" {
+		t.Fatalf("unexpected symlink target %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "usr", "local", "lib", "python3.11", "site-packages", "pip", "__init__.py")); err != nil {
+		t.Fatalf("expected extracted pip package: %v", err)
+	}
+}
+
+func writeTestTarFromDir(path, sourceDir string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	tw := tar.NewWriter(f)
+	defer tw.Close()
+	return filepath.Walk(sourceDir, func(current string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if current == sourceDir {
+			return nil
+		}
+		rel, err := filepath.Rel(sourceDir, current)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		linkTarget := ""
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err = os.Readlink(current)
+			if err != nil {
+				return err
+			}
+		}
+		hdr, err := tar.FileInfoHeader(info, linkTarget)
+		if err != nil {
+			return err
+		}
+		hdr.Name = rel
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		data, err := os.ReadFile(current)
+		if err != nil {
+			return err
+		}
+		_, err = tw.Write(data)
+		return err
+	})
+}
+
 type roundTripFunc func(req *http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func artifactFetchTransport(onFetch func(), idDigest string, payload []byte, mediaType string) roundTripFunc {
+	layerDigest := artifactBlobDigest(payload)
+	configDigest := artifactBlobDigest([]byte("{}"))
+	ref := strings.ReplaceAll(idDigest, ":", "-")
+	manifestPayload := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.unknown.config.v1+json","digest":"%s","size":2},"layers":[{"mediaType":"%s","digest":"%s","size":%d}]}`,
+		configDigest, mediaType, layerDigest, len(payload))
+	return func(req *http.Request) (*http.Response, error) {
+		onFetch()
+		switch req.URL.Path {
+		case "/v2/artifacts/manifests/" + ref:
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(manifestPayload)),
+				Header:     make(http.Header),
+			}, nil
+		case "/v2/artifacts/blobs/" + layerDigest:
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(payload)),
+				Header:     make(http.Header),
+			}, nil
+		default:
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("not found")),
+				Header:     make(http.Header),
+			}, nil
+		}
+	}
+}
+
+func artifactBlobDigest(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func TestMatchCarriesWheelDigestAndAction(t *testing.T) {
@@ -138,7 +359,7 @@ func TestMatchCarriesWheelDigestAndAction(t *testing.T) {
 func TestCasURLHelper(t *testing.T) {
 	w := &Worker{Cfg: Config{CASRegistryURL: "http://zot:5000", CASRegistryRepo: "artifacts"}}
 	u := w.casURL(artifact.ID{Type: artifact.WheelType, Digest: "sha256:dead"})
-	if u != "http://zot:5000/v2/artifacts/blobs/sha256:dead" {
+	if u != "http://zot:5000/v2/artifacts/manifests/sha256-dead" {
 		t.Fatalf("unexpected url: %s", u)
 	}
 }
@@ -162,63 +383,85 @@ func TestObjectURLFallback(t *testing.T) {
 func TestFetchRuntime(t *testing.T) {
 	dir := t.TempDir()
 	fetched := false
-	tarBuf, rtDigest := sampleTarWithDigest()
+	tarBuf, rtDigest := sampleRuntimeTarWithDigest()
 	w := &Worker{
 		Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")},
 		Fetcher: cas.Fetcher{
 			BaseURL: "http://example",
 			Repo:    "artifacts",
 			Client: &http.Client{
-				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-					fetched = true
-					var buf bytes.Buffer
-					tw := tar.NewWriter(&buf)
-					_ = tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len("stub"))})
-					_, _ = tw.Write([]byte("stub"))
-					_ = tw.Close()
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(bytes.NewReader(tarBuf.Bytes())),
-						Header:     make(http.Header),
-					}, nil
-				}),
+				Transport: artifactFetchTransport(func() { fetched = true }, rtDigest, tarBuf.Bytes(), "application/octet-stream"),
 			},
 		},
 		packPath: make(map[string]string),
 	}
 	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: rtDigest}
-	path := w.fetchRuntime(context.Background(), "3.11", rtID, "reuse", nil)
+	path := w.fetchRuntime(context.Background(), "3.11", rtID, "reuse", nil, nil, nil)
 	if path == "" {
 		t.Fatalf("expected runtime path")
+	}
+	if !strings.HasSuffix(path, filepath.Join("usr", "local")) {
+		t.Fatalf("expected prefix path, got %s", path)
 	}
 	if !fetched {
 		t.Fatalf("fetcher not invoked for runtime")
 	}
 }
 
-func TestResolvePacksBuildsStub(t *testing.T) {
+func TestResolvePacksBuildsArtifacts(t *testing.T) {
 	dir := t.TempDir()
-	w := &Worker{Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")}, packPath: make(map[string]string)}
-	packID := artifact.ID{Type: artifact.PackType, Digest: "sha256:packstub"}
-	paths := w.resolvePacks(context.Background(), []artifact.ID{packID}, map[string]string{packID.Digest: "build"}, map[string]map[string]any{packID.Digest: {"name": "stub"}})
-	if len(paths) != 1 {
-		t.Fatalf("expected stub pack path")
+	w := &Worker{
+		Cfg: Config{
+			CacheDir:       dir,
+			LocalCASDir:    filepath.Join(dir, "cas"),
+			DefaultPackCmd: samplePackBuildCmd(),
+		},
+		packPath: make(map[string]string),
 	}
-	if fi, err := os.Stat(paths[0]); err != nil || !fi.IsDir() {
-		t.Fatalf("stub pack not written: %v", err)
+	packID := artifact.ID{Type: artifact.PackType, Digest: "sha256:packstub"}
+	paths := w.resolvePacks(context.Background(), []artifact.ID{packID}, map[string]string{packID.Digest: "build"}, map[string]map[string]any{packID.Digest: {"name": "stub"}}, nil)
+	if len(paths) != 1 || paths[0] == "" {
+		t.Fatalf("expected built pack path")
+	}
+	if _, err := os.Stat(filepath.Join(paths[0], "include", "stub.h")); err != nil {
+		t.Fatalf("expected built pack payload: %v", err)
 	}
 }
 
-func TestFetchRuntimeBuildsStub(t *testing.T) {
+func TestFetchRuntimeBuildsArtifacts(t *testing.T) {
 	dir := t.TempDir()
-	w := &Worker{Cfg: Config{CacheDir: dir, LocalCASDir: filepath.Join(dir, "cas")}}
+	w := &Worker{Cfg: Config{
+		CacheDir:          dir,
+		LocalCASDir:       filepath.Join(dir, "cas"),
+		DefaultRuntimeCmd: sampleRuntimeBuildCmd(),
+	}}
 	rtID := artifact.ID{Type: artifact.RuntimeType, Digest: "sha256:rt-stub"}
-	path := w.fetchRuntime(context.Background(), "3.11", rtID, "build", map[string]any{"note": "stub"})
+	path := w.fetchRuntime(context.Background(), "3.11", rtID, "build", map[string]any{"note": "stub"}, nil, nil)
 	if path == "" {
-		t.Fatalf("expected stub runtime path")
+		t.Fatalf("expected built runtime path")
 	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("stub runtime not written: %v", err)
+	if _, err := os.Stat(filepath.Join(path, "bin", "python3")); err != nil {
+		t.Fatalf("expected runtime interpreter: %v", err)
+	}
+}
+
+func TestRuntimeReadyUsesPrefixLibForProbe(t *testing.T) {
+	prefix := filepath.Join(t.TempDir(), "usr", "local")
+	binDir := filepath.Join(prefix, "bin")
+	libDir := filepath.Join(prefix, "lib")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(libDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(binDir, "python3")
+	payload := fmt.Sprintf("#!/bin/sh\ncase \":$LD_LIBRARY_PATH:\" in\n  *:%s:*) exit 0 ;;\n  *) exit 1 ;;\nesac\n", libDir)
+	if err := os.WriteFile(script, []byte(payload), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !runtimeReady(prefix) {
+		t.Fatalf("expected runtime probe to honor prefix lib dir")
 	}
 }
 
@@ -344,15 +587,32 @@ func TestPopBuildQueueCapsMax(t *testing.T) {
 	}
 }
 
-func sampleTarWithDigest() (bytes.Buffer, string) {
+func sampleRuntimeTarWithDigest() (bytes.Buffer, string) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	_ = tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o644, Size: int64(len("stub"))})
 	_, _ = tw.Write([]byte("stub"))
-	data := []byte("x")
-	_ = tw.WriteHeader(&tar.Header{Name: "usr/local/lib/.keep", Mode: 0o644, Size: int64(len(data))})
+	data := []byte("#!/bin/sh\nexit 0\n")
+	_ = tw.WriteHeader(&tar.Header{Name: "usr/local/bin/python3", Mode: 0o755, Size: int64(len(data))})
 	_, _ = tw.Write(data)
 	_ = tw.Close()
 	d := sha256.Sum256(buf.Bytes())
 	return buf, "sha256:" + hex.EncodeToString(d[:])
+}
+
+func samplePackBuildCmd() string {
+	return `mkdir -p "$PACK_OUTPUT/usr/local/include" && \
+printf 'stub\n' > "$PACK_OUTPUT/usr/local/include/stub.h" && \
+cat > "$PACK_OUTPUT/manifest.json" <<'EOF'
+{"name":"stub","version":"1.0.0"}
+EOF`
+}
+
+func sampleRuntimeBuildCmd() string {
+	return `mkdir -p "$PACK_OUTPUT/usr/local/bin" && \
+printf '#!/bin/sh\nexit 0\n' > "$PACK_OUTPUT/usr/local/bin/python3" && \
+chmod +x "$PACK_OUTPUT/usr/local/bin/python3" && \
+cat > "$PACK_OUTPUT/manifest.json" <<'EOF'
+{"name":"cpython311","version":"3.11.0"}
+EOF`
 }

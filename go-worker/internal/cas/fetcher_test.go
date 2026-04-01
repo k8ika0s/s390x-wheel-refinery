@@ -11,14 +11,24 @@ import (
 	"github.com/k8ika0s/s390x-wheel-refinery/go-worker/internal/artifact"
 )
 
-func TestFetcherFetchesBlob(t *testing.T) {
+func TestFetcherFetchesArtifactLayer(t *testing.T) {
+	layerContent := []byte("blobdata")
+	layerDigest := blobDigest(layerContent)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v2/artifacts/blobs/sha256:test" {
+		switch r.URL.Path {
+		case "/v2/artifacts/manifests/sha256-test":
+			payload, _, _, err := buildManifestPayload("sha256-test", "sha256:test", layerDigest, int64(len(layerContent)), "application/octet-stream")
+			if err != nil {
+				t.Fatalf("build manifest: %v", err)
+			}
+			w.Header().Set("Content-Type", ociManifestMediaType)
+			_, _ = w.Write(payload)
+		case "/v2/artifacts/blobs/" + layerDigest:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(layerContent)
+		default:
 			w.WriteHeader(http.StatusNotFound)
-			return
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("blobdata"))
 	}))
 	defer ts.Close()
 
@@ -32,7 +42,7 @@ func TestFetcherFetchesBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read dest: %v", err)
 	}
-	if string(data) != "blobdata" {
+	if string(data) != string(layerContent) {
 		t.Fatalf("unexpected contents: %s", string(data))
 	}
 }

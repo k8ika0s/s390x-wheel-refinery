@@ -3,8 +3,8 @@ package builder
 import (
 	"archive/tar"
 	"bytes"
-	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +17,8 @@ type PackBuildOpts struct {
 	Digest string
 	Meta   map[string]any
 	// Shell command to run before tar creation; receives PACK_OUTPUT dir in env.
-	Cmd string
+	Cmd       string
+	LogWriter io.Writer
 }
 
 // RuntimeBuildOpts describes inputs for building a runtime artifact.
@@ -26,77 +27,61 @@ type RuntimeBuildOpts struct {
 	PythonVersion string
 	Policy        string
 	Meta          map[string]any
-	// Shell command to run before tar creation; receives RUNTIME_OUTPUT dir in env.
-	Cmd string
+	// Shell command to run before tar creation; receives PACK_OUTPUT dir in env.
+	Cmd       string
+	LogWriter io.Writer
 }
 
-// BuildPack writes a simple tar artifact with a manifest describing the pack.
+// BuildPack executes a pack recipe into a real output tree and archives that tree.
 func BuildPack(path string, opts PackBuildOpts) error {
-	if opts.Cmd != "" {
-		if err := runCommand(opts.Cmd, "PACK_OUTPUT", filepath.Dir(path)); err != nil {
-			return err
-		}
+	if strings.TrimSpace(opts.Cmd) == "" {
+		return fmt.Errorf("pack builder command not configured")
 	}
-	manifest := map[string]any{
-		"kind":        "pack",
-		"digest":      opts.Digest,
-		"generatedAt": time.Now().UTC().Format(time.RFC3339),
-		"meta":        opts.Meta,
-	}
-	return writeTar(path, manifest)
+	return buildArtifact(path, opts.Cmd, []string{
+		"PACK_DIGEST=" + opts.Digest,
+	}, validatePackOutput, opts.LogWriter)
 }
 
-// BuildRuntime writes a simple tar artifact with a manifest describing the runtime.
+// BuildRuntime executes a runtime recipe into a real output tree and archives that tree.
 func BuildRuntime(path string, opts RuntimeBuildOpts) error {
-	if opts.Cmd != "" {
-		if err := runCommand(opts.Cmd, "RUNTIME_OUTPUT", filepath.Dir(path)); err != nil {
-			return err
-		}
+	if strings.TrimSpace(opts.Cmd) == "" {
+		return fmt.Errorf("runtime builder command not configured")
 	}
-	manifest := map[string]any{
-		"kind":           "runtime",
-		"digest":         opts.Digest,
-		"python_version": opts.PythonVersion,
-		"policy":         opts.Policy,
-		"generatedAt":    time.Now().UTC().Format(time.RFC3339),
-		"meta":           opts.Meta,
-	}
-	return writeTar(path, manifest)
+	return buildArtifact(path, opts.Cmd, []string{
+		"PACK_DIGEST=" + opts.Digest,
+		"PYTHON_VERSION=" + opts.PythonVersion,
+		"RUNTIME_POLICY=" + opts.Policy,
+	}, validateRuntimeOutput, opts.LogWriter)
 }
 
-func writeTar(path string, manifest map[string]any) error {
+func buildArtifact(path, cmd string, extraEnv []string, validate func(string) error, logWriter io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	payload, err := json.MarshalIndent(manifest, "", "  ")
+	outputDir, err := os.MkdirTemp(filepath.Dir(path), "refinery-build-*")
 	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(outputDir)
+	if err := runCommand(cmd, outputDir, extraEnv, logWriter); err != nil {
+		return err
+	}
+	if validate != nil {
+		if err := validate(outputDir); err != nil {
+			return err
+		}
+	}
+	return writeTar(path, outputDir)
+}
+
+func writeTar(path, sourceDir string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	buf := bytes.NewBuffer(nil)
 	tw := tar.NewWriter(buf)
-	hdr := &tar.Header{
-		Name:    "manifest.json",
-		Mode:    0o644,
-		Size:    int64(len(payload)),
-		ModTime: time.Unix(0, 0),
-	}
-	if err := tw.WriteHeader(hdr); err != nil {
-		return err
-	}
-	if _, err := tw.Write(payload); err != nil {
-		return err
-	}
-	// add a minimal payload to avoid manifest-only artifacts
-	keepData := []byte("keep")
-	if err := tw.WriteHeader(&tar.Header{
-		Name:    "usr/local/.keep",
-		Mode:    0o644,
-		Size:    int64(len(keepData)),
-		ModTime: time.Unix(0, 0),
-	}); err != nil {
-		return err
-	}
-	if _, err := tw.Write(keepData); err != nil {
+	if err := archiveTree(tw, sourceDir); err != nil {
+		_ = tw.Close()
 		return err
 	}
 	if err := tw.Close(); err != nil {
@@ -108,22 +93,126 @@ func writeTar(path string, manifest map[string]any) error {
 	return nil
 }
 
-// runCommand executes a shell command if provided, setting an output dir env var.
-func runCommand(cmd, outputEnv, destDir string) error {
-	if cmd == "" {
-		return nil
+func archiveTree(tw *tar.Writer, sourceDir string) error {
+	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == sourceDir {
+			return nil
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		linkTarget := ""
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err = os.Readlink(path)
+			if err != nil {
+				return err
+			}
+		}
+		hdr, err := tar.FileInfoHeader(info, linkTarget)
+		if err != nil {
+			return err
+		}
+		hdr.Name = rel
+		hdr.ModTime = time.Unix(0, 0)
+		if info.IsDir() && !strings.HasSuffix(hdr.Name, "/") {
+			hdr.Name += "/"
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(tw, f)
+		return err
+	})
+}
+
+func validatePackOutput(outputDir string) error {
+	if err := validateCommonOutput(outputDir); err != nil {
+		return err
 	}
-	tmp, err := os.MkdirTemp(destDir, "refinery-build-*")
+	prefixDir := filepath.Join(outputDir, "usr", "local")
+	if fi, err := os.Stat(prefixDir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("pack output missing prefix dir %s", prefixDir)
+	}
+	return nil
+}
+
+func validateRuntimeOutput(outputDir string) error {
+	if err := validateCommonOutput(outputDir); err != nil {
+		return err
+	}
+	prefixDir := filepath.Join(outputDir, "usr", "local")
+	if fi, err := os.Stat(prefixDir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("runtime output missing prefix dir %s", prefixDir)
+	}
+	for _, candidate := range []string{
+		filepath.Join(prefixDir, "bin", "python3"),
+		filepath.Join(prefixDir, "bin", "python"),
+	} {
+		if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
+			return nil
+		}
+	}
+	return fmt.Errorf("runtime output missing python interpreter")
+}
+
+func validateCommonOutput(outputDir string) error {
+	manifestPath := filepath.Join(outputDir, "manifest.json")
+	if fi, err := os.Stat(manifestPath); err != nil || fi.IsDir() {
+		return fmt.Errorf("artifact output missing manifest.json")
+	}
+	hasPayload := false
+	entries, err := os.ReadDir(outputDir)
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmp)
-	cmd = fmt.Sprintf("%s=%s %s", outputEnv, shellQuote(tmp), cmd)
+	for _, entry := range entries {
+		if entry.Name() == "manifest.json" {
+			continue
+		}
+		hasPayload = true
+		break
+	}
+	if !hasPayload {
+		return fmt.Errorf("artifact output missing payload beyond manifest.json")
+	}
+	return nil
+}
+
+// runCommand executes a shell command, setting PACK_OUTPUT and extra env vars.
+func runCommand(cmd, outputDir string, extraEnv []string, logWriter io.Writer) error {
 	c := exec.Command("sh", "-c", cmd)
-	env := filterEnv(os.Environ(), outputEnv)
-	c.Env = append(env, outputEnv+"="+tmp)
+	env := filterEnv(os.Environ(), "PACK_OUTPUT")
+	for _, entry := range extraEnv {
+		if entry == "" {
+			continue
+		}
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && key != "" {
+			env = filterEnv(env, key)
+		}
+	}
+	c.Env = append(env, "PACK_OUTPUT="+outputDir)
+	c.Env = append(c.Env, extraEnv...)
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
+	if logWriter != nil {
+		mw := io.MultiWriter(os.Stdout, logWriter)
+		c.Stdout = mw
+		c.Stderr = io.MultiWriter(os.Stderr, logWriter)
+	}
 	return c.Run()
 }
 

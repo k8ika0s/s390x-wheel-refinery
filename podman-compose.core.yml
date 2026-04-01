@@ -1,0 +1,179 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: docker.io/library/postgres:16
+    environment:
+      POSTGRES_USER: refinery
+      POSTGRES_PASSWORD: refinery
+      POSTGRES_DB: refinery
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U refinery -d refinery"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: docker.io/library/redis:7
+    ports:
+      - "6379:6379"
+
+  zot:
+    build:
+      context: .
+      dockerfile: containers/zot/Containerfile
+    container_name: zot
+    ports:
+      - "5000:5000"
+    volumes:
+      - zotdata:/var/lib/registry
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:5000/v2/_catalog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    build:
+      context: .
+      dockerfile: containers/minio/Containerfile
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: containers/go-control-plane/Containerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      zot:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      HTTP_ADDR: ":8080"
+      POSTGRES_DSN: postgres://refinery:refinery@postgres:5432/refinery?sslmode=disable
+      QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379
+      PLAN_REDIS_KEY: refinery:plan_queue
+      AUTO_PLAN: "1"
+      AUTO_BUILD: "1"
+      KAFKA_BROKERS: ""
+      WORKER_WEBHOOK_URL: http://worker:9000/trigger
+      WORKER_PLAN_URL: http://worker:9000/plan
+      WORKER_TOKEN: ${WORKER_TOKEN:-}
+      CAS_REGISTRY_URL: http://zot:5000
+      CAS_REGISTRY_REPO: artifacts
+      CAS_PUSH_ENABLED: ${CAS_PUSH_ENABLED:-0}
+      RUNTIME_PUSH_ENABLED: ${RUNTIME_PUSH_ENABLED:-0}
+      PACK_PUSH_ENABLED: ${PACK_PUSH_ENABLED:-0}
+      REPAIR_PUSH_ENABLED: ${REPAIR_PUSH_ENABLED:-0}
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+      OBJECT_STORE_BUCKET: wheelhouse
+      OBJECT_STORE_ACCESS_KEY: minio
+      OBJECT_STORE_SECRET_KEY: minio123
+      INPUT_OBJECT_PREFIX: inputs
+      HINTS_DIR: /hints
+      HINTS_SEED: ${HINTS_SEED:-1}
+      PYTHON_RECIPES_DIR: /recipes
+      PACK_CATALOG_PATH: /data/pack-catalog.yaml
+      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
+      UI_TOKEN: ${UI_TOKEN:-}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./hints:/hints:ro
+      - ./recipes:/recipes:rw
+      - ./data:/data:ro
+
+  ui:
+    build:
+      context: .
+      dockerfile: containers/ui/Containerfile
+    environment:
+      NODE_ENV: production
+    ports:
+      - "3000:8080"
+    depends_on:
+      - control-plane
+
+  worker:
+    build:
+      context: .
+      dockerfile: containers/go-worker/Containerfile
+    privileged: true
+    mem_limit: ${WORKER_MEM_LIMIT:-8g}
+    cpus: ${WORKER_CPU_LIMIT:-2}
+    environment:
+      OUTPUT_DIR: /output
+      CACHE_DIR: /cache
+      CACHE_MAX_BYTES: ${CACHE_MAX_BYTES:-10737418240}
+      CACHE_PRUNE_INTERVAL_SEC: ${CACHE_PRUNE_INTERVAL_SEC:-300}
+      PYTHON_VERSION: "3.11"
+      PLATFORM_TAG: "manylinux2014_s390x"
+      WORKER_TOKEN: ${WORKER_TOKEN:-}
+      CONTROL_PLANE_URL: http://control-plane:8080
+      CONTROL_PLANE_TOKEN: ${WORKER_TOKEN:-}
+      PLAN_POLL_ENABLED: "1"
+      PLAN_POP_URL: http://control-plane:8080/api/pending-inputs/pop
+      PLAN_STATUS_URL: http://control-plane:8080/api/pending-inputs/status
+      PLAN_LIST_URL: http://control-plane:8080/api/pending-inputs
+      PLAN_POLL_INTERVAL_SEC: 10
+      PLAN_POP_BATCH: 5
+      BUILD_POP_URL: http://control-plane:8080/api/build-queue/pop
+      QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379
+      PODMAN_BIN: podman
+      CONTAINER_IMAGE: ${CONTAINER_IMAGE:-refinery-builder:latest}
+      CONTAINER_IMAGE_TLS_VERIFY: ${CONTAINER_IMAGE_TLS_VERIFY:-false}
+      CAS_REGISTRY_URL: http://zot:5000
+      CAS_REGISTRY_REPO: artifacts
+      CAS_PUSH_ENABLED: ${CAS_PUSH_ENABLED:-0}
+      RUNTIME_PUSH_ENABLED: ${RUNTIME_PUSH_ENABLED:-0}
+      PACK_PUSH_ENABLED: ${PACK_PUSH_ENABLED:-0}
+      REPAIR_PUSH_ENABLED: ${REPAIR_PUSH_ENABLED:-0}
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+      OBJECT_STORE_BUCKET: wheelhouse
+      OBJECT_STORE_ACCESS_KEY: minio
+      OBJECT_STORE_SECRET_KEY: minio123
+      INFER_ENABLED: ${INFER_ENABLED:-1}
+      INFER_URL: ${INFER_URL:-}
+      INFER_TOKEN: ${INFER_TOKEN:-}
+      INFER_MODEL: ${INFER_MODEL:-}
+      INFER_TIMEOUT_SEC: ${INFER_TIMEOUT_SEC:-20}
+      INFER_MAX_RETRIES: ${INFER_MAX_RETRIES:-1}
+      DEFAULT_RUNTIME_CMD: ${DEFAULT_RUNTIME_CMD:-/app/recipes/cpython311.sh}
+      REFINERY_RUNTIME_ENV_LOADED: ${REFINERY_RUNTIME_ENV_LOADED:-0}
+      REFINERY_RUNTIME_ENV_SOURCE: ${REFINERY_RUNTIME_ENV_SOURCE:-process-env}
+    volumes:
+      - ./output:/output
+      - ./cache:/cache
+      - ./recipes:/app/recipes:ro
+      - podman-storage:/var/lib/containers
+    depends_on:
+      - control-plane
+
+volumes:
+  pgdata:
+  zotdata:
+  miniodata:
+  podman-storage:

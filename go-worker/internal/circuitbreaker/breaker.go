@@ -19,6 +19,26 @@ var (
 
 	// ErrTooManyRequests is returned when the circuit breaker is half-open and at capacity
 	ErrTooManyRequests = errors.New("circuit breaker: too many requests")
+
+	breakerStateGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "circuit_breaker_state",
+		Help: "Current state of the circuit breaker (0=closed, 1=open, 2=half-open)",
+	}, []string{"name"})
+
+	breakerRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "circuit_breaker_requests_total",
+		Help: "Total number of requests through the circuit breaker",
+	}, []string{"name", "result"})
+
+	breakerErrorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "circuit_breaker_errors_total",
+		Help: "Total number of errors in the circuit breaker",
+	}, []string{"name", "type"})
+
+	breakerStateChangesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "circuit_breaker_state_changes_total",
+		Help: "Total number of state changes",
+	}, []string{"name", "from", "to"})
 )
 
 // State represents the circuit breaker state
@@ -158,38 +178,11 @@ func New(config Config) *CircuitBreaker {
 		}
 	}
 
-	// Initialize metrics
-	cb.stateGauge = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "circuit_breaker_state",
-		Help: "Current state of the circuit breaker (0=closed, 1=open, 2=half-open)",
-		ConstLabels: prometheus.Labels{
-			"name": cb.name,
-		},
-	})
-
-	cb.requestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "circuit_breaker_requests_total",
-		Help: "Total number of requests through the circuit breaker",
-		ConstLabels: prometheus.Labels{
-			"name": cb.name,
-		},
-	}, []string{"result"})
-
-	cb.errorsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "circuit_breaker_errors_total",
-		Help: "Total number of errors in the circuit breaker",
-		ConstLabels: prometheus.Labels{
-			"name": cb.name,
-		},
-	}, []string{"type"})
-
-	cb.stateChangesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "circuit_breaker_state_changes_total",
-		Help: "Total number of state changes",
-		ConstLabels: prometheus.Labels{
-			"name": cb.name,
-		},
-	}, []string{"from", "to"})
+	// Shared metric vectors avoid duplicate collector registration across breaker instances.
+	cb.stateGauge = breakerStateGauge.WithLabelValues(cb.name)
+	cb.requestsTotal = breakerRequestsTotal.MustCurryWith(prometheus.Labels{"name": cb.name})
+	cb.errorsTotal = breakerErrorsTotal.MustCurryWith(prometheus.Labels{"name": cb.name})
+	cb.stateChangesTotal = breakerStateChangesTotal.MustCurryWith(prometheus.Labels{"name": cb.name})
 
 	cb.toNewGeneration(time.Now())
 

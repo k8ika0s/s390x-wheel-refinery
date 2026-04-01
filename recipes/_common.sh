@@ -149,7 +149,7 @@ verify_sha256() {
     fi
     die "no expected sha256 provided for $file (set PACK_SOURCE_SHA256 or ALLOW_MISSING_SHA256=1)"
   fi
-  echo "${expected}  ${file}" | sha256sum -c -
+  echo "${expected}  ${file}" | sha256sum -c - >/dev/null
 }
 
 extract() {

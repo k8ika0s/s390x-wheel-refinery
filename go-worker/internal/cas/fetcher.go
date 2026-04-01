@@ -29,8 +29,7 @@ func (f Fetcher) client() *http.Client {
 	return &http.Client{Timeout: 20 * time.Second}
 }
 
-// Fetch downloads the blob for the given artifact digest into destPath.
-// Assumes registry supports /v2/<repo>/blobs/<digest>.
+// Fetch resolves the artifact manifest and downloads the first layer blob into destPath.
 func (f Fetcher) Fetch(ctx context.Context, id artifact.ID, destPath string) error {
 	if f.BaseURL == "" || id.Digest == "" {
 		return fmt.Errorf("missing base URL or digest")
@@ -39,11 +38,13 @@ func (f Fetcher) Fetch(ctx context.Context, id artifact.ID, destPath string) err
 	if repo == "" {
 		repo = "artifacts"
 	}
-	url := fmt.Sprintf("%s/v2/%s/blobs/%s", strings.TrimRight(f.BaseURL, "/"), repo, id.Digest)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	ref := refForDigest(id.Digest)
+	manifestURL := fmt.Sprintf("%s/v2/%s/manifests/%s", strings.TrimRight(f.BaseURL, "/"), repo, ref)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
 	if err != nil {
 		return err
 	}
+	req.Header.Set("Accept", ociManifestMediaType)
 	if f.Username != "" || f.Password != "" {
 		req.SetBasicAuth(f.Username, f.Password)
 	}
@@ -53,7 +54,36 @@ func (f Fetcher) Fetch(ctx context.Context, id artifact.ID, destPath string) err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("fetch %s: unexpected status %d", id.Digest, resp.StatusCode)
+		return fmt.Errorf("fetch manifest %s: unexpected status %d", id.Digest, resp.StatusCode)
+	}
+	manifestPayload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	manifest, err := parseManifest(manifestPayload)
+	if err != nil {
+		return err
+	}
+	layerDigest := manifest.Layers[0].Digest
+	if layerDigest == "" {
+		return fmt.Errorf("manifest missing layer digest for %s", id.Digest)
+	}
+
+	blobURL := fmt.Sprintf("%s/v2/%s/blobs/%s", strings.TrimRight(f.BaseURL, "/"), repo, layerDigest)
+	blobReq, err := http.NewRequestWithContext(ctx, http.MethodGet, blobURL, nil)
+	if err != nil {
+		return err
+	}
+	if f.Username != "" || f.Password != "" {
+		blobReq.SetBasicAuth(f.Username, f.Password)
+	}
+	blobResp, err := f.client().Do(blobReq)
+	if err != nil {
+		return err
+	}
+	defer blobResp.Body.Close()
+	if blobResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch blob %s: unexpected status %d", layerDigest, blobResp.StatusCode)
 	}
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return err
@@ -63,6 +93,24 @@ func (f Fetcher) Fetch(ctx context.Context, id artifact.ID, destPath string) err
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, resp.Body)
-	return err
+	if _, err := io.Copy(out, blobResp.Body); err != nil {
+		return err
+	}
+	if ok, err := verifyFetchedBlob(destPath, layerDigest); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("fetched blob digest mismatch: expected %s", layerDigest)
+	}
+	return nil
+}
+
+func verifyFetchedBlob(path, expected string) (bool, error) {
+	if expected == "" {
+		return false, fmt.Errorf("expected digest missing")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	return blobDigest(data) == expected, nil
 }

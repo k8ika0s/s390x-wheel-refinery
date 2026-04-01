@@ -99,16 +99,26 @@ func TestOverlaySettingsFromControlPlane(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write([]byte(`{"plan_pool_size":4,"build_pool_size":3}`))
+		_, _ = w.Write([]byte(`{"plan_pool_size":4,"build_pool_size":3,"infer_enabled":false,"infer_model":"gpt-4.1-mini","infer_timeout_sec":45,"infer_max_retries":2,"infer_system_prompt":"system prompt","infer_user_prompt_template":"Package {{package}}"}`))
 	}))
 	defer s.Close()
 	cfg := Config{
 		ControlPlaneURL: s.URL,
 		PlanPoolSize:    1,
 		BuildPoolSize:   1,
+		InferEnabled:    true,
 	}
 	out := overlaySettingsFromControlPlane(cfg)
 	if out.PlanPoolSize != 4 || out.BuildPoolSize != 3 {
 		t.Fatalf("overlay failed: %#v", out)
+	}
+	if out.InferEnabled || out.InferModel != "gpt-4.1-mini" {
+		t.Fatalf("expected inference settings to overlay: %#v", out)
+	}
+	if out.InferTimeoutSec != 45 || out.InferMaxRetries != 2 {
+		t.Fatalf("expected inference timing to overlay: %#v", out)
+	}
+	if out.InferSystemPrompt != "system prompt" || out.InferUserPromptTemplate != "Package {{package}}" {
+		t.Fatalf("expected inference prompts to overlay: %#v", out)
 	}
 }

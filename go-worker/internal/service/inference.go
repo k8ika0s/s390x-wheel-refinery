@@ -43,42 +43,73 @@ type inferenceResponse struct {
 	} `json:"choices"`
 }
 
-const inferenceSystemPrompt = "You are a build-failure triage assistant. Return only a JSON object with: pattern, confidence (0-1), reason_code, summary, recipes (apt/dnf/pip/env arrays), notes, tags. Use minimal safe fixes."
+type llmInferenceDecision struct {
+	Hint             plan.Hint
+	Recipes          []string
+	Note             string
+	OK               bool
+	Trace            []string
+	RawOutput        string
+	NormalizedOutput any
+	Ignored          bool
+	IgnoreReason     string
+	PromptVersion    string
+}
 
-func inferenceUserPrompt(ctx plan.HintContext, logContent string, existingRecipes []string) string {
-	lines := []string{
-		"Package: " + strings.TrimSpace(ctx.Package),
-		"Version: " + strings.TrimSpace(ctx.Version),
-		"Python: " + strings.TrimSpace(firstNonEmpty(ctx.PythonVersion, ctx.PythonTag)),
-		"Platform: " + strings.TrimSpace(ctx.PlatformTag),
+const legacyInferenceSystemPrompt = "You are a build-failure triage assistant. Return only a JSON object with: pattern, confidence (0-1), reason_code, summary, recipes (apt/dnf/pip/env arrays), notes, tags. Use minimal safe fixes."
+const defaultInferenceSystemPrompt = legacyInferenceSystemPrompt + " Recipes must be raw package or requirement names only for apt/dnf/pip, and plain KEY=VALUE entries only for env. Do not return sudo, export, shell commands, quotes, or pipelines. Do not include the target package itself in pip recipes. Prefer deterministic OS/compiler fixes over transitive Python dependency pinning when the log clearly shows a missing system package or compiler version problem."
+const defaultInferenceUserPromptTemplate = "Package: {{package}}\nVersion: {{version}}\nPython: {{python}}\nPlatform: {{platform}}\nExisting recipes: {{existing_recipes}}\nLog excerpt:\n{{log_excerpt}}"
+
+func renderInferencePrompt(template string, ctx plan.HintContext, logContent string, existingRecipes []string) string {
+	template = strings.TrimSpace(template)
+	if template == "" {
+		template = defaultInferenceUserPromptTemplate
 	}
-	if len(existingRecipes) > 0 {
-		lines = append(lines, "Existing recipes: "+strings.Join(existingRecipes, ", "))
+	recipes := strings.Join(existingRecipes, ", ")
+	if recipes == "" {
+		recipes = "(none)"
 	}
-	lines = append(lines, "Log excerpt:", logContent)
-	return strings.Join(lines, "\n")
+	replacer := strings.NewReplacer(
+		"{{package}}", strings.TrimSpace(ctx.Package),
+		"{{version}}", strings.TrimSpace(ctx.Version),
+		"{{python}}", strings.TrimSpace(firstNonEmpty(ctx.PythonVersion, ctx.PythonTag)),
+		"{{platform}}", strings.TrimSpace(ctx.PlatformTag),
+		"{{existing_recipes}}", recipes,
+		"{{log_excerpt}}", logContent,
+	)
+	return replacer.Replace(template)
 }
 
 func (w *Worker) inferHintFromLLM(ctx context.Context, logContent string, ctxHint plan.HintContext, existingRecipes []string) (plan.Hint, []string, string, bool, []string) {
+	decision := w.inferHintFromLLMDecision(ctx, logContent, ctxHint, existingRecipes)
+	return decision.Hint, decision.Recipes, decision.Note, decision.OK, decision.Trace
+}
+
+func (w *Worker) inferHintFromLLMDecision(ctx context.Context, logContent string, ctxHint plan.HintContext, existingRecipes []string) llmInferenceDecision {
 	trace := []string{}
 	if !w.Cfg.InferEnabled {
-		return plan.Hint{}, nil, "", false, []string{"llm inference disabled"}
+		return llmInferenceDecision{Trace: []string{"llm inference disabled"}, PromptVersion: promptVersion(w.Cfg)}
 	}
 	if strings.TrimSpace(w.Cfg.InferURL) == "" {
-		return plan.Hint{}, nil, "", false, []string{"llm inference url not set"}
+		return llmInferenceDecision{Trace: []string{"llm inference url not set"}, PromptVersion: promptVersion(w.Cfg)}
 	}
-	prompt := inferenceUserPrompt(ctxHint, logContent, existingRecipes)
+	prompt := renderInferencePrompt(w.Cfg.InferUserPromptTemplate, ctxHint, logContent, existingRecipes)
+	systemPrompt := strings.TrimSpace(w.Cfg.InferSystemPrompt)
+	if systemPrompt == "" || systemPrompt == legacyInferenceSystemPrompt {
+		systemPrompt = defaultInferenceSystemPrompt
+	}
+	currentPromptVersion := promptVersion(w.Cfg)
 	payload := inferenceRequest{
 		Model:       strings.TrimSpace(w.Cfg.InferModel),
 		Temperature: 0.2,
 		Messages: []inferenceMessage{
-			{Role: "system", Content: inferenceSystemPrompt},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: prompt},
 		},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return plan.Hint{}, nil, "", false, []string{fmt.Sprintf("llm request marshal failed: %v", err)}
+		return llmInferenceDecision{Trace: []string{fmt.Sprintf("llm request marshal failed: %v", err)}, PromptVersion: currentPromptVersion}
 	}
 	timeoutSec := w.Cfg.InferTimeoutSec
 	if timeoutSec <= 0 {
@@ -89,37 +120,64 @@ func (w *Worker) inferHintFromLLM(ctx context.Context, logContent string, ctxHin
 		maxRetries = 0
 	}
 	var lastErr error
+	attempts := maxRetries + 1
+	client := &http.Client{Timeout: time.Duration(timeoutSec) * time.Second}
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, w.Cfg.InferURL, bytes.NewReader(body))
+		reqCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+		started := time.Now()
+		req, reqErr := http.NewRequestWithContext(reqCtx, http.MethodPost, w.Cfg.InferURL, bytes.NewReader(body))
 		if reqErr != nil {
-			return plan.Hint{}, nil, "", false, []string{fmt.Sprintf("llm request create failed: %v", reqErr)}
+			cancel()
+			return llmInferenceDecision{Trace: []string{fmt.Sprintf("llm request create failed: %v", reqErr)}, PromptVersion: currentPromptVersion}
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if token := strings.TrimSpace(w.Cfg.InferToken); token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		client := &http.Client{Timeout: time.Duration(timeoutSec) * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
+			cancel()
+			trace = append(trace, fmt.Sprintf("llm attempt %d/%d failed after %s: %v", attempt+1, attempts, time.Since(started).Round(100*time.Millisecond), err))
 			lastErr = err
 			continue
 		}
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		cancel()
+		trace = append(trace, fmt.Sprintf("llm attempt %d/%d status %d in %s", attempt+1, attempts, resp.StatusCode, time.Since(started).Round(100*time.Millisecond)))
 		if resp.StatusCode >= 300 {
 			lastErr = fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 			continue
 		}
 		suggestion, err := decodeInferenceSuggestion(raw)
 		if err != nil {
-			return plan.Hint{}, nil, "", false, []string{fmt.Sprintf("llm decode failed: %v", err)}
+			return llmInferenceDecision{
+				Trace:         []string{fmt.Sprintf("llm decode failed: %v", err)},
+				RawOutput:     strings.TrimSpace(string(raw)),
+				PromptVersion: currentPromptVersion,
+			}
 		}
 		suggestion = normalizeSuggestion(suggestion)
+		suggestion.Recipes = filterSuggestionRecipes(suggestion.Recipes, ctxHint)
 		if suggestion.Pattern == "" {
-			return plan.Hint{}, nil, "", false, []string{"llm returned empty pattern"}
+			return llmInferenceDecision{
+				Trace:            []string{"llm returned empty pattern"},
+				RawOutput:        strings.TrimSpace(string(raw)),
+				NormalizedOutput: normalizeForMetadata(suggestion),
+				Ignored:          true,
+				IgnoreReason:     "empty_pattern",
+				PromptVersion:    currentPromptVersion,
+			}
 		}
 		if len(suggestion.Recipes) == 0 {
-			return plan.Hint{}, nil, "", false, []string{"llm returned no recipes"}
+			return llmInferenceDecision{
+				Trace:            []string{"llm returned no recipes"},
+				RawOutput:        strings.TrimSpace(string(raw)),
+				NormalizedOutput: normalizeForMetadata(suggestion),
+				Ignored:          true,
+				IgnoreReason:     "no_recipes",
+				PromptVersion:    currentPromptVersion,
+			}
 		}
 		trace = append(trace, fmt.Sprintf("llm suggested pattern %s", suggestion.Pattern))
 		confLabel := confidenceLabel(suggestion.Confidence)
@@ -137,12 +195,21 @@ func (w *Worker) inferHintFromLLM(ctx context.Context, logContent string, ctxHin
 		hint.Confidence = confLabel
 		hint.Note = firstNonEmpty(suggestion.Summary, suggestion.Notes)
 		hint.Recipes = suggestion.Recipes
-		return hint, flattenRecipeMap(hint.Recipes), hint.Note, true, trace
+		return llmInferenceDecision{
+			Hint:             hint,
+			Recipes:          flattenRecipeMap(hint.Recipes),
+			Note:             hint.Note,
+			OK:               true,
+			Trace:            trace,
+			RawOutput:        strings.TrimSpace(string(raw)),
+			NormalizedOutput: normalizeForMetadata(suggestion),
+			PromptVersion:    currentPromptVersion,
+		}
 	}
 	if lastErr != nil {
-		return plan.Hint{}, nil, "", false, []string{fmt.Sprintf("llm request failed: %v", lastErr)}
+		return llmInferenceDecision{Trace: []string{fmt.Sprintf("llm request failed: %v", lastErr)}, PromptVersion: currentPromptVersion}
 	}
-	return plan.Hint{}, nil, "", false, []string{"llm request failed"}
+	return llmInferenceDecision{Trace: []string{"llm request failed"}, PromptVersion: currentPromptVersion}
 }
 
 func decodeInferenceSuggestion(raw []byte) (inferenceSuggestion, error) {
@@ -222,15 +289,13 @@ func normalizeRecipeMap(recipes map[string][]string) map[string][]string {
 		seen := make(map[string]bool)
 		var cleaned []string
 		for _, step := range steps {
-			trimmed := strings.TrimSpace(step)
-			if trimmed == "" {
-				continue
+			for _, normalized := range normalizeRecipeSteps(key, step) {
+				if seen[strings.ToLower(normalized)] {
+					continue
+				}
+				seen[strings.ToLower(normalized)] = true
+				cleaned = append(cleaned, normalized)
 			}
-			if seen[strings.ToLower(trimmed)] {
-				continue
-			}
-			seen[strings.ToLower(trimmed)] = true
-			cleaned = append(cleaned, trimmed)
 		}
 		if len(cleaned) > 0 {
 			out[key] = cleaned
@@ -240,6 +305,144 @@ func normalizeRecipeMap(recipes map[string][]string) map[string][]string {
 		return nil
 	}
 	return out
+}
+
+func filterSuggestionRecipes(recipes map[string][]string, ctx plan.HintContext) map[string][]string {
+	if len(recipes) == 0 {
+		return nil
+	}
+	target := normalizePackageName(ctx.Package)
+	if target == "" {
+		return recipes
+	}
+	out := make(map[string][]string, len(recipes))
+	for mgr, steps := range recipes {
+		if strings.ToLower(mgr) != "pip" {
+			out[mgr] = steps
+			continue
+		}
+		filtered := make([]string, 0, len(steps))
+		for _, step := range steps {
+			name := normalizeRecipeRequirementName(step)
+			if name == "" || name != target {
+				filtered = append(filtered, step)
+			}
+		}
+		if len(filtered) > 0 {
+			out[mgr] = filtered
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeRecipeRequirementName(step string) string {
+	trimmed := strings.TrimSpace(step)
+	if trimmed == "" {
+		return ""
+	}
+	for _, sep := range []string{"==", ">=", "<=", "~=", "!=", ">", "<", "["} {
+		if idx := strings.Index(trimmed, sep); idx >= 0 {
+			trimmed = trimmed[:idx]
+			break
+		}
+	}
+	return normalizePackageName(trimmed)
+}
+
+func normalizePackageName(name string) string {
+	if name == "" {
+		return ""
+	}
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), "_", "-"))
+}
+
+func normalizeRecipeSteps(manager, step string) []string {
+	trimmed := strings.TrimSpace(step)
+	if trimmed == "" {
+		return nil
+	}
+	switch manager {
+	case "env":
+		return normalizeEnvRecipeStep(trimmed)
+	case "apt":
+		return normalizePackageRecipeStep(trimmed, "apt-get install", "apt install")
+	case "dnf":
+		return normalizePackageRecipeStep(trimmed, "dnf install", "yum install", "microdnf install")
+	case "pip":
+		return normalizePackageRecipeStep(trimmed, "python -m pip install", "python3 -m pip install", "pip install", "pip3 install")
+	default:
+		return []string{trimmed}
+	}
+}
+
+func normalizeEnvRecipeStep(step string) []string {
+	trimmed := strings.TrimSpace(strings.TrimPrefix(step, "export "))
+	trimmed = strings.Trim(trimmed, `"'`)
+	if trimmed == "" || containsShellOperators(trimmed) {
+		return nil
+	}
+	parts := strings.SplitN(trimmed, "=", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	key := strings.TrimSpace(parts[0])
+	if key == "" || strings.ContainsAny(key, " \t") {
+		return nil
+	}
+	return []string{key + "=" + strings.TrimSpace(parts[1])}
+}
+
+func normalizePackageRecipeStep(step string, installPrefixes ...string) []string {
+	trimmed := strings.TrimSpace(step)
+	trimmed = strings.TrimPrefix(trimmed, "sudo ")
+	lower := strings.ToLower(trimmed)
+	matchedPrefix := false
+	for _, prefix := range installPrefixes {
+		if strings.HasPrefix(lower, prefix+" ") {
+			trimmed = strings.TrimSpace(trimmed[len(prefix):])
+			lower = strings.ToLower(trimmed)
+			matchedPrefix = true
+			break
+		}
+	}
+	if trimmed == "" || containsShellOperators(trimmed) {
+		return nil
+	}
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return nil
+	}
+	if !matchedPrefix {
+		if strings.ContainsAny(trimmed, `"'`) {
+			return nil
+		}
+		switch strings.ToLower(fields[0]) {
+		case "scl", "bash", "sh", "python", "python3", "pip", "pip3", "dnf", "yum", "apt", "apt-get", "microdnf", "sudo", "export":
+			return nil
+		}
+	}
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if strings.HasPrefix(field, "-") {
+			continue
+		}
+		field = strings.Trim(field, `"'`)
+		if field == "" {
+			continue
+		}
+		out = append(out, field)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func containsShellOperators(step string) bool {
+	return strings.ContainsAny(step, "\n;&|`") || strings.Contains(step, "$(")
 }
 
 func confidenceLabel(score float64) string {

@@ -160,60 +160,62 @@ type PlanSummary struct {
 
 // BuildStatus tracks a build job derived from a plan.
 type BuildStatus struct {
-	ID             int64    `json:"id"`
-	NodeID         string   `json:"node_id,omitempty"`
-	WorkerID       string   `json:"worker_id,omitempty"`
-	Package        string   `json:"package"`
-	Version        string   `json:"version"`
-	PythonTag      string   `json:"python_tag"`
-	PlatformTag    string   `json:"platform_tag"`
-	Status         string   `json:"status"`
-	PreviousStatus string   `json:"previous_status,omitempty"`
-	Attempts       int      `json:"attempts"`
-	LastError      string   `json:"last_error,omitempty"`
-	FailureSummary string   `json:"failure_summary,omitempty"`
-	OldestAgeSec   int64    `json:"oldest_age_seconds,omitempty"`
-	StaleAgeSec    int64    `json:"stale_age_seconds,omitempty"`
-	CreatedAt      int64    `json:"created_at"`
-	UpdatedAt      int64    `json:"updated_at"`
-	LeasedAt       int64    `json:"leased_at,omitempty"`
-	StartedAt      int64    `json:"started_at,omitempty"`
-	FinishedAt     int64    `json:"finished_at,omitempty"`
-	RunID          string   `json:"run_id,omitempty"`
-	PlanID         int64    `json:"plan_id,omitempty"`
-	BackoffUntil   int64    `json:"backoff_until,omitempty"`
-	BackoffReason  string   `json:"backoff_reason,omitempty"`
-	BackoffSeconds int      `json:"backoff_seconds,omitempty"`
-	ReasonCode     string   `json:"reason_code,omitempty"`
-	ReasonDetail   string   `json:"reason_detail,omitempty"`
-	Recipes        []string `json:"recipes,omitempty"`
-	HintIDs        []string `json:"hint_ids,omitempty"`
+	ID             int64          `json:"id"`
+	NodeID         string         `json:"node_id,omitempty"`
+	WorkerID       string         `json:"worker_id,omitempty"`
+	Package        string         `json:"package"`
+	Version        string         `json:"version"`
+	PythonTag      string         `json:"python_tag"`
+	PlatformTag    string         `json:"platform_tag"`
+	Status         string         `json:"status"`
+	PreviousStatus string         `json:"previous_status,omitempty"`
+	Attempts       int            `json:"attempts"`
+	LastError      string         `json:"last_error,omitempty"`
+	FailureSummary string         `json:"failure_summary,omitempty"`
+	OldestAgeSec   int64          `json:"oldest_age_seconds,omitempty"`
+	StaleAgeSec    int64          `json:"stale_age_seconds,omitempty"`
+	CreatedAt      int64          `json:"created_at"`
+	UpdatedAt      int64          `json:"updated_at"`
+	LeasedAt       int64          `json:"leased_at,omitempty"`
+	StartedAt      int64          `json:"started_at,omitempty"`
+	FinishedAt     int64          `json:"finished_at,omitempty"`
+	RunID          string         `json:"run_id,omitempty"`
+	PlanID         int64          `json:"plan_id,omitempty"`
+	BackoffUntil   int64          `json:"backoff_until,omitempty"`
+	BackoffReason  string         `json:"backoff_reason,omitempty"`
+	BackoffSeconds int            `json:"backoff_seconds,omitempty"`
+	ReasonCode     string         `json:"reason_code,omitempty"`
+	ReasonDetail   string         `json:"reason_detail,omitempty"`
+	Recipes        []string       `json:"recipes,omitempty"`
+	HintIDs        []string       `json:"hint_ids,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
 // BuildAttempt captures per-attempt build history.
 type BuildAttempt struct {
-	ID             int64    `json:"id"`
-	NodeID         string   `json:"node_id,omitempty"`
-	Package        string   `json:"package"`
-	Version        string   `json:"version"`
-	Attempt        int      `json:"attempt"`
-	Status         string   `json:"status"`
-	LastError      string   `json:"last_error,omitempty"`
-	FailureSummary string   `json:"failure_summary,omitempty"`
-	BackoffUntil   int64    `json:"backoff_until,omitempty"`
-	BackoffReason  string   `json:"backoff_reason,omitempty"`
-	BackoffSeconds int      `json:"backoff_seconds,omitempty"`
-	DurationMS     int64    `json:"duration_ms,omitempty"`
-	Recipes        []string `json:"recipes,omitempty"`
-	HintIDs        []string `json:"hint_ids,omitempty"`
-	ReasonCode     string   `json:"reason_code,omitempty"`
-	ReasonDetail   string   `json:"reason_detail,omitempty"`
-	StartedAt      int64    `json:"started_at,omitempty"`
-	FinishedAt     int64    `json:"finished_at,omitempty"`
-	RunID          string   `json:"run_id,omitempty"`
-	PlanID         int64    `json:"plan_id,omitempty"`
-	CreatedAt      int64    `json:"created_at,omitempty"`
-	UpdatedAt      int64    `json:"updated_at,omitempty"`
+	ID             int64          `json:"id"`
+	NodeID         string         `json:"node_id,omitempty"`
+	Package        string         `json:"package"`
+	Version        string         `json:"version"`
+	Attempt        int            `json:"attempt"`
+	Status         string         `json:"status"`
+	LastError      string         `json:"last_error,omitempty"`
+	FailureSummary string         `json:"failure_summary,omitempty"`
+	BackoffUntil   int64          `json:"backoff_until,omitempty"`
+	BackoffReason  string         `json:"backoff_reason,omitempty"`
+	BackoffSeconds int            `json:"backoff_seconds,omitempty"`
+	DurationMS     int64          `json:"duration_ms,omitempty"`
+	Recipes        []string       `json:"recipes,omitempty"`
+	HintIDs        []string       `json:"hint_ids,omitempty"`
+	ReasonCode     string         `json:"reason_code,omitempty"`
+	ReasonDetail   string         `json:"reason_detail,omitempty"`
+	StartedAt      int64          `json:"started_at,omitempty"`
+	FinishedAt     int64          `json:"finished_at,omitempty"`
+	RunID          string         `json:"run_id,omitempty"`
+	PlanID         int64          `json:"plan_id,omitempty"`
+	CreatedAt      int64          `json:"created_at,omitempty"`
+	UpdatedAt      int64          `json:"updated_at,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
 // BuildQueueStats captures aggregate queue counts.
@@ -228,17 +230,18 @@ type BuildQueueStats struct {
 
 // WorkerStatus tracks worker heartbeat metadata.
 type WorkerStatus struct {
-	WorkerID             string `json:"worker_id"`
-	RunID                string `json:"run_id,omitempty"`
-	LastSeen             int64  `json:"last_seen"`
-	ActiveBuilds         int    `json:"active_builds"`
-	BuildPoolSize        int    `json:"build_pool_size"`
-	PlanPoolSize         int    `json:"plan_pool_size"`
-	HeartbeatIntervalSec int    `json:"heartbeat_interval_sec,omitempty"`
-	CASHits              int64  `json:"cas_hits,omitempty"`
-	CASMisses            int64  `json:"cas_misses,omitempty"`
-	CreatedAt            int64  `json:"created_at,omitempty"`
-	UpdatedAt            int64  `json:"updated_at,omitempty"`
+	WorkerID             string         `json:"worker_id"`
+	RunID                string         `json:"run_id,omitempty"`
+	LastSeen             int64          `json:"last_seen"`
+	ActiveBuilds         int            `json:"active_builds"`
+	BuildPoolSize        int            `json:"build_pool_size"`
+	PlanPoolSize         int            `json:"plan_pool_size"`
+	HeartbeatIntervalSec int            `json:"heartbeat_interval_sec,omitempty"`
+	CASHits              int64          `json:"cas_hits,omitempty"`
+	CASMisses            int64          `json:"cas_misses,omitempty"`
+	CreatedAt            int64          `json:"created_at,omitempty"`
+	UpdatedAt            int64          `json:"updated_at,omitempty"`
+	Metadata             map[string]any `json:"metadata,omitempty"`
 }
 
 // PackageSummary aggregates status for a package.
@@ -262,12 +265,23 @@ type Stat struct {
 
 // BuildAttemptStats summarizes attempts in a recent window.
 type BuildAttemptStats struct {
-	Total         int     `json:"total"`
-	Built         int     `json:"built"`
-	Failed        int     `json:"failed"`
-	Retry         int     `json:"retry"`
-	Quarantined   int     `json:"quarantined"`
-	AvgDurationMs float64 `json:"avg_duration_ms"`
+	Total                 int     `json:"total"`
+	Built                 int     `json:"built"`
+	Failed                int     `json:"failed"`
+	Retry                 int     `json:"retry"`
+	Quarantined           int     `json:"quarantined"`
+	AvgDurationMs         float64 `json:"avg_duration_ms"`
+	FirstAttemptBuilt     int     `json:"first_attempt_built,omitempty"`
+	FirstAttemptFailed    int     `json:"first_attempt_failed,omitempty"`
+	RetryAttemptBuilt     int     `json:"retry_attempt_built,omitempty"`
+	RetryAttemptFailed    int     `json:"retry_attempt_failed,omitempty"`
+	HintApplied           int     `json:"hint_applied,omitempty"`
+	KnownHintApplied      int     `json:"known_hint_applied,omitempty"`
+	HeuristicApplied      int     `json:"heuristic_applied,omitempty"`
+	LLMApplied            int     `json:"llm_applied,omitempty"`
+	LLMSuggestionsIgnored int     `json:"llm_suggestions_ignored,omitempty"`
+	HintSaveFailed        int     `json:"hint_save_failed,omitempty"`
+	StaleRequeues         int     `json:"stale_requeues,omitempty"`
 }
 
 // LogChunkStats summarizes streaming throughput.
@@ -338,7 +352,7 @@ type Store interface {
 	// Build status/queue visibility
 	ListBuilds(ctx context.Context, status string, limit int, planID int64, pkg string, version string) ([]BuildStatus, error)
 	BuildQueueStats(ctx context.Context) (BuildQueueStats, error)
-	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, planID int64, nodeID string, workerID string) error
+	UpdateBuildStatus(ctx context.Context, pkg, version, status, errMsg, summary string, attempts int, backoffUntil int64, backoffReason string, backoffSeconds int, reasonCode string, reasonDetail string, recipes []string, hintIDs []string, metadata map[string]any, planID int64, nodeID string, workerID string) error
 	UpsertBuildAttempt(ctx context.Context, attempt BuildAttempt) error
 	ListBuildAttempts(ctx context.Context, pkg, version string, limit int) ([]BuildAttempt, error)
 	LeaseBuilds(ctx context.Context, max int, workerID string) ([]BuildStatus, error)
