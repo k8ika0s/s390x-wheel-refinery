@@ -511,8 +511,11 @@ func autoHintID(hint plan.Hint, ctx plan.HintContext) string {
 }
 
 func inferHintFromLog(logContent string, ctx plan.HintContext) (plan.Hint, []string, string, bool) {
-	if strings.Contains(strings.ToLower(logContent), "unable to get the locale encoding") &&
-		strings.Contains(strings.ToLower(logContent), "no module named 'encodings'") {
+	lowerLog := strings.ToLower(logContent)
+	if strings.Contains(lowerLog, "no module named 'encodings'") &&
+		(strings.Contains(lowerLog, "unable to get the locale encoding") ||
+			strings.Contains(lowerLog, "init_fs_encoding") ||
+			strings.Contains(lowerLog, "failed to get the python codec of the filesystem encoding")) {
 		return plan.Hint{}, nil, "", false
 	}
 

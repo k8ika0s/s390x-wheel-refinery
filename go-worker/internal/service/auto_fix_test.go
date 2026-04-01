@@ -196,3 +196,13 @@ func TestInferHintFromLogSkipsEncodingsRuntimeCorruption(t *testing.T) {
 		t.Fatalf("expected no inferred hint, got recipes=%v", recipes)
 	}
 }
+
+func TestInferHintFromLogSkipsInitFsEncodingRuntimeCorruption(t *testing.T) {
+	_, recipes, _, ok := inferHintFromLog(
+		"Fatal Python error: init_fs_encoding: failed to get the Python codec of the filesystem encoding\nPython runtime state: core initialized\nModuleNotFoundError: No module named 'encodings'",
+		plan.HintContext{Package: "scikit-learn", PythonVersion: "3.11", PlatformTag: "manylinux2014_s390x"},
+	)
+	if ok {
+		t.Fatalf("expected no inferred hint, got recipes=%v", recipes)
+	}
+}
